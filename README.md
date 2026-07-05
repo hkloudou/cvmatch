@@ -21,6 +21,24 @@ resp, w, h := cvmatch.MatchMap(parent, sub)
 `Match` panics if an image is empty or `sub` is larger than `parent`, matching
 the behaviour of the OpenCV-backed original.
 
+## What it does
+
+`Match` is `matchTemplate(TM_CCOEFF_NORMED)` + `minMaxLoc` in one call:
+**find the best match of a small image inside a big one**. The maximum of the
+response map is the answer — `maxVal` close to `1.0` means a confident hit
+whose top-left corner is `(maxX, maxY)`. Below, the green box is drawn at the
+location `Match` returned for each template (images live on the
+[`assets`](../../tree/assets) branch; rendered by `bench/cmd/annotate`):
+
+| template | found in parent | result |
+|---|---|---|
+| ![button](../../raw/assets/demo/window1600_button96x32.tpl.png) | ![window](../../raw/assets/demo/window1600_button96x32.jpg) | `maxVal=0.999996` @ (893,614) — the right button among three look-alikes |
+| ![fruits template](../../raw/assets/demo/photo_fruits.tpl.png) | ![fruits](../../raw/assets/demo/photo_fruits.jpg) | `maxVal=1.000000` @ (305,210) |
+| ![baboon template](../../raw/assets/demo/photo_baboon.tpl.png) | ![baboon](../../raw/assets/demo/photo_baboon.jpg) | `maxVal=1.000000` @ (250,180) |
+| ![building template](../../raw/assets/demo/photo_building.tpl.png) | ![building](../../raw/assets/demo/photo_building.jpg) | `maxVal=1.000000` @ (420,240) |
+| ![graf template](../../raw/assets/demo/photo_graf1.tpl.png) | ![graf](../../raw/assets/demo/photo_graf1.jpg) | `maxVal=0.999999` @ (350,260) |
+| ![starry template](../../raw/assets/demo/photo_starry_night.tpl.png) | ![starry night](../../raw/assets/demo/photo_starry_night.jpg) | `maxVal=0.999999` @ (400,300) |
+
 ## Benchmarks
 
 Scenarios cover the real workload — finding a button, a toolbar icon or a
@@ -29,16 +47,17 @@ look-alike widgets) — plus dense-noise worst cases and **real photographs**.
 
 The sample photographs come from
 [OpenCV's `samples/data`](https://github.com/opencv/opencv/tree/4.12.0/samples/data)
-(Apache-2.0, fetched on demand by `bench/testdata/fetch.sh`, not committed to
-this repo; the suite runs with synthetic scenes only when they are absent):
+(Apache-2.0; `bench/testdata/fetch.sh` downloads them for the benchmarks, and
+they are mirrored on the [`assets`](../../tree/assets) branch for viewing —
+the suite runs with synthetic scenes only when they are absent):
 
 | image | size | template | content |
 |---|---|---|---|
-| `fruits.jpg` | 512×480 | 80×80 @ (305,210) | fruit bowl, saturated colors |
-| `baboon.jpg` | 512×512 | 64×64 @ (250,180) | fur, high-frequency texture |
-| `building.jpg` | 868×600 | 100×100 @ (420,240) | architecture, repeating windows |
-| `graf1.png` | 800×640 | 120×120 @ (350,260) | graffiti wall (VGG dataset) |
-| `starry_night.jpg` | 752×600 | 128×128 @ (400,300) | painting, swirling gradients |
+| [`fruits.jpg`](../../raw/assets/samples/fruits.jpg) | 512×480 | 80×80 @ (305,210) | fruit bowl, saturated colors |
+| [`baboon.jpg`](../../raw/assets/samples/baboon.jpg) | 512×512 | 64×64 @ (250,180) | fur, high-frequency texture |
+| [`building.jpg`](../../raw/assets/samples/building.jpg) | 868×600 | 100×100 @ (420,240) | architecture, repeating windows |
+| [`graf1.png`](../../raw/assets/samples/graf1.png) | 800×640 | 120×120 @ (350,260) | graffiti wall (VGG dataset) |
+| [`starry_night.jpg`](../../raw/assets/samples/starry_night.jpg) | 752×600 | 128×128 @ (400,300) | painting, swirling gradients |
 
 Four implementations are measured on every scene, all returning the same
 location and value:
@@ -254,6 +273,8 @@ OpenCV pipeline that cv2/gocv ship:
   libraries that cv2 bundles (`build.sh` fetches matching headers;
   `cmd/dumpscenes` exports byte-identical scene images).
 - `bench/testdata/fetch.sh` — downloads the real sample photographs.
+- `bench/cmd/annotate` — renders the match-result demo images shown above
+  (published on the `assets` branch).
 - `docs/genchart.py` — regenerates the README charts from benchmark numbers.
 - `make lib` — builds the standalone `libcvmatch.a` for non-Go consumers.
 
