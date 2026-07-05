@@ -84,12 +84,20 @@ jobs:
       - name: Element-wise parity vs native C++ response maps
         working-directory: bench
         run: go test -v -run TestFullMapParityWithNativeCpp | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Pure-Go core benchmarks (CGO_ENABLED=0, same scenes)
+      - name: cvmatch matrix — cgo core, 1 and 4 threads
         run: |
           {
-            echo "### cvmatch pure-Go core (CGO_ENABLED=0)"
+            echo "### cvmatch cgo core (CGO_ENABLED=1), -cpu 1,4"
             echo '```'
-            CGO_ENABLED=0 go test -run xxx -bench . -benchtime 5x -timeout 50m
+            go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/|BenchmarkMatchExact/' -benchtime 5x -cpu 1,4 -timeout 90m
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: cvmatch matrix — pure-Go core (CGO_ENABLED=0), 1 and 4 threads
+        run: |
+          {
+            echo "### cvmatch pure-Go core (CGO_ENABLED=0), -cpu 1,4"
+            echo '```'
+            CGO_ENABLED=0 go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/|BenchmarkMatchExact/' -benchtime 5x -cpu 1,4 -timeout 90m
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Binary sizes

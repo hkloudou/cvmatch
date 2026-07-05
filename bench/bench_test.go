@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	cv2 "github.com/hkloudou/cv2"
@@ -155,5 +156,79 @@ func TestFullMapParityWithNativeCpp(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Skip("no native result dumps present (run cpp/native_bench ... dump)")
+	}
+}
+
+// cv2MatchStrips gives cv2/OpenCV the same multi-core opportunity cvmatch
+// uses internally: the caller splits the parent into overlapping horizontal
+// strips (overlap = template height - 1), matches them concurrently and
+// merges the extrema in band order. This is the strongest fair 4-core
+// baseline available to a cv2 user, since OpenCV's matchTemplate path
+// cannot use threads itself.
+func cv2MatchStrips(parent *image.RGBA, sub image.Image, nStrips int) (float32, int, int, float32, int, int) {
+	pb, sb := parent.Bounds(), sub.Bounds()
+	th := sb.Dy()
+	rh := pb.Dy() - th + 1
+	type ext struct {
+		minV, maxV             float32
+		minX, minY, maxX, maxY int
+		ok                     bool
+	}
+	rs := make([]ext, nStrips)
+	var wg sync.WaitGroup
+	for i := 0; i < nStrips; i++ {
+		y0, y1 := rh*i/nStrips, rh*(i+1)/nStrips
+		if y1 <= y0 {
+			continue
+		}
+		wg.Add(1)
+		go func(i, y0, y1 int) {
+			defer wg.Done()
+			// cv2's API needs a tight buffer for a strip (its fast path
+			// rejects sub-images), so the copy is part of the recipe's
+			// honest cost. cvmatch needs no such copy: its internal
+			// parallelism reads the original frame in place.
+			w := pb.Dx()
+			strip := image.NewRGBA(image.Rect(0, 0, w, y1-y0+th-1))
+			for y := 0; y < y1-y0+th-1; y++ {
+				copy(strip.Pix[y*strip.Stride:y*strip.Stride+w*4],
+					parent.Pix[parent.PixOffset(pb.Min.X, pb.Min.Y+y0+y):])
+			}
+			minV, minX, minY, maxV, maxX, maxY := cv2.Match(strip, sub)
+			rs[i] = ext{minV, maxV, minX, minY + y0, maxX, maxY + y0, true}
+		}(i, y0, y1)
+	}
+	wg.Wait()
+	var r ext
+	for _, e := range rs { // band order preserves first-occurrence ties
+		if !e.ok {
+			continue
+		}
+		if !r.ok {
+			r = e
+			continue
+		}
+		if e.minV < r.minV {
+			r.minV, r.minX, r.minY = e.minV, e.minX, e.minY
+		}
+		if e.maxV > r.maxV {
+			r.maxV, r.maxX, r.maxY = e.maxV, e.maxX, e.maxY
+		}
+	}
+	return r.minV, r.minX, r.minY, r.maxV, r.maxX, r.maxY
+}
+
+// BenchmarkCv2MatchStrips4 is cv2 with caller-side 4-way strip parallelism.
+func BenchmarkCv2MatchStrips4(b *testing.B) {
+	for _, s := range scenes.All("testdata") {
+		b.Run(s.Name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				_, _, _, maxV, maxX, maxY := cv2MatchStrips(s.Parent, s.Sub, 4)
+				if maxX != s.PX || maxY != s.PY || maxV < 0.99 {
+					b.Fatalf("bad match: (%d,%d) %v", maxX, maxY, maxV)
+				}
+			}
+		})
 	}
 }
