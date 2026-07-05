@@ -25,19 +25,39 @@ the behaviour of the OpenCV-backed original.
 
 Scenarios cover the real workload — finding a button, a toolbar icon or a
 panel inside a rendered desktop window (flat regions, gradients, text,
-look-alike widgets) — plus dense-noise worst cases. Measured against
-[`hkloudou/cv2`](https://github.com/hkloudou/cv2) v0.41200.0 (bundled static
-OpenCV 4.12) on a 4-core Intel Xeon @ 2.10 GHz; on every scenario the three
-implementations return the same location and value. Reproduce locally with
-`cd bench && go test -bench . -benchtime 5x`, or let **GitHub Actions** do it:
-the [CI workflow](.github/workflows/ci.yml) re-runs the parity tests, the full
-benchmark suite, the peak-RSS probe and the size report on each push to
-`main` (and on demand via *workflow dispatch*), publishing everything in the
-job summary.
+look-alike widgets) — plus dense-noise worst cases and **real photographs**
+from OpenCV's `samples/data` (`bench/testdata/fetch.sh` downloads them; the
+suite runs with synthetic scenes only when they are absent).
+
+Four implementations are measured on every scene, all returning the same
+location and value:
+
+- **OpenCV C++ (native)** — `bench/cpp/native_bench`, plain C++ linked
+  against the *exact same* prebuilt static OpenCV 4.12 libraries that
+  `hkloudou/cv2` bundles, timed **end-to-end per call** for fairness (from an
+  in-memory RGBA buffer: Mat copy → `matchTemplate` → `minMaxLoc` → release),
+  best-of-5;
+- **cv2.Match (Go)** — [`hkloudou/cv2`](https://github.com/hkloudou/cv2)
+  v0.41200.0 through its Go API;
+- **cvmatch.Match** / **cvmatch.MatchGray** — this library.
+
+> **Is the Go wrapper the bottleneck? No.** Native C++ and cv2's Go API land
+> within ~0-4% of each other on every scene (e.g. 1080p/128: 390.5 ms native
+> vs 392.7 ms Go; window/button: 245.0 vs 241.1 ms). The cost is OpenCV's own
+> pipeline — 4-channel DFT correlation plus full double-precision integral
+> images — which is exactly what cvmatch restructures: **2.0-3.8x faster than
+> native OpenCV C++ at identical output values, 3.9-8.4x in grayscale mode.**
+
+Reproduce locally with `cd bench && go test -bench . -benchtime 5x` and
+`bench/cpp/build.sh && bench/cpp/native_bench bench/cpp/scenes 5`, or let
+**GitHub Actions** do it: the [CI workflow](.github/workflows/ci.yml) re-runs
+the parity tests, the Go benchmark suite, the native C++ benchmark, the
+peak-RSS probe and the size report on each push to `main` (and on demand via
+*workflow dispatch*), publishing everything in the job summary.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/bench-dark.svg">
-  <img alt="Benchmark: cvmatch is 1.6-2.7x faster than cv2 at identical output, 3.9-6.7x in grayscale mode" src="docs/bench-light.svg">
+  <img alt="Benchmark: cvmatch is 2.0-3.8x faster than native OpenCV C++ at identical output, 3.9-8.4x in grayscale mode; cv2's Go wrapper adds only ~0-4% over native C++" src="docs/bench-light.svg">
 </picture>
 
 <picture>
@@ -60,9 +80,10 @@ Three independent checks, all in CI:
 1. **Element-wise response-map parity vs OpenCV** (`bench/`,
    `TestFullMapParityWithCv2`): every element of `MatchMap` is compared with
    OpenCV's `matchTemplate` output. Worst element difference: `2.2e-06` on
-   noise scenes, `4.7e-04` on UI scenes with near-flat windows.
+   noise scenes, `1.9e-05` on real photographs, `4.7e-04` on UI scenes with
+   near-flat windows.
 2. **min/max contract parity** (`TestParityWithCv2`): `minVal`/`maxVal` agree
-   to ~6 decimals and locations are identical on all eight scenarios.
+   to ~6 decimals and locations are identical on all thirteen scenarios.
 3. **Float64 brute-force reference** (main module): every response-map element
    stays within `1e-4` of a from-the-definition implementation across
    single/multi-channel, strided, and degenerate inputs (1x1 templates,
@@ -147,8 +168,13 @@ OpenCV pipeline that cv2/gocv ship:
 - `cvmatch.c` / `cvmatch.h` — the whole native implementation (C99, no deps).
 - `cvmatch.go` — public API and zero-copy image conversion.
 - `bench/` — separate module holding the `hkloudou/cv2` comparison (UI +
-  noise scenario builders, benchmarks, element-wise parity tests, `memprobe`
-  peak-RSS tool, binary-size probes) so the root module stays dependency-free.
+  noise + photo scenario builders, benchmarks, element-wise parity tests,
+  `memprobe` peak-RSS tool, binary-size probes) so the root module stays
+  dependency-free.
+- `bench/cpp/` — native OpenCV C++ benchmark linked against the same static
+  libraries that cv2 bundles (`build.sh` fetches matching headers;
+  `cmd/dumpscenes` exports byte-identical scene images).
+- `bench/testdata/fetch.sh` — downloads the real sample photographs.
 - `docs/genchart.py` — regenerates the README charts from benchmark numbers.
 - `make lib` — builds the standalone `libcvmatch.a` for non-Go consumers.
 

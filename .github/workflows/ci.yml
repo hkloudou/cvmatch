@@ -29,6 +29,8 @@ jobs:
             size cvmatch.o | tail -1
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Fetch real sample images (OpenCV samples/data)
+        run: bench/testdata/fetch.sh
       - name: Numeric parity vs OpenCV (hkloudou/cv2)
         run: cd bench && go test -v -run 'Parity' | tee -a "$GITHUB_STEP_SUMMARY"
 
@@ -41,6 +43,8 @@ jobs:
         with:
           go-version: "1.24"
           cache-dependency-path: bench/go.sum
+      - name: Fetch real sample images (OpenCV samples/data)
+        run: bench/testdata/fetch.sh
       - name: Benchmarks (cvmatch vs hkloudou/cv2)
         working-directory: bench
         run: |
@@ -59,6 +63,17 @@ jobs:
             echo "### Peak memory (1080p / 128px match)"
             echo '```'
             for impl in baseline cv2 cvmatch gray; do ./bin/memprobe -impl "$impl"; done
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Native OpenCV C++ benchmark (same bundled static libs)
+        working-directory: bench
+        run: |
+          go run ./cmd/dumpscenes -out cpp/scenes
+          cpp/build.sh
+          {
+            echo "### Native OpenCV C++ (end-to-end, same static libs as cv2)"
+            echo '```'
+            cpp/native_bench cpp/scenes 5
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Binary sizes

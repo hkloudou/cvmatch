@@ -1,0 +1,103 @@
+// Native OpenCV C++ benchmark: the same scenes as the Go benchmarks, linked
+// against the *same* prebuilt static OpenCV libraries that hkloudou/cv2
+// bundles, so any difference between this and cv2.Match is pure Go-wrapper
+// overhead (image conversion + Mat copy + cgo), not OpenCV itself.
+//
+// Timing is end-to-end per call for fairness with the Go side, which starts
+// from an in-memory RGBA frame: Mat construction with a private copy of the
+// RGBA buffer (what Cv2_Mat_NewFromBytes does), matchTemplate into a fresh
+// result Mat, minMaxLoc, and destruction. A core-only time (matchTemplate +
+// minMaxLoc on prebuilt Mats) is reported as a diagnostic.
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <fstream>
+#include <string>
+#include <vector>
+
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
+
+struct RawImg {
+  int w = 0, h = 0;
+  std::vector<uint8_t> pix; // RGBA
+};
+
+static bool loadRaw(const std::string &path, RawImg &out) {
+  std::ifstream f(path, std::ios::binary);
+  char magic[4];
+  int32_t wh[2];
+  if (!f.read(magic, 4) || memcmp(magic, "CVMS", 4) != 0) return false;
+  if (!f.read(reinterpret_cast<char *>(wh), 8)) return false;
+  out.w = wh[0];
+  out.h = wh[1];
+  out.pix.resize(size_t(out.w) * out.h * 4);
+  return bool(f.read(reinterpret_cast<char *>(out.pix.data()), out.pix.size()));
+}
+
+static double now_ms() {
+  using namespace std::chrono;
+  return duration<double, std::milli>(steady_clock::now().time_since_epoch()).count();
+}
+
+int main(int argc, char **argv) {
+  std::string dir = argc > 1 ? argv[1] : "scenes";
+  int iters = argc > 2 ? atoi(argv[2]) : 5;
+  std::ifstream mf(dir + "/manifest.tsv");
+  if (!mf) {
+    fprintf(stderr, "cannot open %s/manifest.tsv (run dumpscenes first)\n", dir.c_str());
+    return 1;
+  }
+  printf("threads=%d  iters=%d  (times are best-of runs, ms)\n", cv::getNumThreads(), iters);
+  printf("%-28s %12s %12s   %s\n", "scene", "end-to-end", "core-only", "check");
+
+  std::string name, pf, sf;
+  int px, py;
+  while (mf >> name >> px >> py >> pf >> sf) {
+    RawImg pi, si;
+    if (!loadRaw(dir + "/" + pf, pi) || !loadRaw(dir + "/" + sf, si)) {
+      fprintf(stderr, "%s: failed to load raw images\n", name.c_str());
+      return 1;
+    }
+
+    double bestFull = 1e30, bestCore = 1e30;
+    cv::Point maxLoc;
+    double maxVal = 0;
+
+    // End-to-end: from an RGBA byte buffer, exactly the per-call work the
+    // wrapper performs minus Go: copy into a Mat, match, scan, release.
+    for (int it = 0; it < iters + 1; it++) { // +1 warmup
+      double t0 = now_ms();
+      cv::Mat parent = cv::Mat(pi.h, pi.w, CV_8UC4, pi.pix.data()).clone();
+      cv::Mat sub = cv::Mat(si.h, si.w, CV_8UC4, si.pix.data()).clone();
+      cv::Mat result;
+      cv::matchTemplate(parent, sub, result, cv::TM_CCOEFF_NORMED);
+      double mn;
+      cv::Point mnl;
+      cv::minMaxLoc(result, &mn, &maxVal, &mnl, &maxLoc);
+      double dt = now_ms() - t0;
+      if (it > 0 && dt < bestFull) bestFull = dt;
+    }
+
+    // Core-only diagnostic: Mats prebuilt, time matchTemplate + minMaxLoc.
+    cv::Mat parent = cv::Mat(pi.h, pi.w, CV_8UC4, pi.pix.data()).clone();
+    cv::Mat sub = cv::Mat(si.h, si.w, CV_8UC4, si.pix.data()).clone();
+    cv::Mat result;
+    for (int it = 0; it < iters + 1; it++) {
+      double t0 = now_ms();
+      cv::matchTemplate(parent, sub, result, cv::TM_CCOEFF_NORMED);
+      double mn;
+      cv::Point mnl;
+      cv::minMaxLoc(result, &mn, &maxVal, &mnl, &maxLoc);
+      double dt = now_ms() - t0;
+      if (it > 0 && dt < bestCore) bestCore = dt;
+    }
+
+    bool ok = maxLoc.x == px && maxLoc.y == py && maxVal > 0.99;
+    printf("%-28s %9.1f ms %9.1f ms   %s (%d,%d) max=%.4f\n", name.c_str(),
+           bestFull, bestCore, ok ? "OK " : "BAD", maxLoc.x, maxLoc.y, maxVal);
+    if (!ok) return 1;
+  }
+  return 0;
+}

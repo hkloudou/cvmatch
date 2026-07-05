@@ -1,26 +1,35 @@
 #!/usr/bin/env python3
 """Generates the README benchmark SVGs (light + dark variants).
 
-Data comes from `cd bench && go test -bench . -benchtime 5x` and the memprobe
-tool on a 4-core Intel Xeon @ 2.10 GHz (linux/amd64). Update the tables below
-when re-measuring, then run: python3 docs/genchart.py
+Data: `cd bench && go test -bench . -benchtime 5x` (Go implementations),
+`bench/cpp/native_bench` (native OpenCV C++, end-to-end timing, same bundled
+static libs as cv2), and the memprobe tool — all measured in one session on a
+4-core Intel Xeon @ 2.10 GHz (linux/amd64). Update the tables below when
+re-measuring, then run: python3 docs/genchart.py
 """
 import os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-# (label, cv2 ms, cvmatch ms, gray ms)
+# (label, native C++ ms, cv2 ms, cvmatch ms, gray ms)
 PANEL_HD = [
-    ("Window 1600×1000 · button 96×32", 248.6, 97.3, 40.8),
-    ("Window 1600×1000 · icon 24×24", 217.7, 82.7, 34.6),
-    ("Window 1600×1000 · panel 300×200", 240.1, 113.3, 48.0),
-    ("Noise 1280×720 · sub 96×96", 130.3, 83.3, 33.8),
-    ("Noise 1920×1080 · sub 128×128", 385.8, 153.0, 58.0),
-    ("Noise 1920×1080 · sub 32×32", 295.8, 108.9, 46.3),
+    ("Window 1600×1000 · button 96×32", 245.0, 241.1, 102.2, 39.9),
+    ("Window 1600×1000 · icon 24×24", 225.7, 226.7, 79.9, 34.1),
+    ("Window 1600×1000 · panel 300×200", 251.0, 250.6, 118.3, 47.1),
+    ("Noise 1280×720 · sub 96×96", 129.4, 149.3, 82.0, 33.1),
+    ("Noise 1920×1080 · sub 128×128", 390.5, 392.7, 151.3, 67.0),
+    ("Noise 1920×1080 · sub 32×32", 293.3, 298.5, 110.0, 46.0),
 ]
 PANEL_4K = [
-    ("Window 3840×2160 · button 96×32", 1284.0, 506.4, 206.9),
-    ("Noise 3840×2160 · sub 256×256", 1728.2, 721.9, 300.4),
+    ("Window 3840×2160 · button 96×32", 1240.1, 1212.1, 505.7, 209.9),
+    ("Noise 3840×2160 · sub 256×256", 1721.8, 1931.3, 745.3, 280.9),
+]
+PANEL_PHOTO = [
+    ("fruits 512×480 · sub 80×80", 48.0, 50.7, 12.8, 5.7),
+    ("baboon 512×512 · sub 64×64", 32.9, 35.0, 13.7, 5.8),
+    ("building 868×600 · sub 100×100", 87.8, 92.8, 44.1, 17.1),
+    ("graf1 800×640 · sub 120×120", 96.9, 100.9, 44.9, 17.7),
+    ("starry_night 752×600 · sub 128×128", 70.6, 75.3, 43.4, 16.9),
 ]
 MEM = [  # (label, MB)
     ("cv2.Match", 145.5),
@@ -28,19 +37,21 @@ MEM = [  # (label, MB)
     ("cvmatch.MatchGray", 16.8),
 ]
 
-SERIES = ["cv2.Match", "cvmatch.Match", "cvmatch.MatchGray"]
+SERIES = ["OpenCV C++ (native)", "cv2.Match (Go)", "cvmatch.Match", "cvmatch.MatchGray"]
 
 THEMES = {
-    "light": dict(series=["#2a78d6", "#1baf7a", "#eda100"], ink="#24292f",
+    "light": dict(series=["#008300", "#2a78d6", "#1baf7a", "#eda100"], ink="#24292f",
                   sec="#57606a", muted="#6e7781", grid="#d0d7de", axis="#afb8c1"),
-    "dark": dict(series=["#3987e5", "#199e70", "#c98500"], ink="#e6edf3",
+    "dark": dict(series=["#008300", "#3987e5", "#199e70", "#c98500"], ink="#e6edf3",
                  sec="#9198a1", muted="#8b949e", grid="#30363d", axis="#484f58"),
 }
+MEM_SLOTS = [1, 2, 3]  # memory chart series: cv2, cvmatch, gray
 
 FONT = 'font-family="system-ui,-apple-system,Segoe UI,sans-serif"'
-LEFT, RIGHT, W = 250, 118, 960
+LEFT, RIGHT, W = 260, 128, 980
 PLOT_W = W - LEFT - RIGHT
 BAR, PITCH, GROUP_GAP = 14, 16, 18
+NSER = len(SERIES)
 
 
 def bar_path(x, y, w, h, r=4):
@@ -54,9 +65,9 @@ def panel(out, t, rows, y, vmax, ticks, title):
     out.append(f'<text x="{LEFT}" y="{y}" font-size="12" font-weight="600" '
                f'fill="{t["sec"]}" {FONT}>{title}</text>')
     out.append(f'<text x="{W - 4}" y="{y}" font-size="11" text-anchor="end" '
-               f'fill="{t["muted"]}" {FONT}>ms — lower is better</text>')
+               f'fill="{t["muted"]}" {FONT}>ms — lower is better · speedup vs native C++</text>')
     y += 10
-    h = len(rows) * (3 * PITCH + GROUP_GAP) - GROUP_GAP + 8
+    h = len(rows) * (NSER * PITCH + GROUP_GAP) - GROUP_GAP + 8
     for tick in ticks:
         x = LEFT + PLOT_W * tick / vmax
         out.append(f'<line x1="{x:.1f}" y1="{y}" x2="{x:.1f}" y2="{y + h}" '
@@ -66,13 +77,13 @@ def panel(out, t, rows, y, vmax, ticks, title):
     out.append(f'<line x1="{LEFT}" y1="{y}" x2="{LEFT}" y2="{y + h}" stroke="{t["axis"]}" stroke-width="1"/>')
     yy = y + 4
     for label, *vals in rows:
-        out.append(f'<text x="{LEFT - 10}" y="{yy + 3 * PITCH / 2 + 4}" font-size="12" '
+        out.append(f'<text x="{LEFT - 10}" y="{yy + NSER * PITCH / 2 + 4}" font-size="12" '
                    f'text-anchor="end" fill="{t["sec"]}" {FONT}>{label}</text>')
         for i, v in enumerate(vals):
             wpx = PLOT_W * v / vmax
             out.append(f'<path d="{bar_path(LEFT + 0.5, yy, wpx, BAR)}" fill="{t["series"][i]}"/>')
             lab = f'{v:,.0f} ms'
-            if i > 0:
+            if i >= 2:
                 lab += f' · {vals[0] / v:.1f}×'
             out.append(f'<text x="{LEFT + wpx + 7:.1f}" y="{yy + BAR - 3}" font-size="11" '
                        f'fill="{t["sec"]}" {FONT} style="font-variant-numeric:tabular-nums">{lab}</text>')
@@ -86,7 +97,7 @@ def legend(out, t, y):
     for i, name in enumerate(SERIES):
         out.append(f'<rect x="{x}" y="{y - 9}" width="10" height="10" rx="2" fill="{t["series"][i]}"/>')
         out.append(f'<text x="{x + 15}" y="{y}" font-size="12" fill="{t["ink"]}" {FONT}>{name}</text>')
-        x += 15 + 9 * len(name) + 26
+        x += 15 + 7 * len(name) + 26
     return y + 20
 
 
@@ -94,12 +105,13 @@ def speed_chart(mode):
     t = THEMES[mode]
     out = []
     out.append(f'<text x="{LEFT}" y="20" font-size="15" font-weight="600" fill="{t["ink"]}" {FONT}>'
-               'Template matching speed — TM_CCOEFF_NORMED, one call</text>')
+               'Template matching speed — TM_CCOEFF_NORMED, end-to-end call</text>')
     out.append(f'<text x="{LEFT}" y="38" font-size="12" fill="{t["muted"]}" {FONT}>'
-               '4-core Intel Xeon 2.10 GHz · linux/amd64 · identical output values · speedups vs cv2</text>')
+               '4-core Xeon 2.10 GHz · native C++ links the same static OpenCV 4.12 that cv2 bundles</text>')
     y = legend(out, t, 60)
-    y = panel(out, t, PANEL_HD, y + 8, 400, range(0, 401, 100), "HD scenes")
-    y = panel(out, t, PANEL_4K, y + 6, 1800, range(0, 1801, 300), "4K scenes")
+    y = panel(out, t, PANEL_HD, y + 8, 400, range(0, 401, 100), "HD desktop + noise scenes")
+    y = panel(out, t, PANEL_4K, y + 6, 2000, range(0, 2001, 400), "4K scenes")
+    y = panel(out, t, PANEL_PHOTO, y + 6, 120, range(0, 121, 30), "Real photographs (OpenCV samples/data)")
     return svg(out, y)
 
 
@@ -122,10 +134,11 @@ def mem_chart(mode):
     out.append(f'<line x1="{LEFT}" y1="{y}" x2="{LEFT}" y2="{y + h}" stroke="{t["axis"]}" stroke-width="1"/>')
     yy = y + 4
     for i, (label, v) in enumerate(MEM):
+        color = t["series"][MEM_SLOTS[i]]
         wpx = PLOT_W * v / vmax
         out.append(f'<text x="{LEFT - 10}" y="{yy + BAR - 3}" font-size="12" text-anchor="end" '
                    f'fill="{t["sec"]}" {FONT}>{label}</text>')
-        out.append(f'<path d="{bar_path(LEFT + 0.5, yy, wpx, BAR)}" fill="{t["series"][i]}"/>')
+        out.append(f'<path d="{bar_path(LEFT + 0.5, yy, wpx, BAR)}" fill="{color}"/>')
         lab = f'{v:.1f} MB' + ('' if i == 0 else f' · {MEM[0][1] / v:.1f}× less')
         out.append(f'<text x="{LEFT + wpx + 7:.1f}" y="{yy + BAR - 3}" font-size="11" '
                    f'fill="{t["sec"]}" {FONT} style="font-variant-numeric:tabular-nums">{lab}</text>')
