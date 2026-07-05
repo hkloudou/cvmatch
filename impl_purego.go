@@ -3,13 +3,18 @@ package cvmatch
 // Pure-Go port of cvmatch.c, selected automatically when cgo is off (see
 // impl_nocgo.go). It runs the same algorithm — block-FFT cross-correlation
 // with OpenCV's tile heuristic, sliding-column-sum normalization with
-// OpenCV's exact guards, fused minMaxLoc — and is always compiled so tests
-// can compare it against the C core when cgo is on.
+// OpenCV's exact guards, fused minMaxLoc, tile/band parallelism with
+// bit-identical output for any worker count — and is always compiled so
+// tests can compare it against the C core when cgo is on.
 
 import (
 	"fmt"
 	"math"
+	"math/bits"
+	"sync"
 )
+
+const maxThreadsGo = 16
 
 func nextPow2(v int) int {
 	n := 1
@@ -17,6 +22,35 @@ func nextPow2(v int) int {
 		n <<= 1
 	}
 	return n
+}
+
+func clampThreads(n int) int {
+	if n < 1 {
+		return 1
+	}
+	if n > maxThreadsGo {
+		return maxThreadsGo
+	}
+	return n
+}
+
+// runParallel executes fn(0..n-1) on n goroutines. Work is statically
+// partitioned by index, so results never depend on scheduling.
+func runParallel(n int, fn func(w int)) {
+	if n <= 1 {
+		fn(0)
+		return
+	}
+	var wg sync.WaitGroup
+	for i := 1; i < n; i++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			fn(w)
+		}(i)
+	}
+	fn(0)
+	wg.Wait()
 }
 
 // ------------------------------------------------------------------- FFT --
@@ -118,8 +152,6 @@ type goPlan struct {
 	blockW, blockH int
 	twW, twH       []complex64
 	brW, brH       []int
-	spec, tspec    []complex64
-	ztmp           []complex64
 }
 
 // newGoPlan mirrors plan_init: OpenCV's crossCorr block sizing with
@@ -170,17 +202,13 @@ func newGoPlan(tw, th, rw, rh int) *goPlan {
 	} else {
 		p.twH, p.brH = makeTwiddles(dftH), makeBitrev(dftH)
 	}
-	p.spec = make([]complex64, dftH*p.hw)
-	p.tspec = make([]complex64, dftH*p.hw)
-	p.ztmp = make([]complex64, dftW)
 	return p
 }
 
 // blockForwardGo: real 2D forward DFT of one channel of a uint8 block, two
 // real rows packed per complex FFT.
-func blockForwardGo(chanBase []uint8, stride, step, x0, y0, loadW, loadH int, p *goPlan, spec []complex64) {
+func blockForwardGo(chanBase []uint8, stride, step, x0, y0, loadW, loadH int, p *goPlan, spec, z []complex64) {
 	n, hw, mask := p.dftW, p.hw, p.dftW-1
-	z := p.ztmp
 	for r := 0; r < p.dftH; r += 2 {
 		sa := spec[r*hw : r*hw+hw]
 		sb := spec[(r+1)*hw : (r+1)*hw+hw]
@@ -212,7 +240,7 @@ func blockForwardGo(chanBase []uint8, stride, step, x0, y0, loadW, loadH int, p 
 			sb[k] = complex(0.5*(imag(zk)+imag(zn)), 0.5*(real(zn)-real(zk)))
 		}
 	}
-	fftColsGo(spec, p.dftH, hw, p.twH, p.brH, false, p.ztmp)
+	fftColsGo(spec, p.dftH, hw, p.twH, p.brH, false, z)
 }
 
 func mulConjGo(spec, tspec []complex64) {
@@ -222,10 +250,9 @@ func mulConjGo(spec, tspec []complex64) {
 	}
 }
 
-func blockInverseEmitGo(p *goPlan, spec []complex64, res []float32, rw, x0, y0, bw, bh int, add bool) {
-	fftColsGo(spec, p.dftH, p.hw, p.twH, p.brH, true, p.ztmp)
+func blockInverseEmitGo(p *goPlan, spec, z []complex64, res []float32, rw, x0, y0, bw, bh int, add bool) {
+	fftColsGo(spec, p.dftH, p.hw, p.twH, p.brH, true, z)
 	n, hw := p.dftW, p.hw
-	z := p.ztmp
 	for r := 0; r < bh; r += 2 {
 		sa := spec[r*hw : r*hw+hw]
 		sb := spec[(r+1)*hw : (r+1)*hw+hw]
@@ -262,54 +289,59 @@ func blockInverseEmitGo(p *goPlan, spec []complex64, res []float32, rw, x0, y0, 
 	}
 }
 
-func crossCorrChannelGo(img []uint8, istride int, tpl []uint8, tstride, step, tw, th, rw, rh int, p *goPlan, add bool, result []float32) {
-	blockForwardGo(tpl, tstride, step, 0, 0, tw, th, p, p.tspec)
+// crossCorrGo runs the tile-parallel raw cross-correlation. Each tile owns a
+// disjoint result region and runs every channel in order, so per-element
+// arithmetic is identical for any worker count.
+func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, th, rw, rh, threads int, p *goPlan, result []float32) {
+	specN := p.dftH * p.hw
+	tspec := make([]complex64, cn*specN)
+	z0 := make([]complex64, p.dftW)
 	scale := complex(1/(float32(p.dftW)*float32(p.dftH)), 0)
-	for i := range p.tspec {
-		p.tspec[i] *= scale
-	}
-	for y0 := 0; y0 < rh; y0 += p.blockH {
-		bh := min(p.blockH, rh-y0)
-		for x0 := 0; x0 < rw; x0 += p.blockW {
-			bw := min(p.blockW, rw-x0)
-			blockForwardGo(img, istride, step, x0, y0, bw+tw-1, bh+th-1, p, p.spec)
-			mulConjGo(p.spec, p.tspec)
-			blockInverseEmitGo(p, p.spec, result, rw, x0, y0, bw, bh, add)
+	for k := 0; k < cn; k++ {
+		ts := tspec[k*specN : (k+1)*specN]
+		blockForwardGo(tpl[k:], tstride, step, 0, 0, tw, th, p, ts, z0)
+		for i := range ts {
+			ts[i] *= scale
 		}
 	}
+	ntx := (rw + p.blockW - 1) / p.blockW
+	nty := (rh + p.blockH - 1) / p.blockH
+	ntiles := ntx * nty
+	nw := threads
+	if nw > ntiles {
+		nw = ntiles
+	}
+	runParallel(nw, func(w int) {
+		spec := make([]complex64, specN)
+		z := make([]complex64, p.dftW)
+		for t := w; t < ntiles; t += nw {
+			x0, y0 := (t%ntx)*p.blockW, (t/ntx)*p.blockH
+			bw, bh := min(p.blockW, rw-x0), min(p.blockH, rh-y0)
+			for k := 0; k < cn; k++ {
+				blockForwardGo(img[k:], istride, step, x0, y0, bw+tw-1, bh+th-1, p, spec, z)
+				mulConjGo(spec, tspec[k*specN:(k+1)*specN])
+				blockInverseEmitGo(p, spec, z, result, rw, x0, y0, bw, bh, k > 0)
+			}
+		}
+	})
 }
 
 // ------------------------------------------------- normalization + scan --
 
-func normalizeAndScanGo(img []uint8, istride, iw int, tpl []uint8, tstride, tw, th, cn, step, rw, rh int, result []float32) (minV float64, minX, minY int, maxV float64, maxX, maxY int) {
-	area := float64(tw) * float64(th)
-	invArea := 1 / area
-	var mean [4]float64
-	templNorm := 0.0
-	for k := 0; k < cn; k++ {
-		s, s2 := 0.0, 0.0
-		for y := 0; y < th; y++ {
-			row := tpl[y*tstride+k:]
-			for x := 0; x < tw; x++ {
-				v := float64(row[x*step])
-				s += v
-				s2 += v * v
-			}
-		}
-		mean[k] = s * invArea
-		templNorm += s2*invArea - mean[k]*mean[k]
-	}
-	if templNorm < 2.220446049250313e-16 { // DBL_EPSILON: flat template
-		for i := range result[:rw*rh] {
-			result[i] = 1
-		}
-		return 1, 0, 0, 1, 0, 0
-	}
-	templNorm = math.Sqrt(templNorm * area)
+type goExtrema struct {
+	minV, maxV             float32
+	minX, minY, maxX, maxY int
+}
 
+// normalizeBandGo processes result rows [y0, y1). Exactly one of corrF/corrD
+// is non-nil. Band-local column-sum rebuilds are bit-exact because all sums
+// are integer-valued doubles.
+func normalizeBandGo(img []uint8, istride, iw int, cn, step, tw, th, rw, y0, y1 int,
+	mean *[4]float64, templNorm float64, corrF []float32, corrD []float64, result []float32) goExtrema {
+	invArea := 1 / (float64(tw) * float64(th))
 	colSum := make([]float64, iw*cn)
 	colSum2 := make([]float64, iw)
-	for y := 0; y < th; y++ {
+	for y := y0; y < y0+th; y++ {
 		row := img[y*istride:]
 		for x := 0; x < iw; x++ {
 			for k := 0; k < cn; k++ {
@@ -320,11 +352,10 @@ func normalizeAndScanGo(img []uint8, istride, iw int, tpl []uint8, tstride, tw, 
 		}
 	}
 
-	minv, maxv := math.MaxFloat64, -math.MaxFloat64
-	var minx, miny, maxx, maxy int
+	ext := goExtrema{minV: math.MaxFloat32, maxV: -math.MaxFloat32, minY: y0, maxY: y0}
 	const eps = 10.0 * 1.1920929e-07 // 10*FLT_EPSILON
 
-	for y := 0; ; y++ {
+	for y := y0; ; y++ {
 		var s [4]float64
 		s2 := 0.0
 		for x := 0; x < tw; x++ {
@@ -334,8 +365,20 @@ func normalizeAndScanGo(img []uint8, istride, iw int, tpl []uint8, tstride, tw, 
 			s2 += colSum2[x]
 		}
 		rrow := result[y*rw : y*rw+rw]
+		var cfr []float32
+		var cdr []float64
+		if corrF != nil {
+			cfr = corrF[y*rw : y*rw+rw]
+		} else {
+			cdr = corrD[y*rw : y*rw+rw]
+		}
 		for x := 0; ; x++ {
-			num := float64(rrow[x])
+			var num float64
+			if cfr != nil {
+				num = float64(cfr[x])
+			} else {
+				num = cdr[x]
+			}
 			wndMean2 := 0.0
 			for k := 0; k < cn; k++ {
 				t := s[k]
@@ -371,11 +414,11 @@ func normalizeAndScanGo(img []uint8, istride, iw int, tpl []uint8, tstride, tw, 
 			// matching OpenCV minMaxLoc scanning the rounded CV_32F data.
 			v := float32(num)
 			rrow[x] = v
-			if float64(v) < minv {
-				minv, minx, miny = float64(v), x, y
+			if v < ext.minV {
+				ext.minV, ext.minX, ext.minY = v, x, y
 			}
-			if float64(v) > maxv {
-				maxv, maxx, maxy = float64(v), x, y
+			if v > ext.maxV {
+				ext.maxV, ext.maxX, ext.maxY = v, x, y
 			}
 			if x+1 >= rw {
 				break
@@ -385,39 +428,381 @@ func normalizeAndScanGo(img []uint8, istride, iw int, tpl []uint8, tstride, tw, 
 			}
 			s2 += colSum2[x+tw] - colSum2[x]
 		}
-		if y+1 >= rh {
+		if y+1 >= y1 {
 			break
 		}
 		sub := img[y*istride:]
-		addr := img[(y+th)*istride:]
+		add := img[(y+th)*istride:]
 		for x := 0; x < iw; x++ {
 			for k := 0; k < cn; k++ {
-				a := float64(addr[x*step+k])
+				a := float64(add[x*step+k])
 				b := float64(sub[x*step+k])
 				colSum[x*cn+k] += a - b
 				colSum2[x] += a*a - b*b
 			}
 		}
 	}
-	return minv, minx, miny, maxv, maxx, maxy
+	return ext
 }
 
-// ----------------------------------------------------------- entrypoint --
+func normalizeParallelGo(img []uint8, istride, iw int, tpl []uint8, tstride, tw, th, cn, step, rw, rh, threads int,
+	corrF []float32, corrD []float64, result []float32) (float32, int, int, float32, int, int) {
+	invArea := 1 / (float64(tw) * float64(th))
+	var mean [4]float64
+	templNorm := 0.0
+	for k := 0; k < cn; k++ {
+		s, s2 := 0.0, 0.0
+		for y := 0; y < th; y++ {
+			row := tpl[y*tstride+k:]
+			for x := 0; x < tw; x++ {
+				v := float64(row[x*step])
+				s += v
+				s2 += v * v
+			}
+		}
+		mean[k] = s * invArea
+		templNorm += s2*invArea - mean[k]*mean[k]
+	}
+	if templNorm < 2.220446049250313e-16 { // DBL_EPSILON: flat template
+		for i := range result[:rw*rh] {
+			result[i] = 1
+		}
+		return 1, 0, 0, 1, 0, 0
+	}
+	templNorm = math.Sqrt(templNorm * float64(tw) * float64(th))
 
-func matchU8Go(img []uint8, istride, iw, ih int, tpl []uint8, tstride, tw, th, cn, step int, result []float32) (float32, int, int, float32, int, int) {
+	nb := threads
+	if maxb := rh / max(th, 32); maxb >= 1 && nb > maxb {
+		nb = maxb
+	}
+	nb = max(min(nb, rh), 1)
+
+	bandY := make([]int, nb+1)
+	for b := 0; b <= nb; b++ {
+		bandY[b] = rh * b / nb
+	}
+	ext := make([]goExtrema, nb)
+	runParallel(nb, func(w int) {
+		ext[w] = normalizeBandGo(img, istride, iw, cn, step, tw, th, rw,
+			bandY[w], bandY[w+1], &mean, templNorm, corrF, corrD, result)
+	})
+	r := ext[0]
+	for b := 1; b < nb; b++ { // strict compares keep first occurrence
+		if ext[b].minV < r.minV {
+			r.minV, r.minX, r.minY = ext[b].minV, ext[b].minX, ext[b].minY
+		}
+		if ext[b].maxV > r.maxV {
+			r.maxV, r.maxX, r.maxY = ext[b].maxV, ext[b].maxX, ext[b].maxY
+		}
+	}
+	return r.minV, r.minX, r.minY, r.maxV, r.maxX, r.maxY
+}
+
+// -------------------------------------------- NTT (exact) correlation ----
+
+// Montgomery arithmetic modulo p = 29*2^57+1, mirroring the C core exactly.
+
+const nttP uint64 = 4179340454199820289
+
+type mont struct {
+	pinv, r2, one uint64
+}
+
+func newMont() mont {
+	inv := nttP // Newton iteration for p^-1 mod 2^64
+	for i := 0; i < 6; i++ {
+		inv *= 2 - nttP*inv
+	}
+	var m mont
+	m.pinv = -inv
+	m.one = uint64(new128mod(1, 0)) // 2^64 mod p
+	m.r2 = montModMul(m.one, m.one) // (2^64)^2 mod p, via plain 128-bit mod
+	return m
+}
+
+// new128mod computes (hi*2^64 + lo) mod p using 128-bit division-free math.
+func new128mod(hi, lo uint64) uint64 {
+	// only used at init; do it the simple way
+	var r uint64
+	for i := 127; i >= 0; i-- {
+		r <<= 1
+		if r >= nttP {
+			r -= nttP
+		}
+		var bit uint64
+		if i >= 64 {
+			bit = (hi >> (i - 64)) & 1
+		} else {
+			bit = (lo >> i) & 1
+		}
+		r |= 0 // keep shape
+		if bit != 0 {
+			r++
+			if r >= nttP {
+				r -= nttP
+			}
+		}
+	}
+	return r
+}
+
+// montModMul is a plain (a*b) mod p for init-time constants.
+func montModMul(a, b uint64) uint64 {
+	hi, lo := bits.Mul64(a, b)
+	return new128mod(hi, lo)
+}
+
+func (m *mont) mul(a, b uint64) uint64 {
+	hi, lo := bits.Mul64(a, b)
+	q := lo * m.pinv
+	mh, ml := bits.Mul64(q, nttP)
+	_, carry := bits.Add64(lo, ml, 0)
+	r, _ := bits.Add64(hi, mh, carry)
+	if r >= nttP {
+		r -= nttP
+	}
+	return r
+}
+
+func nttAdd(a, b uint64) uint64 {
+	r := a + b
+	if r >= nttP {
+		r -= nttP
+	}
+	return r
+}
+
+func nttSub(a, b uint64) uint64 {
+	if a >= b {
+		return a - b
+	}
+	return a + nttP - b
+}
+
+func (m *mont) pow(baseM, e uint64) uint64 {
+	r, b := m.one, baseM
+	for e != 0 {
+		if e&1 != 0 {
+			r = m.mul(r, b)
+		}
+		b = m.mul(b, b)
+		e >>= 1
+	}
+	return r
+}
+
+func (m *mont) toMont(a uint64) uint64   { return m.mul(a, m.r2) }
+func (m *mont) fromMont(a uint64) uint64 { return m.mul(a, 1) }
+
+func (m *mont) generator() uint64 {
+	for g := uint64(2); ; g++ {
+		gm := m.toMont(g)
+		if m.pow(gm, (nttP-1)/2) != m.one && m.pow(gm, (nttP-1)/29) != m.one {
+			return gm
+		}
+	}
+}
+
+func makeNttTab(m *mont, genM uint64, n int, inverse bool) []uint64 {
+	tab := make([]uint64, n)
+	tab[0] = m.one
+	for half := 1; half < n; half <<= 1 {
+		e := (nttP - 1) / uint64(2*half)
+		if inverse {
+			e = nttP - 1 - e
+		}
+		w := m.pow(genM, e)
+		cur := m.one
+		for j := 0; j < half; j++ {
+			tab[half+j] = cur
+			cur = m.mul(cur, w)
+		}
+	}
+	return tab
+}
+
+func nttGo(m *mont, a []uint64, tab []uint64, br []int) {
+	n := len(a)
+	for i, j := range br {
+		if j > i {
+			a[i], a[j] = a[j], a[i]
+		}
+	}
+	for half := 1; half < n; half <<= 1 {
+		w := tab[half : half*2]
+		for i := 0; i < n; i += half << 1 {
+			p := a[i : i+half : i+half]
+			q := a[i+half : i+half*2 : i+half*2]
+			for j := 0; j < half; j++ {
+				v := m.mul(q[j], w[j])
+				u := p[j]
+				p[j] = nttAdd(u, v)
+				q[j] = nttSub(u, v)
+			}
+		}
+	}
+}
+
+func nttColsGo(m *mont, d []uint64, n, width int, tab []uint64, br []int, tmp []uint64) {
+	for i, j := range br {
+		if j > i {
+			ri := d[i*width : i*width+width]
+			rj := d[j*width : j*width+width]
+			copy(tmp[:width], ri)
+			copy(ri, rj)
+			copy(rj, tmp[:width])
+		}
+	}
+	for half := 1; half < n; half <<= 1 {
+		for i := 0; i < n; i += half << 1 {
+			for j := 0; j < half; j++ {
+				wj := tab[half+j]
+				p := d[(i+j)*width : (i+j)*width+width]
+				q := d[(i+j+half)*width : (i+j+half)*width+width]
+				for c := range p {
+					v := m.mul(q[c], wj)
+					u := p[c]
+					p[c] = nttAdd(u, v)
+					q[c] = nttSub(u, v)
+				}
+			}
+		}
+	}
+}
+
+func matchExactGo(img []uint8, istride, iw, ih int, tpl []uint8, tstride, tw, th, cn, step, threads int, result []float32) (float32, int, int, float32, int, int) {
 	if cn < 1 || cn > 4 || step < cn || tw < 1 || th < 1 || tw > iw || th > ih ||
 		istride < iw*step || tstride < tw*step {
 		panic(fmt.Sprintf("cvmatch: bad match arguments (%dx%d in %dx%d, cn=%d step=%d)", tw, th, iw, ih, cn, step))
 	}
+	threads = clampThreads(threads)
+	rw, rh := iw-tw+1, ih-th+1
+	res := result
+	if res == nil {
+		res = make([]float32, rw*rh)
+	}
+	corrD := make([]float64, rw*rh)
+
+	fp := newGoPlan(tw, th, rw, rh)
+	m := newMont()
+	g := m.generator()
+	fwdW := makeNttTab(&m, g, fp.dftW, false)
+	invW := makeNttTab(&m, g, fp.dftW, true)
+	fwdH, invH := fwdW, invW
+	if fp.dftH != fp.dftW {
+		fwdH = makeNttTab(&m, g, fp.dftH, false)
+		invH = makeNttTab(&m, g, fp.dftH, true)
+	}
+	var lut [256]uint64
+	for i := range lut {
+		lut[i] = m.toMont(uint64(i))
+	}
+
+	specN := fp.dftH * fp.dftW
+	// reversed template spectra, pre-scaled by (dftW*dftH)^-1 mod p
+	tspec := make([]uint64, cn*specN)
+	z0 := make([]uint64, fp.dftW)
+	ninv := m.pow(m.toMont(uint64(fp.dftW)*uint64(fp.dftH)), nttP-2)
+	for k := 0; k < cn; k++ {
+		ts := tspec[k*specN : (k+1)*specN]
+		for y := 0; y < fp.dftH; y++ {
+			row := ts[y*fp.dftW : (y+1)*fp.dftW]
+			if y >= th {
+				tail := ts[y*fp.dftW:]
+				for i := range tail {
+					tail[i] = 0
+				}
+				break
+			}
+			src := tpl[(th-1-y)*tstride+k:]
+			for x := 0; x < tw; x++ {
+				row[x] = lut[src[(tw-1-x)*step]]
+			}
+			for x := tw; x < fp.dftW; x++ {
+				row[x] = 0
+			}
+			nttGo(&m, row, fwdW, fp.brW)
+		}
+		nttColsGo(&m, ts, fp.dftH, fp.dftW, fwdH, fp.brH, z0)
+		for i := range ts {
+			ts[i] = m.mul(ts[i], ninv)
+		}
+	}
+
+	ntx := (rw + fp.blockW - 1) / fp.blockW
+	nty := (rh + fp.blockH - 1) / fp.blockH
+	ntiles := ntx * nty
+	nw := threads
+	if nw > ntiles {
+		nw = ntiles
+	}
+	runParallel(nw, func(w int) {
+		spec := make([]uint64, specN)
+		z := make([]uint64, fp.dftW)
+		for t := w; t < ntiles; t += nw {
+			x0, y0 := (t%ntx)*fp.blockW, (t/ntx)*fp.blockH
+			bw, bh := min(fp.blockW, rw-x0), min(fp.blockH, rh-y0)
+			loadW, loadH := bw+tw-1, bh+th-1
+			for k := 0; k < cn; k++ {
+				for r := 0; r < fp.dftH; r++ {
+					row := spec[r*fp.dftW : (r+1)*fp.dftW]
+					if r >= loadH {
+						tail := spec[r*fp.dftW:]
+						for i := range tail {
+							tail[i] = 0
+						}
+						break
+					}
+					src := img[(y0+r)*istride+x0*step+k:]
+					for x := 0; x < loadW; x++ {
+						row[x] = lut[src[x*step]]
+					}
+					for x := loadW; x < fp.dftW; x++ {
+						row[x] = 0
+					}
+					nttGo(&m, row, fwdW, fp.brW)
+				}
+				nttColsGo(&m, spec, fp.dftH, fp.dftW, fwdH, fp.brH, z)
+				ts := tspec[k*specN : (k+1)*specN]
+				for i := range spec {
+					spec[i] = m.mul(spec[i], ts[i])
+				}
+				nttColsGo(&m, spec, fp.dftH, fp.dftW, invH, fp.brH, z)
+				for r := 0; r < bh; r++ {
+					row := spec[(r+th-1)*fp.dftW : (r+th)*fp.dftW]
+					nttGo(&m, row, invW, fp.brW)
+					o := corrD[(y0+r)*rw+x0:]
+					if k == 0 {
+						for x := 0; x < bw; x++ {
+							o[x] = float64(m.fromMont(row[x+tw-1]))
+						}
+					} else {
+						for x := 0; x < bw; x++ {
+							o[x] += float64(m.fromMont(row[x+tw-1]))
+						}
+					}
+				}
+			}
+		}
+	})
+
+	return normalizeParallelGo(img, istride, iw, tpl, tstride, tw, th, cn, step, rw, rh, threads, nil, corrD, res)
+}
+
+// ----------------------------------------------------------- entrypoint --
+
+func matchU8Go(img []uint8, istride, iw, ih int, tpl []uint8, tstride, tw, th, cn, step, threads int, result []float32) (float32, int, int, float32, int, int) {
+	if cn < 1 || cn > 4 || step < cn || tw < 1 || th < 1 || tw > iw || th > ih ||
+		istride < iw*step || tstride < tw*step {
+		panic(fmt.Sprintf("cvmatch: bad match arguments (%dx%d in %dx%d, cn=%d step=%d)", tw, th, iw, ih, cn, step))
+	}
+	threads = clampThreads(threads)
 	rw, rh := iw-tw+1, ih-th+1
 	res := result
 	if res == nil {
 		res = make([]float32, rw*rh)
 	}
 	p := newGoPlan(tw, th, rw, rh)
-	for k := 0; k < cn; k++ {
-		crossCorrChannelGo(img[k:], istride, tpl[k:], tstride, step, tw, th, rw, rh, p, k > 0, res)
-	}
-	minV, minX, minY, maxV, maxX, maxY := normalizeAndScanGo(img, istride, iw, tpl, tstride, tw, th, cn, step, rw, rh, res)
-	return float32(minV), minX, minY, float32(maxV), maxX, maxY
+	crossCorrGo(img, istride, tpl, tstride, step, cn, tw, th, rw, rh, threads, p, res)
+	return normalizeParallelGo(img, istride, iw, tpl, tstride, tw, th, cn, step, rw, rh, threads, res, nil, res)
 }

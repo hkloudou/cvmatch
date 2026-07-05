@@ -15,7 +15,21 @@ package cvmatch
 import (
 	"image"
 	"image/draw"
+	"runtime"
 )
+
+// threads returns the default worker count for one call: GOMAXPROCS, capped
+// by the cores the algorithm can use. Any count yields bit-identical output.
+func threads() int {
+	n := runtime.GOMAXPROCS(0)
+	if n > 16 {
+		n = 16
+	}
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
 
 // Match looks for sub inside parent using normalized correlation coefficient
 // template matching (TM_CCOEFF_NORMED), processing images as 8-bit RGBA
@@ -38,7 +52,7 @@ func Match(parent, sub image.Image) (float32, int, int, float32, int, int) {
 	if alphaConst(pPix, pStride, pw, ph) && alphaConst(sPix, sStride, sw, sh) {
 		cn = 3
 	}
-	return matchU8(pPix, pStride, pw, ph, sPix, sStride, sw, sh, cn, 4, nil)
+	return matchU8(pPix, pStride, pw, ph, sPix, sStride, sw, sh, cn, 4, threads(), nil)
 }
 
 // MatchMap runs the same computation as Match but returns the full
@@ -54,7 +68,7 @@ func MatchMap(parent, sub image.Image) (res []float32, w, h int) {
 	}
 	w, h = pw-sw+1, ph-sh+1
 	res = make([]float32, w*h)
-	matchU8(pPix, pStride, pw, ph, sPix, sStride, sw, sh, cn, 4, res)
+	matchU8(pPix, pStride, pw, ph, sPix, sStride, sw, sh, cn, 4, threads(), res)
 	return res, w, h
 }
 
@@ -65,7 +79,24 @@ func MatchMap(parent, sub image.Image) (res []float32, w, h int) {
 func MatchGray(parent, sub image.Image) (float32, int, int, float32, int, int) {
 	pPix, pStride, pw, ph := toGray(parent)
 	sPix, sStride, sw, sh := toGray(sub)
-	return matchU8(pPix, pStride, pw, ph, sPix, sStride, sw, sh, 1, 1, nil)
+	return matchU8(pPix, pStride, pw, ph, sPix, sStride, sw, sh, 1, 1, threads(), nil)
+}
+
+// MatchExact is Match with the raw cross-correlation computed exactly over
+// the integers (number-theoretic transform modulo 29*2^57+1) instead of a
+// float32 FFT. The normalized response is therefore free of correlation
+// rounding: more accurate than OpenCV wherever float32 rounds, and
+// bit-identical across platforms, thread counts, and the cgo/pure-Go cores.
+// It is slower than Match (64-bit modular arithmetic, no real-input FFT
+// packing) — choose it for determinism and accuracy, not speed.
+func MatchExact(parent, sub image.Image) (float32, int, int, float32, int, int) {
+	pPix, pStride, pw, ph := toRGBA(parent)
+	sPix, sStride, sw, sh := toRGBA(sub)
+	cn := 4
+	if alphaConst(pPix, pStride, pw, ph) && alphaConst(sPix, sStride, sw, sh) {
+		cn = 3
+	}
+	return matchExactU8(pPix, pStride, pw, ph, sPix, sStride, sw, sh, cn, 4, threads(), nil)
 }
 
 // alphaConst reports whether the alpha plane of interleaved RGBA pixels is a

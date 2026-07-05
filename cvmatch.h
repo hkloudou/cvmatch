@@ -11,8 +11,12 @@
  *      cutoff and the 1.125 saturation band).
  *
  * Unlike OpenCV, window sums are produced by O(width) sliding column sums
- * instead of full double-precision integral images, and the global min/max
- * scan is fused into the normalization pass.
+ * instead of full double-precision integral images, the global min/max scan
+ * is fused into the normalization pass, and the work can be spread over
+ * nthreads workers (tile-level correlation, band-level normalization) with
+ * bit-identical output for any thread count — every output element's
+ * arithmetic sequence is unchanged, and the window sums are integer-valued
+ * doubles, so band-local rebuilds are exact.
  */
 #ifndef CVMATCH_H
 #define CVMATCH_H
@@ -41,6 +45,8 @@ typedef struct CvmExtrema {
  *      bit-equivalent to the 4-channel result whenever each image's alpha
  *      plane is constant (the constant channel contributes exactly zero to
  *      numerator, denominator and templNorm).
+ * nthreads: worker count (clamped to [1,16]); any value yields bit-identical
+ *      results.
  * result: optional caller buffer of (iw-tw+1)*(ih-th+1) floats that receives
  *         the full normalized response map; pass NULL to let the function use
  *         an internal scratch buffer (freed before returning).
@@ -49,8 +55,20 @@ typedef struct CvmExtrema {
  */
 int cvm_match_ccoeff_normed_u8(const uint8_t *img, int img_stride, int iw,
                                int ih, const uint8_t *tpl, int tpl_stride,
-                               int tw, int th, int cn, int step, float *result,
-                               CvmExtrema *out);
+                               int tw, int th, int cn, int step, int nthreads,
+                               float *result, CvmExtrema *out);
+
+/* Same contract as cvm_match_ccoeff_normed_u8, but the raw cross-correlation
+ * is computed EXACTLY over the integers with a number-theoretic transform
+ * (Montgomery arithmetic modulo the prime 29*2^57+1) instead of a float32
+ * FFT. The normalized response is therefore free of correlation rounding:
+ * more accurate than OpenCV wherever float32 rounds, and bit-identical
+ * across platforms, thread counts, and the C/Go cores. Slower than the
+ * float path (64-bit modular butterflies, no real-input packing). */
+int cvm_match_exact_u8(const uint8_t *img, int img_stride, int iw, int ih,
+                       const uint8_t *tpl, int tpl_stride, int tw, int th,
+                       int cn, int step, int nthreads, float *result,
+                       CvmExtrema *out);
 
 #ifdef __cplusplus
 }

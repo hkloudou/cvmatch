@@ -33,7 +33,7 @@ func TestConcurrentMatch(t *testing.T) {
 				// the pure-Go core must be safe too (it is the whole library
 				// under CGO_ENABLED=0)
 				res := make([]float32, (320-32+1)*(240-24+1))
-				matchU8Go(parent.Pix, parent.Stride, 320, 240, sub.Pix, sub.Stride, 32, 24, 3, 4, res)
+				matchU8Go(parent.Pix, parent.Stride, 320, 240, sub.Pix, sub.Stride, 32, 24, 3, 4, 2, res)
 			}
 		}()
 	}

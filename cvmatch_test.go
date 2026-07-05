@@ -105,7 +105,7 @@ func TestAgainstReference(t *testing.T) {
 		tpl := randPix(tstride*c.th, rng)
 		rw, rh := c.iw-c.tw+1, c.ih-c.th+1
 		got := make([]float32, rw*rh)
-		minV, minX, minY, maxV, maxX, maxY := matchU8(img, istride, c.iw, c.ih, tpl, tstride, c.tw, c.th, c.cn, c.cn, got)
+		minV, minX, minY, maxV, maxX, maxY := matchU8(img, istride, c.iw, c.ih, tpl, tstride, c.tw, c.th, c.cn, c.cn, 4, got)
 		want := refMatch(img, istride, c.iw, c.ih, tpl, tstride, c.tw, c.th, c.cn, c.cn)
 
 		worst := 0.0
@@ -228,8 +228,8 @@ func TestConstantAlphaSkip(t *testing.T) {
 	rw, rh := iw-tw+1, ih-th+1
 	got3 := make([]float32, rw*rh)
 	got4 := make([]float32, rw*rh)
-	matchU8(img, iw*4, iw, ih, tpl, tw*4, tw, th, 3, 4, got3)
-	matchU8(img, iw*4, iw, ih, tpl, tw*4, tw, th, 4, 4, got4)
+	matchU8(img, iw*4, iw, ih, tpl, tw*4, tw, th, 3, 4, 4, got3)
+	matchU8(img, iw*4, iw, ih, tpl, tw*4, tw, th, 4, 4, 4, got4)
 	for i := range got3 {
 		if d := math.Abs(float64(got3[i]) - float64(got4[i])); d > 1e-5 {
 			t.Fatalf("cn=3 vs cn=4 mismatch at %d: %v vs %v", i, got3[i], got4[i])
@@ -253,10 +253,49 @@ func TestVaryingAlpha(t *testing.T) {
 	}
 	want := refMatch(parent.Pix, parent.Stride, 100, 80, sub.Pix, sub.Stride, 20, 16, 4, 4)
 	got := make([]float32, len(want))
-	matchU8(parent.Pix, parent.Stride, 100, 80, sub.Pix, sub.Stride, 20, 16, 4, 4, got)
+	matchU8(parent.Pix, parent.Stride, 100, 80, sub.Pix, sub.Stride, 20, 16, 4, 4, 4, got)
 	for i := range want {
 		if d := math.Abs(float64(got[i]) - want[i]); d > 1e-4 {
 			t.Fatalf("varying-alpha mismatch at %d: %v vs %v", i, got[i], want[i])
 		}
+	}
+}
+
+// TestMatchExactAgainstReference: the exact path's correlation is integer-
+// exact, so it should track the float64 brute-force reference to within a
+// single float32 store rounding, tighter than the FFT path.
+func TestMatchExactAgainstReference(t *testing.T) {
+	rng := rand.New(rand.NewSource(55))
+	cases := []struct{ iw, ih, tw, th, cn, step int }{
+		{97, 61, 17, 13, 1, 1},
+		{97, 61, 17, 13, 4, 4},
+		{330, 250, 96, 64, 3, 4}, // big enough for correlation > 2^24
+	}
+	for ci, c := range cases {
+		img := randPix(c.iw*c.ih*c.step, rng)
+		tpl := randPix(c.tw*c.th*c.step, rng)
+		rw, rh := c.iw-c.tw+1, c.ih-c.th+1
+		got := make([]float32, rw*rh)
+		matchExactU8(img, c.iw*c.step, c.iw, c.ih, tpl, c.tw*c.step, c.tw, c.th, c.cn, c.step, 3, got)
+		want := refMatch(img, c.iw*c.step, c.iw, c.ih, tpl, c.tw*c.step, c.tw, c.th, c.cn, c.step)
+		worst := 0.0
+		for i := range want {
+			if d := math.Abs(float64(got[i]) - want[i]); d > worst {
+				worst = d
+			}
+		}
+		if worst > 1e-6 {
+			t.Fatalf("case %d: exact path max error %g vs float64 reference", ci, worst)
+		}
+	}
+}
+
+// TestMatchExactAPI exercises the public wrapper on a planted template.
+func TestMatchExactAPI(t *testing.T) {
+	rng := rand.New(rand.NewSource(66))
+	parent, sub := makeParentSub(640, 400, 64, 48, 123, 77, rng)
+	_, _, _, maxV, maxX, maxY := MatchExact(parent, sub)
+	if maxX != 123 || maxY != 77 || maxV < 0.9999 {
+		t.Fatalf("MatchExact: expected (123,77), got (%d,%d) %v", maxX, maxY, maxV)
 	}
 }

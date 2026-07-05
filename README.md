@@ -3,7 +3,8 @@
 OpenCV-compatible `TM_CCOEFF_NORMED` template matching for Go. No OpenCV, no
 bundled multi-megabyte static libraries, no dependencies — and **no required
 toolchain**: with cgo the core is **one dependency-free C file** (compiles in
-~1 s during `go build`, ~30 KB of native code, AVX2 multi-versioned); with
+~1 s during `go build`, ~47 KB of native code including the exact-NTT mode
+and threading, AVX2 multi-versioned); with
 `CGO_ENABLED=0` a **pure-Go port of the same algorithm** takes over
 automatically, so plain cross-compilation just works. `cvmatch.Impl` reports
 which core is active ("cgo" / "purego"); tests pin both to identical output.
@@ -19,6 +20,10 @@ minVal, minX, minY, maxVal, maxX, maxY = cvmatch.MatchGray(parent, sub)
 
 // Full response map (find every occurrence above a threshold):
 resp, w, h := cvmatch.MatchMap(parent, sub)
+
+// Exact mode: integer-exact correlation (NTT), bit-identical on every
+// platform and both cores; more accurate than OpenCV, but slower:
+minVal, minX, minY, maxVal, maxX, maxY = cvmatch.MatchExact(parent, sub)
 ```
 
 `Match` panics if an image is empty or `sub` is larger than `parent`, matching
@@ -78,8 +83,11 @@ location and value:
 > within ~0-4% of each other on every scene (e.g. 1080p/128: 390.5 ms native
 > vs 392.7 ms Go; window/button: 245.0 vs 241.1 ms). The cost is OpenCV's own
 > pipeline — 4-channel DFT correlation plus full double-precision integral
-> images — which is exactly what cvmatch restructures: **2.0-3.8x faster than
-> native OpenCV C++ at identical output values, 3.9-8.4x in grayscale mode.**
+> images — which is exactly what cvmatch restructures. Single-threaded,
+> cvmatch is **2.0-3.8x faster than native OpenCV C++ at identical output
+> values**; with its internal bit-identical parallelism on 4 cores it is
+> **1.9-9.9x faster (7-9x on the big scenes), and 10-16x in grayscale mode**
+> (OpenCV's matchTemplate path cannot use extra cores at all).
 
 ### Fairness rules
 
@@ -94,6 +102,11 @@ location and value:
   Go-vs-native comparisons cannot be skewed by build flags. A distro-built
   OpenCV (Ubuntu 24.04, 4.6.0) was also measured and lands within ±7% of the
   bundled build on every scene.
+- **Threading disclosed.** cvmatch.Match parallelizes one call across cores
+  with provably bit-identical output (`TestThreadsBitIdentical`); OpenCV's
+  matchTemplate path is single-threaded by design, so the headline chart is
+  "whole library vs whole library" on the same 4 cores. Like-for-like
+  single-thread numbers are kept in the table below the chart.
 - **Verified-equal outputs.** `TestFullMapParityWithNativeCpp` compares every
   element of `cvmatch.MatchMap` against the response map dumped by the C++
   binary — all 13 scenes agree (see Accuracy below), so no speed comes from
@@ -108,12 +121,12 @@ peak-RSS probe and the size report on each push to `main` (and on demand via
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/bench-dark.svg">
-  <img alt="Benchmark: cvmatch is 2.0-3.8x faster than native OpenCV C++ at identical output, 3.9-8.4x in grayscale mode; cv2's Go wrapper adds only ~0-4% over native C++" src="docs/bench-light.svg">
+  <img alt="Benchmark: cvmatch is 1.9-9.9x faster than native OpenCV C++ at identical output (4 threads, bit-identical), 10-16x in grayscale mode; cv2's Go wrapper adds only ~0-4% over native C++" src="docs/bench-light.svg">
 </picture>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/mem-dark.svg">
-  <img alt="Peak memory: 14.8 MB vs 145.5 MB for one 1080p match" src="docs/mem-light.svg">
+  <img alt="Peak memory: 35.6 MB (4 workers) vs 145.7 MB for one 1080p match" src="docs/mem-light.svg">
 </picture>
 
 ### Native code size (linux/amd64)
@@ -121,7 +134,7 @@ peak-RSS probe and the size report on each push to `main` (and on demand via
 | artifact | size |
 |---|---|
 | cv2 bundled static libs (`libopencv_core.a` + `libopencv_imgproc.a` + zlib + wrapper) | 16.1 MB |
-| `libcvmatch.a` | **30 KB** (~525x smaller) |
+| `libcvmatch.a` | **47 KB** (~340x smaller) |
 | minimal linked Go binary (`-ldflags "-s -w"`) | 5.82 MB (cv2) vs **1.57 MB** (cvmatch) |
 
 ### Accuracy
@@ -202,29 +215,29 @@ run.
 
 ### Pure-Go core (CGO_ENABLED=0)
 
-The same 13 scenes through the pure-Go port, single-threaded, measured with
-`CGO_ENABLED=0 go test -bench . -benchtime 5x` in the module root (the cgo
-column is the same benchmark with cgo on; cv2 shown for context):
+The same 13 scenes through the pure-Go port (same internal parallelism, 4
+cores), measured with `CGO_ENABLED=0 go test -bench . -benchtime 5x` in the
+module root; cv2 shown for context:
 
 | scene | cvmatch cgo | cvmatch pure-Go | pure-Go / cgo | cv2 (cgo + OpenCV) |
 |---|---|---|---|---|
-| window 1600 button 96×32 | 97 ms | 386 ms | 4.0x | 241 ms |
-| window 1600 icon 24×24 | 82 ms | 319 ms | 3.9x | 227 ms |
-| window 1600 panel 300×200 | 120 ms | 497 ms | 4.2x | 251 ms |
-| window 4K button 96×32 | 503 ms | 1951 ms | 3.9x | 1212 ms |
-| noise 720p sub 96 | 77 ms | 402 ms | 5.2x | 149 ms |
-| noise 1080p sub 128 | 140 ms | 672 ms | 4.8x | 393 ms |
-| noise 1080p sub 32 | 111 ms | 422 ms | 3.8x | 299 ms |
-| noise 4K sub 256 | 763 ms | 3359 ms | 4.4x | 1931 ms |
-| photos (5 scenes) | 13–45 ms | 55–216 ms | 4.0–4.9x | 35–101 ms |
-| **MatchGray**, 1080p/128 | 57 ms | 241 ms | 4.2x | — |
+| window 1600 button 96×32 | 32 ms | 133 ms | 4.1x | 241 ms |
+| window 1600 icon 24×24 | 25 ms | 122 ms | 4.9x | 227 ms |
+| window 1600 panel 300×200 | 104 ms | 474 ms | 4.6x | 251 ms |
+| window 4K button 96×32 | 133 ms | 527 ms | 4.0x | 1212 ms |
+| noise 1080p sub 128 | 56 ms | 246 ms | 4.4x | 393 ms |
+| noise 4K sub 256 | 260 ms | 1161 ms | 4.5x | 1931 ms |
+| photos (5 scenes) | 11–40 ms | 53–215 ms | 4.6–5.4x | 35–101 ms |
+| **MatchGray**, 1080p/128 | 27 ms | 92 ms | 3.5x | — |
 
 The gap vs the C core is vectorization: gc emits scalar code while the C
 butterflies run 8-wide AVX2. As a **zero-toolchain fallback** it still holds
-up — `MatchGray` beats cv2-with-OpenCV by ~1.6–2.6x on every scene, RGBA
-parity mode lands in cv2's neighborhood, and the algorithm, memory profile
-(sliding sums, no integral images) and outputs are identical to the C core
-(`TestPureGoMatchesCgo` pins both cores to ≤1e-5 element-wise).
+up — `MatchGray` beats cv2-with-OpenCV by ~3-5x on every scene, RGBA parity
+mode beats it on most, and the algorithm, memory profile and outputs are
+identical to the C core (`TestPureGoMatchesCgo`, `TestMatchExactCgoVsPureGo`
+pin the cores together; the exact path is bit-identical across cores).
+Curiosity: pure-Go `MatchExact` is ~20% *faster* than the C one — Go's
+`bits.Mul64` Montgomery multiply beats gcc's `__int128` codegen here.
 
 ## Why it can beat OpenCV at identical output
 
@@ -283,10 +296,13 @@ problems:
   needed.** Matching 100 screenshots, or one screenshot against 20 button
   templates, scales to ~N× on N cores by running `Match` calls concurrently.
   This is the recommended pattern and it already works.
-- **Latency (one big match): only the library can help.** A single 4K
-  `Match` takes ~500 ms on one core; a caller cannot speed *that one call*
-  up from outside — splitting the work across cores inside the call is the
-  in-library multithreading lever in the headroom list below.
+- **Latency (one big match): the library now does this for you.** One call
+  spreads its FFT tiles and normalization bands across GOMAXPROCS workers
+  (capped at 16) with **bit-identical output for any worker count**
+  (`TestThreadsBitIdentical` asserts byte-equal maps for 1/2/3/4/8 workers
+  in both cores): 4K button 503→133 ms, 1080p/128 140→56 ms on 4 cores.
+  Single-tile scenes (small photos) parallelize only the normalization pass
+  by design — re-tiling would change the FFT rounding path.
 - **DIY middle ground:** because every TM_CCOEFF_NORMED output depends only
   on its own window, a caller *can* split one large parent into horizontal
   strips overlapping by `subHeight−1` rows, `Match` them concurrently and
@@ -321,19 +337,18 @@ results-identical-to-OpenCV contract.
 
 Ranked remaining levers (all preserve outputs; first two are the big ones):
 
-1. **Multithreading — the largest untapped lever (~2.5–3.5x on 4 cores).**
-   Naïve per-tile threading is *not* generally enough: OpenCV's block
-   heuristic can yield a single tile (e.g. 800×600 with a 128×128 template),
-   capping tile parallelism at 1. The bit-exact-safe axes are finer: the
-   packed row-FFT pairs within a tile are independent, the column-pass
-   butterflies are elementwise across the width (splittable into width
-   chunks without touching any column's arithmetic chain), and normalization
-   parallelizes by row bands — each band rebuilding its own column sums,
-   which is bit-exact *only because* the sums are integer-valued doubles
-   (< 2^53, every add exact, hence order-independent); the same trick on
-   float inputs would not be. Requires per-thread scratch, ordered
-   cross-channel accumulation, and a band-ordered min/max merge to keep
-   OpenCV's first-occurrence tie rule.
+1. **Multithreading — now implemented (measured 2.5–3.8x on 4 cores for
+   multi-tile scenes).** Correlation tiles stride across workers (each with
+   private scratch, channels accumulated in order per tile) and
+   normalization splits into row bands, each rebuilding its own column sums
+   — bit-exact *only because* the sums are integer-valued doubles (< 2^53,
+   every add exact, hence order-independent); the same trick on float inputs
+   would not be. Extrema merge band-in-order to keep OpenCV's
+   first-occurrence tie rule. `TestThreadsBitIdentical` asserts byte-equal
+   maps for any worker count. The known residual: single-tile scenes (small
+   photos) only parallelize normalization — the finer bit-exact axes
+   (independent row-FFT pairs, width-chunked column butterflies) are still
+   on the table for them.
 2. **A better FFT kernel.** The current one is a clean radix-2 with full
    4-mul complex twiddles. Split-radix cuts operation counts ~31% at these
    sizes (radix-4 only ~15%; special-casing trivial twiddles is a few
@@ -383,12 +398,18 @@ cvmatch's) correlation is off by up to ±32 before normalization — that is
 precisely the ~1e-6 noise the parity tests measure, and NTT would remove it.
 The best-match location virtually never changes; the *value* becomes exact
 and, notably, **bit-identical across every platform and both cores** (float
-FFT results legally vary with FMA/SIMD; exact integers cannot). If this mode
-is ever added it should be a separate function (e.g. `MatchExact`) or an
-options parameter — *not* a global variable: a package-level toggle is a
-concurrency hazard and would silently change library behaviour for every
-caller in the process, breaking the default OpenCV-identical contract at a
-distance.
+FFT results legally vary with FMA/SIMD; exact integers cannot). This mode now ships as
+`MatchExact` — a separate function, deliberately *not* a global variable: a
+package-level toggle is a concurrency hazard and would silently change
+library behaviour for every caller in the process, breaking the default
+OpenCV-identical contract at a distance. Measured (4 cores): 1080p/128 in
+979 ms (C) / 750 ms (pure Go) vs 56 ms for `Match` — **17x slower than the
+float path and ~2x slower than cv2**, exactly as the 2–5x-per-op no-SIMD
+prediction implied once the missing real-input packing (2x transforms, 2x
+column width) is priced in. It is an accuracy/determinism product, not a
+speed one; the response maps are bit-identical between the C and Go cores
+(`TestMatchExactCgoVsPureGo`) and track the float64 reference to one
+float32 rounding (`TestMatchExactAgainstReference`).
 
 ## Optimization details
 
@@ -414,7 +435,7 @@ OpenCV pipeline that cv2/gocv ship:
   contiguous row segments (`spec[row][0..hw)`), so the hot inner loop is a
   straight-line vectorizable sweep instead of a strided walk — cache-friendly
   and auto-vectorized.
-- **Runtime AVX2/FMA dispatch.** The six hot functions are compiled twice via
+- **Runtime AVX2/FMA dispatch.** The hot functions are compiled twice via
   `__attribute__((target_clones("arch=haswell","default")))`; glibc's ifunc
   resolver picks the AVX2+FMA clones at load time. Portable baseline
   everywhere else (`-DCVM_NO_TARGET_CLONES` opts out), and the whole archive
