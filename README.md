@@ -341,6 +341,46 @@ problems:
   any replan); ties at the strip merge need the row-major-first rule to
   mirror `minMaxLoc` exactly.
 
+## Recipe: describing a window (one frame, many ROIs, many templates)
+
+The building blocks already compose — no dedicated API needed. Convert the
+frame to gray **once**, take zero-copy `SubImage` views per ROI, and each ROI
+may check any number of expected templates (pre-convert templates to gray
+once at startup; they are reused every frame):
+
+```go
+// once per frame (~7 ms at 1080p when the screenshot is RGBA;
+// free if your source is already *image.Gray or JPEG/YCbCr)
+gray := image.NewGray(frame.Bounds())
+draw.Draw(gray, gray.Bounds(), frame, frame.Bounds().Min, draw.Src)
+
+type expect struct {
+	name string
+	tpl  image.Image // pre-converted gray, reused across frames
+}
+groups := map[image.Rectangle][]expect{
+	okArea:   {{"ok", okTpl}, {"ok_disabled", okDisabledTpl}},
+	trayArea: {{"wifi", wifiTpl}, {"muted", mutedTpl}},
+}
+
+for roi, expects := range groups {
+	view := gray.SubImage(roi) // zero-copy view; search cost ~ ROI area
+	for _, e := range expects {
+		_, _, _, score, x, y := cvmatch.MatchGray(view, e.tpl)
+		if score >= 0.95 {
+			fmt.Printf("%s at (%d,%d) score=%.3f\n",
+				e.name, roi.Min.X+x, roi.Min.Y+y, score) // frame coords
+		}
+	}
+}
+```
+
+Notes: returned coordinates are ROI-relative — add `roi.Min`. Every function
+is safe for concurrent use, so wrapping the outer loop in goroutines is fine
+(one goroutine per ROI is a good shape). Small-ROI searches cost well under
+a millisecond each; the per-frame gray conversion is usually the largest
+single line item, which is why it is hoisted out of the loop.
+
 ## Is OpenCV's algorithm the optimum? Remaining headroom
 
 Deep-dive, with every claim either measured on this codebase or adversarially
