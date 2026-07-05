@@ -15,7 +15,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/hkloudou/cvmatch/bench"
+	"github.com/hkloudou/cvmatch/scenes"
 )
 
 func writeRaw(path string, img *image.RGBA) error {
@@ -51,7 +51,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer mf.Close()
-	for _, s := range bench.Scenarios() {
+	for _, s := range scenes.All("testdata") {
 		pf, sf := s.Name+".parent.raw", s.Name+".sub.raw"
 		if err := writeRaw(filepath.Join(*out, pf), s.Parent); err != nil {
 			log.Fatal(err)

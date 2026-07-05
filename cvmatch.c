@@ -375,14 +375,18 @@ static void normalize_and_scan(const uint8_t *img, size_t istride, int iw,
         num = num > 0 ? 1 : -1;
       else
         num = 0;
-      rrow[x] = (float)num;
-      if (num < minv) {
-        minv = num;
+      /* Compare the float32 value actually stored in the result map, not
+       * the double intermediate — OpenCV's minMaxLoc scans the rounded
+       * CV_32F data, and near-ties must resolve the same way. */
+      float v = (float)num;
+      rrow[x] = v;
+      if (v < minv) {
+        minv = v;
         minx = x;
         miny = y;
       }
-      if (num > maxv) {
-        maxv = num;
+      if (v > maxv) {
+        maxv = v;
         maxx = x;
         maxy = y;
       }

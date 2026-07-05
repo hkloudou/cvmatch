@@ -12,6 +12,7 @@ import (
 
 	cv2 "github.com/hkloudou/cv2"
 	"github.com/hkloudou/cvmatch"
+	"github.com/hkloudou/cvmatch/scenes"
 )
 
 // cv2FullMap extracts OpenCV's complete CV_32F response map.
@@ -46,7 +47,7 @@ func cv2FullMap(parent, sub image.Image) ([]float32, int, int) {
 // TestFullMapParityWithCv2 compares every element of the response map
 // against OpenCV's, on both UI and noise scenarios.
 func TestFullMapParityWithCv2(t *testing.T) {
-	for _, s := range Scenarios() {
+	for _, s := range scenes.All("testdata") {
 		if !s.FullMap {
 			continue
 		}
@@ -73,7 +74,7 @@ func TestFullMapParityWithCv2(t *testing.T) {
 
 // TestParityWithCv2 checks the Match() min/max contract on every scenario.
 func TestParityWithCv2(t *testing.T) {
-	for _, s := range Scenarios() {
+	for _, s := range scenes.All("testdata") {
 		aMinV, _, _, aMaxV, aMaxX, aMaxY := cv2.Match(s.Parent, s.Sub)
 		bMinV, _, _, bMaxV, bMaxX, bMaxY := cvmatch.Match(s.Parent, s.Sub)
 		if aMaxX != bMaxX || aMaxY != bMaxY || aMaxX != s.PX || aMaxY != s.PY {
@@ -96,7 +97,7 @@ func TestParityWithCv2(t *testing.T) {
 }
 
 func benchAll(b *testing.B, fn func(parent, sub image.Image) (float32, int, int, float32, int, int)) {
-	for _, s := range Scenarios() {
+	for _, s := range scenes.All("testdata") {
 		b.Run(s.Name, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
@@ -123,7 +124,7 @@ func BenchmarkCvmatchMatchGray(b *testing.B) { benchAll(b, cvmatch.MatchGray) }
 // The test skips scenes whose dump file is absent.
 func TestFullMapParityWithNativeCpp(t *testing.T) {
 	checked := 0
-	for _, s := range Scenarios() {
+	for _, s := range scenes.All("testdata") {
 		data, err := os.ReadFile(filepath.Join("cpp", "scenes", s.Name+".result.raw"))
 		if err != nil {
 			continue

@@ -19,6 +19,8 @@ jobs:
         run: go test -v ./...
       - name: Vet
         run: go vet ./... && cd bench && go vet ./...
+      - name: Pure-Go core tests (CGO_ENABLED=0)
+        run: CGO_ENABLED=0 go test ./... && CGO_ENABLED=0 go vet .
       - name: Static library size
         run: |
           make lib
@@ -79,6 +81,14 @@ jobs:
       - name: Element-wise parity vs native C++ response maps
         working-directory: bench
         run: go test -v -run TestFullMapParityWithNativeCpp | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Pure-Go core benchmarks (CGO_ENABLED=0, same scenes)
+        run: |
+          {
+            echo "### cvmatch pure-Go core (CGO_ENABLED=0)"
+            echo '```'
+            CGO_ENABLED=0 go test -run xxx -bench . -benchtime 5x -timeout 50m
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Binary sizes
         working-directory: bench
         run: |

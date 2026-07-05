@@ -1,9 +1,12 @@
 # cvmatch
 
-OpenCV-compatible `TM_CCOEFF_NORMED` template matching for Go, implemented as
-**one dependency-free C file** behind cgo. No OpenCV, no bundled multi-megabyte
-static libraries — the entire native code compiles to a ~30 KB archive
-(~23 KB of `.text`, AVX2 function multi-versioning included).
+OpenCV-compatible `TM_CCOEFF_NORMED` template matching for Go. No OpenCV, no
+bundled multi-megabyte static libraries, no dependencies — and **no required
+toolchain**: with cgo the core is **one dependency-free C file** (compiles in
+~1 s during `go build`, ~30 KB of native code, AVX2 multi-versioned); with
+`CGO_ENABLED=0` a **pure-Go port of the same algorithm** takes over
+automatically, so plain cross-compilation just works. `cvmatch.Impl` reports
+which core is active ("cgo" / "purego"); tests pin both to identical output.
 
 ```go
 import "github.com/hkloudou/cvmatch"
@@ -162,6 +165,67 @@ are **bit-identical** to OpenCV's integral-image values; the only float32
 rounding source is the correlation itself, which OpenCV also computes in
 float32 — that is why parity holds to ~1e-6 on well-conditioned scenes.
 
+### Differences from OpenCV, exhaustively
+
+Three categories, from harmless to functional:
+
+**A. Implementation differences with provably zero output change**
+
+| difference | why the output is identical |
+|---|---|
+| sliding column sums instead of `sum`/`sqsum` integral images | both are exact integer arithmetic in `double` (< 2^53) — bit-identical window statistics |
+| `minMaxLoc` fused into the normalization pass | same row-major scan, same strict-comparison first-occurrence tie rule, comparing the same rounded float32 values OpenCV would scan |
+| constant-channel (alpha) skip | algebraic cancellation: a per-image-constant channel contributes exactly 0 to numerator, denominator and `templNorm` (dedicated test asserts cn=3 ≡ cn=4) |
+| zero-copy input, template spectrum pre-scaled by `1/(dftW·dftH)` | pure plumbing; same numbers enter the math |
+
+**B. Float32 rounding-path differences (bounded, measured)**
+
+| difference | consequence |
+|---|---|
+| power-of-two FFT (radix-2, two-real-rows-per-complex-FFT) instead of OpenCV's mixed-radix 2^a·3^b·5^c DFT | different DFT sizes and summation orders ⇒ different float32 rounding, *not* different math. Measured element-wise vs the C++ binary: ≤ 2.4e-06 on noise, ≤ 8.1e-05 on photos, ≤ 4.7e-04 only in near-flat UI regions where the true value is ~0 |
+| DFT scratch capped at 2^21 complex elements (OpenCV has no cap) | for pathologically large templates the tiling gets finer — again a rounding-path change only |
+| compiler FMA contraction in the C core (gcc `-O3`) vs none in OpenCV's own kernels | sub-ulp differences folded into the same ≤1e-6 envelope |
+
+**C. Scope differences (things cvmatch deliberately does not do)**
+
+- Only `TM_CCOEFF_NORMED` — the one method `cv2.Match` uses. The other five
+  methods (SQDIFF/CCORR families) are not implemented.
+- No mask support (`cv2.Match` passes an empty mask, so OpenCV takes the
+  unmasked path this library replicates).
+- Input is 8-bit, 1–4 channels; OpenCV also accepts CV_32F input.
+- Errors surface as Go panics instead of C++ exceptions (matching cv2's
+  observable behaviour).
+
+Nothing in category A or B changes which location wins or by how much beyond
+float32 noise — that is what the four parity test layers pin down on every
+run.
+
+### Pure-Go core (CGO_ENABLED=0)
+
+The same 13 scenes through the pure-Go port, single-threaded, measured with
+`CGO_ENABLED=0 go test -bench . -benchtime 5x` in the module root (the cgo
+column is the same benchmark with cgo on; cv2 shown for context):
+
+| scene | cvmatch cgo | cvmatch pure-Go | pure-Go / cgo | cv2 (cgo + OpenCV) |
+|---|---|---|---|---|
+| window 1600 button 96×32 | 97 ms | 386 ms | 4.0x | 241 ms |
+| window 1600 icon 24×24 | 82 ms | 319 ms | 3.9x | 227 ms |
+| window 1600 panel 300×200 | 120 ms | 497 ms | 4.2x | 251 ms |
+| window 4K button 96×32 | 503 ms | 1951 ms | 3.9x | 1212 ms |
+| noise 720p sub 96 | 77 ms | 402 ms | 5.2x | 149 ms |
+| noise 1080p sub 128 | 140 ms | 672 ms | 4.8x | 393 ms |
+| noise 1080p sub 32 | 111 ms | 422 ms | 3.8x | 299 ms |
+| noise 4K sub 256 | 763 ms | 3359 ms | 4.4x | 1931 ms |
+| photos (5 scenes) | 13–45 ms | 55–216 ms | 4.0–4.9x | 35–101 ms |
+| **MatchGray**, 1080p/128 | 57 ms | 241 ms | 4.2x | — |
+
+The gap vs the C core is vectorization: gc emits scalar code while the C
+butterflies run 8-wide AVX2. As a **zero-toolchain fallback** it still holds
+up — `MatchGray` beats cv2-with-OpenCV by ~1.6–2.6x on every scene, RGBA
+parity mode lands in cv2's neighborhood, and the algorithm, memory profile
+(sliding sums, no integral images) and outputs are identical to the C core
+(`TestPureGoMatchesCgo` pins both cores to ≤1e-5 element-wise).
+
 ## Why it can beat OpenCV at identical output
 
 OpenCV's `matchTemplate` is not slow because of sloppy code — it is slow
@@ -263,8 +327,12 @@ OpenCV pipeline that cv2/gocv ship:
 
 ## Layout
 
-- `cvmatch.c` / `cvmatch.h` — the whole native implementation (C99, no deps).
+- `cvmatch.c` / `cvmatch.h` — the native C core (C99, no deps).
+- `impl_purego.go` — the pure-Go port of the same core; `impl_cgo.go` /
+  `impl_nocgo.go` select between them by build tag.
 - `cvmatch.go` — public API and zero-copy image conversion.
+- `scenes/` — deterministic benchmark scenes shared by the main module's
+  cgo-vs-pure-Go benchmarks and the cv2 comparison in `bench/`.
 - `bench/` — separate module holding the `hkloudou/cv2` comparison (UI +
   noise + photo scenario builders, benchmarks, element-wise parity tests,
   `memprobe` peak-RSS tool, binary-size probes) so the root module stays
@@ -280,6 +348,8 @@ OpenCV pipeline that cv2/gocv ship:
 
 ## Requirements
 
-Go with cgo enabled and any C99 compiler. Linux, macOS and Windows (mingw);
-the AVX2 multi-versioning engages automatically on x86-64 glibc systems and
-falls back to portable code elsewhere.
+None beyond Go. With cgo enabled (default) any C99 compiler gives the fast
+C core — Linux, macOS, Windows (mingw); AVX2 multi-versioning engages
+automatically on x86-64 glibc and falls back to portable code elsewhere.
+With `CGO_ENABLED=0` (or no C toolchain at all, e.g. cross-compiling) the
+pure-Go core is selected automatically — same results, no setup.

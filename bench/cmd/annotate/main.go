@@ -16,7 +16,7 @@ import (
 	"path/filepath"
 
 	"github.com/hkloudou/cvmatch"
-	"github.com/hkloudou/cvmatch/bench"
+	"github.com/hkloudou/cvmatch/scenes"
 )
 
 func drawRect(img *image.RGBA, r image.Rectangle, c color.RGBA, thick int) {
@@ -60,7 +60,7 @@ func main() {
 		"photo_building": true, "photo_graf1": true, "photo_starry_night": true,
 	}
 	green := color.RGBA{0, 224, 64, 255}
-	for _, s := range bench.Scenarios() {
+	for _, s := range scenes.All("testdata") {
 		if !want[s.Name] {
 			continue
 		}
