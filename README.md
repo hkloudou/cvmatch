@@ -34,9 +34,25 @@ the behaviour of the OpenCV-backed original.
 ## What it does
 
 `Match` is `matchTemplate(TM_CCOEFF_NORMED)` + `minMaxLoc` in one call:
-**find the best match of a small image inside a big one**. The maximum of the
-response map is the answer — `maxVal` close to `1.0` means a confident hit
-whose top-left corner is `(maxX, maxY)`. Below, the green box is drawn at the
+**find the best match of a small image inside a big one**. Every score is a
+Pearson correlation coefficient in `[-1, +1]`: `+1` = perfect match (up to a
+brightness/contrast shift), `0` = unrelated, `-1` = perfect *inverse* match
+(the window looks like the template with colors inverted). So the answer is
+the maximum — `maxVal` close to `1.0` means a confident hit whose top-left
+corner is `(maxX, maxY)`. `minVal`/`minLoc` are **not** "the worst spot"
+(that would be ≈0); they are the strongest inverse match — useful for
+hunting color-flipped patterns (dark-mode icons), ignorable otherwise, and
+kept for six-tuple compatibility with cv2/OpenCV, where the SQDIFF methods
+treat the *minimum* as best.
+
+`MatchMap` returns the whole score map (`resp[y*w+x]` = score of placing the
+template's top-left corner at `(x, y)`), which unlocks what a single best
+hit cannot: finding **every** occurrence (threshold + local-maximum
+suppression with a radius about half the template size), **ambiguity
+checks** (if the second-highest peak nearly ties the highest — three
+look-alike buttons — the match is not trustworthy even at `maxVal≈1`), ROI-
+restricted search, sub-pixel refinement by fitting the peak's neighborhood,
+and heatmap debugging. Below, the green box is drawn at the
 location `Match` returned for each template (images live on the
 [`assets`](../../tree/assets) branch; rendered by `bench/cmd/annotate`):
 
