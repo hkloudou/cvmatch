@@ -63,9 +63,6 @@ func TestThreadsBitIdentical(t *testing.T) {
 		{"cgo", func(n int, res []float32) (float32, int, int, float32, int, int) {
 			return matchU8(img, iw*4, iw, ih, tpl, tw*4, tw, th, 3, 4, n, res)
 		}},
-		{"purego", func(n int, res []float32) (float32, int, int, float32, int, int) {
-			return matchU8Go(img, iw*4, iw, ih, tpl, tw*4, tw, th, 3, 4, n, res)
-		}},
 	}
 	for _, c := range cores {
 		ref := make([]float32, rw*rh)

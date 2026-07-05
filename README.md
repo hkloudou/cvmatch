@@ -104,11 +104,17 @@ location and value:
   Go-vs-native comparisons cannot be skewed by build flags. A distro-built
   OpenCV (Ubuntu 24.04, 4.6.0) was also measured and lands within ±7% of the
   bundled build on every scene.
-- **Threading disclosed.** cvmatch.Match parallelizes one call across cores
-  with provably bit-identical output (`TestThreadsBitIdentical`); OpenCV's
-  matchTemplate path is single-threaded by design, so the headline chart is
-  "whole library vs whole library" on the same 4 cores. Like-for-like
-  single-thread numbers are kept in the table below the chart.
+- **Threading disclosed, and both sides get the cores.** cvmatch.Match
+  parallelizes one call internally with provably bit-identical output
+  (`TestThreadsBitIdentical*`); OpenCV's matchTemplate path is
+  single-threaded by design, so the suite also benchmarks
+  **cv2 + caller-side 4-way strip parallelism** (`BenchmarkCv2MatchStrips4`
+  — the strongest 4-core play available to a cv2 user): big scenes still
+  favor cvmatch 1.9-3.9x (button 74.5 vs 32 ms, 4K button 511 vs 133 ms,
+  1080p/128 105 vs 56 ms), while two single-tile scenes flip to cv2+strips
+  (panel 86 vs 104 ms, building 24 vs 39 ms) — exactly the intra-tile
+  residual documented in the headroom section. Like-for-like single-thread
+  numbers are in the thread/CGO matrix below.
 - **Verified-equal outputs.** `TestFullMapParityWithNativeCpp` compares every
   element of `cvmatch.MatchMap` against the response map dumped by the C++
   binary — all 13 scenes agree (see Accuracy below), so no speed comes from
@@ -215,31 +221,37 @@ Nothing in category A or B changes which location wins or by how much beyond
 float32 noise — that is what the four parity test layers pin down on every
 run.
 
-### Pure-Go core (CGO_ENABLED=0)
+### The full matrix: CGO on/off x threads (measured)
 
-The same 13 scenes through the pure-Go port (same internal parallelism, 4
-cores), measured with `CGO_ENABLED=0 go test -bench . -benchtime 5x` in the
-module root; cv2 shown for context:
+Every cell measured in one session (`-cpu 1,4`, `-benchtime 5x`; CI reruns
+this matrix on every push). `Match`, milliseconds:
 
-| scene | cvmatch cgo | cvmatch pure-Go | pure-Go / cgo | cv2 (cgo + OpenCV) |
-|---|---|---|---|---|
-| window 1600 button 96×32 | 32 ms | 133 ms | 4.1x | 241 ms |
-| window 1600 icon 24×24 | 25 ms | 122 ms | 4.9x | 227 ms |
-| window 1600 panel 300×200 | 104 ms | 474 ms | 4.6x | 251 ms |
-| window 4K button 96×32 | 133 ms | 527 ms | 4.0x | 1212 ms |
-| noise 1080p sub 128 | 56 ms | 246 ms | 4.4x | 393 ms |
-| noise 4K sub 256 | 260 ms | 1161 ms | 4.5x | 1931 ms |
-| photos (5 scenes) | 11–40 ms | 53–215 ms | 4.6–5.4x | 35–101 ms |
-| **MatchGray**, 1080p/128 | 27 ms | 92 ms | 3.5x | — |
+| scene | cgo 1T | cgo 4T | pure-Go 1T | pure-Go 4T | cv2 (1T, context) |
+|---|---|---|---|---|---|
+| window 1600 button 96×32 | 92.8 | **30.3** | 383.8 | 129.6 | 241 |
+| window 1600 icon 24×24 | 76.9 | **22.7** | 324.4 | 88.3 | 227 |
+| window 1600 panel 300×200 | 107.2 | 104.3 | 499.7 | 482.7 | 251 |
+| window 4K button 96×32 | 483.5 | **134.4** | 1908.9 | 527.2 | 1212 |
+| noise 720p sub 96 | 76.9 | **43.7** | 373.6 | 221.7 | 149 |
+| noise 1080p sub 128 | 137.4 | **55.5** | 674.2 | 249.7 | 393 |
+| noise 1080p sub 32 | 104.2 | **29.6** | 416.3 | 117.1 | 299 |
+| noise 4K sub 256 | 721.1 | **270.0** | 3308.1 | 1184.9 | 1931 |
+| photo fruits (single tile) | 12.8 | 11.4 | 60.2 | 52.7 | 51 |
+| photo building (single tile) | 40.9 | 39.3 | 217.5 | 208.5 | 93 |
 
-The gap vs the C core is vectorization: gc emits scalar code while the C
-butterflies run 8-wide AVX2. As a **zero-toolchain fallback** it still holds
-up — `MatchGray` beats cv2-with-OpenCV by ~3-5x on every scene, RGBA parity
-mode beats it on most, and the algorithm, memory profile and outputs are
-identical to the C core (`TestPureGoMatchesCgo`, `TestMatchExactCgoVsPureGo`
-pin the cores together; the exact path is bit-identical across cores).
-Curiosity: pure-Go `MatchExact` is ~20% *faster* than the C one — Go's
-`bits.Mul64` Montgomery multiply beats gcc's `__int128` codegen here.
+Selected other rows (1080p/128): `MatchGray` 58.8 / 24.7 / 235.0 / 93.7 ms;
+`MatchExact` 2531 / 972 / 1907 / 747 ms (yes — the pure-Go NTT beats the C
+one: Go's `bits.Mul64` Montgomery multiply out-codegens gcc's `__int128`
+here).
+
+Readings: threading scales 2.5-3.8x wherever the planner produces multiple
+tiles and ~1x on single-tile scenes (only normalization bands parallelize —
+re-tiling would change the FFT rounding path; that residual is headroom
+item 1). The pure-Go core is 4-5x slower than the C core (gc emits scalar
+code vs 8-wide AVX2) yet still beats cv2-with-OpenCV in grayscale on every
+scene and in RGBA on the multi-tile ones — with zero toolchain and zero
+native bytes. `TestPureGoMatchesCgo`, `TestMatchExactCgoVsPureGo` and
+`TestThreadsBitIdentical*` pin all of these variants to the same output.
 
 ## Why it can beat OpenCV at identical output
 
