@@ -272,6 +272,87 @@ Three hypotheses the benchmarks rule out, all measured on the same scenes:
    IPP DFT path inside `crossCorr` underperforms OpenCV's own DFT here.
    cv2's `WITH_IPP=OFF` build choice is a win, not a handicap.
 
+## Is OpenCV's algorithm the optimum? Remaining headroom
+
+Deep-dive, with every claim either measured on this codebase or adversarially
+reviewed. First, where a 1080p/128 `Match` actually spends its time (C core,
+stage-isolated harness):
+
+| stage | gray (1ch) | RGBA (3ch after alpha skip) | share |
+|---|---|---|---|
+| plan construction | ~0 ms | ~0 ms | ~0% |
+| block-FFT correlation | 40.5 ms | 122.7 ms | **80–87%** |
+| normalization + fused minMaxLoc | 10.8 ms | 17.4 ms | 13–20% |
+
+**Verdict on the algorithm itself: right race, not the fastest car.** The
+block-FFT + window-statistics skeleton is the correct asymptotic choice —
+overlap-save tiling makes it O(N·log M) in template size M, and no exact
+dense-correlation algorithm asymptotically better than FFT-based is known
+(Winograd trades multiplies for more additions; a proof of optimality does
+not exist either — unrestricted lower bounds remain open). But "right
+asymptotic class" is where OpenCV's optimality ends: its implementation of
+that skeleton loses 2–3.8x to this one at identical outputs (integral
+images, 4 forced channels, unfused scans), and the list below is headroom
+*this* implementation still leaves on the table under the same
+results-identical-to-OpenCV contract.
+
+Ranked remaining levers (all preserve outputs; first two are the big ones):
+
+1. **Multithreading — the largest untapped lever (~2.5–3.5x on 4 cores).**
+   Naïve per-tile threading is *not* generally enough: OpenCV's block
+   heuristic can yield a single tile (e.g. 800×600 with a 128×128 template),
+   capping tile parallelism at 1. The bit-exact-safe axes are finer: the
+   packed row-FFT pairs within a tile are independent, the column-pass
+   butterflies are elementwise across the width (splittable into width
+   chunks without touching any column's arithmetic chain), and normalization
+   parallelizes by row bands — each band rebuilding its own column sums,
+   which is bit-exact *only because* the sums are integer-valued doubles
+   (< 2^53, every add exact, hence order-independent); the same trick on
+   float inputs would not be. Requires per-thread scratch, ordered
+   cross-channel accumulation, and a band-ordered min/max merge to keep
+   OpenCV's first-occurrence tie rule.
+2. **A better FFT kernel.** The current one is a clean radix-2 with full
+   4-mul complex twiddles. Split-radix cuts operation counts ~31% at these
+   sizes (radix-4 only ~15%; special-casing trivial twiddles is a few
+   percent for free). Wall-clock gains will be smaller than op counts — FMA
+   units absorb multiply savings and the column pass edges toward bandwidth —
+   but this attacks the 80–87% slice, alongside hand-written SIMD instead of
+   compiler autovectorization.
+3. **Mixed-radix (2·3·5) DFT sizes** would cut power-of-two padding waste (up
+   to 2x per dimension worst case; exactly zero in lucky cases — 897+127
+   lands on 1024 precisely).
+4. **Output-pruned inverse column FFT** (ancestor pruning of the existing
+   butterfly network — the variant that keeps retained outputs bit-identical;
+   Sorensen-Burrus decomposition would not). Only the first `blockH` of
+   `dftH` output rows are consumed. O(n·log M) is real, but against this
+   planner's actual regimes it is worth ~1.2–1.4x of one FFT pass in capped
+   configurations and ≤~15% end-to-end — a niche win.
+5. **Normalization: break the recurrence, don't chase the sqrt.** An ablation
+   measurement refuted the obvious guess: deleting the *entire*
+   sqrt+divide+guard cluster speeds the pass only 1.17–1.34x. The pass is
+   latency-bound on the loop-carried double-add chains of the sliding sums
+   (~20 cycles/pixel), not on sqrt and not on DRAM (traffic is within
+   ~1.1–1.3x of the required floor). The bit-exact fix is reassociating the
+   integer-valued sums (prefix sums / independent SIMD lanes) — legal for
+   the same exactness reason as lever 1 — which then unlocks SIMD sqrt/div.
+   Ceiling: the whole pass is 11–18 ms at 1080p.
+6. **Plumbing:** plan/twiddle/buffer caching across calls, and skipping the
+   normalized write-back when the caller wants only `Match` extrema — a few
+   ms each.
+
+**What the contract forbids — including being *better*.** With 8-bit inputs,
+a number-theoretic transform over the prime 29·2^57+1 computes the raw
+correlation *exactly* in integers (one prime covers any realistic template;
+the two-rows-per-transform packing even survives, since −1 has a square root
+mod p) at the same O(N log N) — strictly more accurate than OpenCV's float32
+DFT wherever float32 rounds, at a 2–5x per-op cost on current hardware.
+Requiring results identical to OpenCV rules it out: the constraint forbids
+not only approximations (pyramids, early-termination bounds, feature
+matching) but also exactness OpenCV itself doesn't have. That is the
+cleanest evidence that OpenCV's pipeline is an engineering compromise, not
+an optimum: correct asymptotics, beatable constants, and sub-optimal
+accuracy by design.
+
 ## Optimization details
 
 Same math, different engineering. Each item below is a measured win over the

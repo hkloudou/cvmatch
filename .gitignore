@@ -3,7 +3,8 @@
 /bench/bin/
 
 # native benchmark artifacts
-bench/cpp/native_bench*
+bench/cpp/native_bench
+bench/cpp/native_bench_*
 bench/cpp/headers/
 bench/cpp/scenes/
 bench/testdata/*.jpg

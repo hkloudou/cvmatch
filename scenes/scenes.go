@@ -27,7 +27,7 @@ type Scene struct {
 // makeNoise builds a deterministic noisy-gradient parent and crops sub out
 // of it at (px, py) — a worst case for matching: no flat areas, every pixel
 // carries signal.
-func MakeNoise(w, h, sw, sh, px, py int) (*image.RGBA, *image.RGBA) {
+func makeNoise(w, h, sw, sh, px, py int) (*image.RGBA, *image.RGBA) {
 	rng := rand.New(rand.NewSource(1))
 	parent := image.NewRGBA(image.Rect(0, 0, w, h))
 	for y := 0; y < h; y++ {
@@ -39,7 +39,7 @@ func MakeNoise(w, h, sw, sh, px, py int) (*image.RGBA, *image.RGBA) {
 			parent.Pix[o+3] = 255
 		}
 	}
-	return parent, Crop(parent, image.Rect(px, py, px+sw, py+sh))
+	return parent, crop(parent, image.Rect(px, py, px+sw, py+sh))
 }
 
 // Scenarios returns every scene: synthetic UI screenshots, dense noise, and
@@ -54,21 +54,21 @@ func All(testdata string) []Scene {
 	// Realistic UI automation: find widgets inside a rendered desktop window
 	// (title bar, toolbar, sidebar, text content, dialog with look-alike
 	// buttons, large flat regions).
-	ui := MakeDesktop(1600, 1000)
-	add("window1600_button96x32", ui.img, Crop(ui.img, ui.button), ui.button.Min.X, ui.button.Min.Y, true)
-	add("window1600_icon24x24", ui.img, Crop(ui.img, ui.icon), ui.icon.Min.X, ui.icon.Min.Y, true)
-	add("window1600_panel300x200", ui.img, Crop(ui.img, ui.panel), ui.panel.Min.X, ui.panel.Min.Y, false)
-	ui4k := MakeDesktop(3840, 2160)
-	add("window4k_button96x32", ui4k.img, Crop(ui4k.img, ui4k.button), ui4k.button.Min.X, ui4k.button.Min.Y, false)
+	ui := makeDesktop(1600, 1000)
+	add("window1600_button96x32", ui.img, crop(ui.img, ui.button), ui.button.Min.X, ui.button.Min.Y, true)
+	add("window1600_icon24x24", ui.img, crop(ui.img, ui.icon), ui.icon.Min.X, ui.icon.Min.Y, true)
+	add("window1600_panel300x200", ui.img, crop(ui.img, ui.panel), ui.panel.Min.X, ui.panel.Min.Y, false)
+	ui4k := makeDesktop(3840, 2160)
+	add("window4k_button96x32", ui4k.img, crop(ui4k.img, ui4k.button), ui4k.button.Min.X, ui4k.button.Min.Y, false)
 
 	// Dense noise (no flat regions), several image/template size ratios.
-	p, s := MakeNoise(1280, 720, 96, 96, 431, 285)
+	p, s := makeNoise(1280, 720, 96, 96, 431, 285)
 	add("noise720p_sub96", p, s, 431, 285, true)
-	p, s = MakeNoise(1920, 1080, 128, 128, 977, 604)
+	p, s = makeNoise(1920, 1080, 128, 128, 977, 604)
 	add("noise1080p_sub128", p, s, 977, 604, false)
-	p, s = MakeNoise(1920, 1080, 32, 32, 977, 604)
+	p, s = makeNoise(1920, 1080, 32, 32, 977, 604)
 	add("noise1080p_sub32", p, s, 977, 604, false)
-	p, s = MakeNoise(3840, 2160, 256, 256, 1200, 900)
+	p, s = makeNoise(3840, 2160, 256, 256, 1200, 900)
 	add("noise4k_sub256", p, s, 1200, 900, false)
 
 	return append(list, realScenes(testdata)...)
@@ -104,7 +104,7 @@ func realScenes(dir string) []Scene {
 		draw.Draw(parent, parent.Bounds(), src, b.Min, draw.Src)
 		name := "photo_" + c.file[:len(c.file)-len(filepath.Ext(c.file))]
 		list = append(list, Scene{name, parent,
-			Crop(parent, image.Rect(c.px, c.py, c.px+c.sw, c.py+c.sh)),
+			crop(parent, image.Rect(c.px, c.py, c.px+c.sw, c.py+c.sh)),
 			c.px, c.py, c.fullMap})
 	}
 	return list
@@ -206,17 +206,10 @@ func drawIcon(img *image.RGBA, r image.Rectangle, seed int64) {
 	outline(img, r, color.RGBA{90, 90, 90, 255})
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // makeDesktop renders a w x h screenshot: desktop background, a main window
 // with title bar, toolbar icons, sidebar, text content, and a dialog with
 // three buttons. Returns the crop rectangles used as templates.
-func MakeDesktop(w, h int) uiTargets {
+func makeDesktop(w, h int) uiTargets {
 	rng := rand.New(rand.NewSource(3))
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
 
@@ -278,7 +271,7 @@ func MakeDesktop(w, h int) uiTargets {
 }
 
 // crop copies a region into a tight standalone RGBA template.
-func Crop(img *image.RGBA, r image.Rectangle) *image.RGBA {
+func crop(img *image.RGBA, r image.Rectangle) *image.RGBA {
 	out := image.NewRGBA(image.Rect(0, 0, r.Dx(), r.Dy()))
 	for y := 0; y < r.Dy(); y++ {
 		copy(out.Pix[y*out.Stride:y*out.Stride+r.Dx()*4],

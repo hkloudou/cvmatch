@@ -1,7 +1,8 @@
 // annotate runs cvmatch.Match on selected scenes and renders the result:
 // the parent image with a box drawn at the found best-match location, plus
-// the template saved alongside. The outputs are committed under docs/demo/
-// so the README can show what "find the best match in an image" looks like.
+// the template saved alongside. The outputs are published on the orphan
+// assets branch, which the README references to show what "find the best
+// match in an image" looks like.
 package main
 
 import (
@@ -50,7 +51,7 @@ func save(path string, img image.Image, asJPEG bool) {
 }
 
 func main() {
-	out := flag.String("out", "../docs/demo", "output directory")
+	out := flag.String("out", "demo-out", "output directory")
 	flag.Parse()
 	if err := os.MkdirAll(*out, 0o755); err != nil {
 		log.Fatal(err)
