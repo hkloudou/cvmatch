@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="142" viewBox="0 0 960 142" role="img">
+<text x="250" y="20" font-size="15" font-weight="600" fill="#e6edf3" font-family="system-ui,-apple-system,Segoe UI,sans-serif">Peak native memory — one 1920×1080 / 128×128 match</text>
+<text x="250" y="38" font-size="12" fill="#8b949e" font-family="system-ui,-apple-system,Segoe UI,sans-serif">process peak-RSS delta (VmHWM), fresh process per run</text>
+<text x="956" y="38" font-size="11" text-anchor="end" fill="#8b949e" font-family="system-ui,-apple-system,Segoe UI,sans-serif">MB — lower is better</text>
+<line x1="250.0" y1="56" x2="250.0" y2="112" stroke="#30363d" stroke-width="1"/>
+<text x="250.0" y="128" font-size="11" text-anchor="middle" fill="#8b949e" font-family="system-ui,-apple-system,Segoe UI,sans-serif" style="font-variant-numeric:tabular-nums">0</text>
+<line x1="398.0" y1="56" x2="398.0" y2="112" stroke="#30363d" stroke-width="1"/>
+<text x="398.0" y="128" font-size="11" text-anchor="middle" fill="#8b949e" font-family="system-ui,-apple-system,Segoe UI,sans-serif" style="font-variant-numeric:tabular-nums">40</text>
+<line x1="546.0" y1="56" x2="546.0" y2="112" stroke="#30363d" stroke-width="1"/>
+<text x="546.0" y="128" font-size="11" text-anchor="middle" fill="#8b949e" font-family="system-ui,-apple-system,Segoe UI,sans-serif" style="font-variant-numeric:tabular-nums">80</text>
+<line x1="694.0" y1="56" x2="694.0" y2="112" stroke="#30363d" stroke-width="1"/>
+<text x="694.0" y="128" font-size="11" text-anchor="middle" fill="#8b949e" font-family="system-ui,-apple-system,Segoe UI,sans-serif" style="font-variant-numeric:tabular-nums">120</text>
+<line x1="842.0" y1="56" x2="842.0" y2="112" stroke="#30363d" stroke-width="1"/>
+<text x="842.0" y="128" font-size="11" text-anchor="middle" fill="#8b949e" font-family="system-ui,-apple-system,Segoe UI,sans-serif" style="font-variant-numeric:tabular-nums">160</text>
+<line x1="250" y1="56" x2="250" y2="112" stroke="#484f58" stroke-width="1"/>
+<text x="240" y="71" font-size="12" text-anchor="end" fill="#9198a1" font-family="system-ui,-apple-system,Segoe UI,sans-serif">cv2.Match</text>
+<path d="M250.5,60 h534.4 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-534.4 z" fill="#3987e5"/>
+<text x="795.4" y="71" font-size="11" fill="#9198a1" font-family="system-ui,-apple-system,Segoe UI,sans-serif" style="font-variant-numeric:tabular-nums">145.5 MB</text>
+<text x="240" y="87" font-size="12" text-anchor="end" fill="#9198a1" font-family="system-ui,-apple-system,Segoe UI,sans-serif">cvmatch.Match</text>
+<path d="M250.5,76 h50.8 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-50.8 z" fill="#199e70"/>
+<text x="311.8" y="87" font-size="11" fill="#9198a1" font-family="system-ui,-apple-system,Segoe UI,sans-serif" style="font-variant-numeric:tabular-nums">14.8 MB · 9.8× less</text>
+<text x="240" y="103" font-size="12" text-anchor="end" fill="#9198a1" font-family="system-ui,-apple-system,Segoe UI,sans-serif">cvmatch.MatchGray</text>
+<path d="M250.5,92 h58.2 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-58.2 z" fill="#c98500"/>
+<text x="319.2" y="103" font-size="11" fill="#9198a1" font-family="system-ui,-apple-system,Segoe UI,sans-serif" style="font-variant-numeric:tabular-nums">16.8 MB · 8.7× less</text>
+</svg>

@@ -45,6 +45,23 @@ func Match(parent, sub image.Image) (float32, int, int, float32, int, int) {
 	return matchU8(pPix, pStride, pw, ph, sPix, sStride, sw, sh, cn, 4, nil)
 }
 
+// MatchMap runs the same computation as Match but returns the full
+// normalized response map (row-major, (parentW-subW+1) x (parentH-subH+1)),
+// equivalent to OpenCV's matchTemplate output. Useful for finding every
+// occurrence above a threshold instead of only the best one.
+func MatchMap(parent, sub image.Image) (res []float32, w, h int) {
+	pPix, pStride, pw, ph := toRGBA(parent)
+	sPix, sStride, sw, sh := toRGBA(sub)
+	cn := 4
+	if alphaConst(pPix, pStride, pw, ph) && alphaConst(sPix, sStride, sw, sh) {
+		cn = 3
+	}
+	w, h = pw-sw+1, ph-sh+1
+	res = make([]float32, w*h)
+	matchU8(pPix, pStride, pw, ph, sPix, sStride, sw, sh, cn, 4, res)
+	return res, w, h
+}
+
 // MatchGray is the fast path: both images are reduced to 8-bit grayscale
 // (OpenCV BT.601 RGB2GRAY weights; the Y plane is used directly for YCbCr
 // images) before matching. For RGB screenshots the response map is very

@@ -1,0 +1,184 @@
+package bench
+
+import (
+	"image"
+	"image/color"
+	"math/rand"
+)
+
+// This file synthesizes a deterministic desktop-style screenshot so the
+// benchmarks cover the workload cvmatch is built for: hunting a button, a
+// toolbar icon or a dialog inside a real window, with large flat regions,
+// gradients, text-like content and repeated-but-not-identical widgets.
+
+type uiTargets struct {
+	img    *image.RGBA
+	button image.Rectangle // an "OK"-style dialog button
+	icon   image.Rectangle // a small toolbar icon
+	panel  image.Rectangle // a large content region
+}
+
+func fillRect(img *image.RGBA, r image.Rectangle, c color.RGBA) {
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		o := img.PixOffset(r.Min.X, y)
+		for x := r.Min.X; x < r.Max.X; x++ {
+			img.Pix[o] = c.R
+			img.Pix[o+1] = c.G
+			img.Pix[o+2] = c.B
+			img.Pix[o+3] = 255
+			o += 4
+		}
+	}
+}
+
+func vGradient(img *image.RGBA, r image.Rectangle, top, bottom color.RGBA) {
+	h := r.Dy() - 1
+	if h < 1 {
+		h = 1
+	}
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		t := float64(y-r.Min.Y) / float64(h)
+		c := color.RGBA{
+			uint8(float64(top.R) + t*float64(int(bottom.R)-int(top.R))),
+			uint8(float64(top.G) + t*float64(int(bottom.G)-int(top.G))),
+			uint8(float64(top.B) + t*float64(int(bottom.B)-int(top.B))),
+			255,
+		}
+		fillRect(img, image.Rect(r.Min.X, y, r.Max.X, y+1), c)
+	}
+}
+
+func outline(img *image.RGBA, r image.Rectangle, c color.RGBA) {
+	fillRect(img, image.Rect(r.Min.X, r.Min.Y, r.Max.X, r.Min.Y+1), c)
+	fillRect(img, image.Rect(r.Min.X, r.Max.Y-1, r.Max.X, r.Max.Y), c)
+	fillRect(img, image.Rect(r.Min.X, r.Min.Y, r.Min.X+1, r.Max.Y), c)
+	fillRect(img, image.Rect(r.Max.X-1, r.Min.Y, r.Max.X, r.Max.Y), c)
+}
+
+// textNoise draws random dark pixel runs that mimic rendered text lines.
+func textNoise(img *image.RGBA, r image.Rectangle, lineH int, rng *rand.Rand) {
+	for y := r.Min.Y + 4; y+lineH < r.Max.Y; y += lineH + 6 {
+		x := r.Min.X + 8
+		for x < r.Max.X-20 {
+			run := 3 + rng.Intn(24)
+			if x+run > r.Max.X-8 {
+				run = r.Max.X - 8 - x
+			}
+			shade := uint8(30 + rng.Intn(90))
+			for yy := 0; yy < lineH-4; yy++ {
+				for xx := 0; xx < run; xx++ {
+					if rng.Intn(3) != 0 {
+						o := img.PixOffset(x+xx, y+yy)
+						img.Pix[o], img.Pix[o+1], img.Pix[o+2] = shade, shade, shade
+					}
+				}
+			}
+			x += run + 4 + rng.Intn(14)
+		}
+	}
+}
+
+// drawButton renders a bordered gradient button whose "label" pixels come
+// from seed, so multiple buttons look alike without being identical (real
+// windows are full of near-duplicate widgets; matching must still pick the
+// exact one).
+func drawButton(img *image.RGBA, r image.Rectangle, seed int64) {
+	rng := rand.New(rand.NewSource(seed))
+	outline(img, r, color.RGBA{118, 118, 118, 255})
+	inner := image.Rect(r.Min.X+1, r.Min.Y+1, r.Max.X-1, r.Max.Y-1)
+	vGradient(img, inner, color.RGBA{243, 243, 243, 255}, color.RGBA{214, 214, 214, 255})
+	label := image.Rect(r.Min.X+12, r.Min.Y+r.Dy()/2-5, r.Max.X-12, r.Min.Y+r.Dy()/2+5)
+	textNoise(img, image.Rect(label.Min.X, label.Min.Y-4, label.Max.X, label.Max.Y+6), 10, rng)
+}
+
+func drawIcon(img *image.RGBA, r image.Rectangle, seed int64) {
+	rng := rand.New(rand.NewSource(seed))
+	for y := r.Min.Y; y < r.Max.Y; y += 4 {
+		for x := r.Min.X; x < r.Max.X; x += 4 {
+			c := color.RGBA{uint8(rng.Intn(256)), uint8(rng.Intn(256)), uint8(rng.Intn(256)), 255}
+			fillRect(img, image.Rect(x, y, min(x+4, r.Max.X), min(y+4, r.Max.Y)), c)
+		}
+	}
+	outline(img, r, color.RGBA{90, 90, 90, 255})
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// makeDesktop renders a w x h screenshot: desktop background, a main window
+// with title bar, toolbar icons, sidebar, text content, and a dialog with
+// three buttons. Returns the crop rectangles used as templates.
+func makeDesktop(w, h int) uiTargets {
+	rng := rand.New(rand.NewSource(3))
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+
+	fillRect(img, img.Bounds(), color.RGBA{0, 120, 160, 255}) // desktop
+	vGradient(img, image.Rect(0, h-48, w, h), color.RGBA{40, 40, 48, 255}, color.RGBA{24, 24, 30, 255})
+
+	win := image.Rect(w/16, h/20, w-w/16, h-h/10)
+	fillRect(img, win, color.RGBA{255, 255, 255, 255})
+	outline(img, win, color.RGBA{100, 100, 100, 255})
+	title := image.Rect(win.Min.X, win.Min.Y, win.Max.X, win.Min.Y+34)
+	vGradient(img, title, color.RGBA{70, 130, 200, 255}, color.RGBA{50, 100, 170, 255})
+
+	// toolbar with a row of distinct icons
+	toolbar := image.Rect(win.Min.X, title.Max.Y, win.Max.X, title.Max.Y+36)
+	vGradient(img, toolbar, color.RGBA{240, 240, 240, 255}, color.RGBA{222, 222, 222, 255})
+	var icon image.Rectangle
+	for i := 0; i < 18; i++ {
+		r := image.Rect(win.Min.X+10+i*34, toolbar.Min.Y+6, win.Min.X+10+i*34+24, toolbar.Min.Y+30)
+		drawIcon(img, r, int64(100+i))
+		if i == 11 {
+			icon = r
+		}
+	}
+
+	// sidebar with items
+	side := image.Rect(win.Min.X, toolbar.Max.Y, win.Min.X+win.Dx()/5, win.Max.Y)
+	fillRect(img, side, color.RGBA{245, 245, 247, 255})
+	for i := 0; i < 14; i++ {
+		y := side.Min.Y + 12 + i*30
+		if y+22 > side.Max.Y {
+			break
+		}
+		textNoise(img, image.Rect(side.Min.X+10, y, side.Max.X-10, y+22), 12, rng)
+	}
+
+	// content area: text-like lines (the "panel" template crops from here)
+	content := image.Rect(side.Max.X, toolbar.Max.Y, win.Max.X, win.Max.Y)
+	textNoise(img, content, 14, rng)
+	panelMin := image.Pt(content.Min.X+content.Dx()/4, content.Min.Y+content.Dy()/4)
+	panel := image.Rectangle{Min: panelMin, Max: panelMin.Add(image.Pt(300, 200))}
+
+	// dialog with three look-alike buttons; the middle one is the target
+	dlg := image.Rect(content.Min.X+content.Dx()/3, content.Min.Y+content.Dy()/2,
+		content.Min.X+content.Dx()/3+380, content.Min.Y+content.Dy()/2+150)
+	fillRect(img, dlg, color.RGBA{250, 250, 250, 255})
+	outline(img, dlg, color.RGBA{80, 80, 80, 255})
+	vGradient(img, image.Rect(dlg.Min.X, dlg.Min.Y, dlg.Max.X, dlg.Min.Y+24),
+		color.RGBA{235, 235, 235, 255}, color.RGBA{215, 215, 215, 255})
+	textNoise(img, image.Rect(dlg.Min.X+16, dlg.Min.Y+36, dlg.Max.X-16, dlg.Min.Y+78), 12, rng)
+	var button image.Rectangle
+	for i := 0; i < 3; i++ {
+		r := image.Rect(dlg.Min.X+24+i*116, dlg.Max.Y-46, dlg.Min.X+24+i*116+96, dlg.Max.Y-14)
+		drawButton(img, r, int64(500+i))
+		if i == 1 {
+			button = r
+		}
+	}
+	return uiTargets{img: img, button: button, icon: icon, panel: panel}
+}
+
+// crop copies a region into a tight standalone RGBA template.
+func crop(img *image.RGBA, r image.Rectangle) *image.RGBA {
+	out := image.NewRGBA(image.Rect(0, 0, r.Dx(), r.Dy()))
+	for y := 0; y < r.Dy(); y++ {
+		copy(out.Pix[y*out.Stride:y*out.Stride+r.Dx()*4],
+			img.Pix[img.PixOffset(r.Min.X, r.Min.Y+y):])
+	}
+	return out
+}
