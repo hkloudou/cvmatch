@@ -1,6 +1,6 @@
 # cvmatch
 
-[![CI](../../actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
+[![CI](../../actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml) [![Go Reference](https://pkg.go.dev/badge/github.com/hkloudou/cvmatch.svg)](https://pkg.go.dev/github.com/hkloudou/cvmatch)
 
 OpenCV-compatible `TM_CCOEFF_NORMED` template matching for Go. No OpenCV, no
 bundled multi-megabyte static libraries, no dependencies — and **no required
