@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -15,8 +16,10 @@ jobs:
         with:
           go-version: "1.24"
           cache-dependency-path: bench/go.sum
-      - name: Unit tests (float64 reference parity)
+      - name: Unit tests (float64 reference, cores parity, thread bit-identity, exact mode)
         run: go test -v ./...
+      - name: Race detector (concurrent use + parallel cores)
+        run: go test -race ./...
       - name: Vet
         run: go vet ./... && cd bench && go vet ./...
       - name: Pure-Go core tests (CGO_ENABLED=0)

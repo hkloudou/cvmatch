@@ -1,5 +1,7 @@
 # cvmatch
 
+[![CI](../../actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
+
 OpenCV-compatible `TM_CCOEFF_NORMED` template matching for Go. No OpenCV, no
 bundled multi-megabyte static libraries, no dependencies — and **no required
 toolchain**: with cgo the core is **one dependency-free C file** (compiles in
