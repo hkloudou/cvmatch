@@ -73,9 +73,12 @@ jobs:
           {
             echo "### Native OpenCV C++ (end-to-end, same static libs as cv2)"
             echo '```'
-            cpp/native_bench cpp/scenes 5
+            cpp/native_bench cpp/scenes 5 dump
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Element-wise parity vs native C++ response maps
+        working-directory: bench
+        run: go test -v -run TestFullMapParityWithNativeCpp | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Binary sizes
         working-directory: bench
         run: |

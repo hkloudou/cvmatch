@@ -41,9 +41,22 @@ static double now_ms() {
   return duration<double, std::milli>(steady_clock::now().time_since_epoch()).count();
 }
 
+// dumpResult writes the CV_32F response map so the Go side can verify
+// cvmatch.MatchMap element-by-element against native OpenCV output
+// ("CVMR" magic, int32 LE width/height, then float32 data).
+static void dumpResult(const std::string &path, const cv::Mat &m) {
+  std::ofstream f(path, std::ios::binary);
+  int32_t wh[2] = {m.cols, m.rows};
+  f.write("CVMR", 4);
+  f.write(reinterpret_cast<const char *>(wh), 8);
+  for (int y = 0; y < m.rows; y++)
+    f.write(reinterpret_cast<const char *>(m.ptr<float>(y)), size_t(m.cols) * 4);
+}
+
 int main(int argc, char **argv) {
   std::string dir = argc > 1 ? argv[1] : "scenes";
   int iters = argc > 2 ? atoi(argv[2]) : 5;
+  bool dump = argc > 3 && std::string(argv[3]) == "dump";
   std::ifstream mf(dir + "/manifest.tsv");
   if (!mf) {
     fprintf(stderr, "cannot open %s/manifest.tsv (run dumpscenes first)\n", dir.c_str());
@@ -94,8 +107,10 @@ int main(int argc, char **argv) {
       if (it > 0 && dt < bestCore) bestCore = dt;
     }
 
+    if (dump) dumpResult(dir + "/" + name + ".result.raw", result);
+
     bool ok = maxLoc.x == px && maxLoc.y == py && maxVal > 0.99;
-    printf("%-28s %9.1f ms %9.1f ms   %s (%d,%d) max=%.4f\n", name.c_str(),
+    printf("%-28s %9.1f ms %9.1f ms   %s (%d,%d) max=%.6f\n", name.c_str(),
            bestFull, bestCore, ok ? "OK " : "BAD", maxLoc.x, maxLoc.y, maxVal);
     if (!ok) return 1;
   }

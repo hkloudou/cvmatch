@@ -25,9 +25,20 @@ the behaviour of the OpenCV-backed original.
 
 Scenarios cover the real workload — finding a button, a toolbar icon or a
 panel inside a rendered desktop window (flat regions, gradients, text,
-look-alike widgets) — plus dense-noise worst cases and **real photographs**
-from OpenCV's `samples/data` (`bench/testdata/fetch.sh` downloads them; the
-suite runs with synthetic scenes only when they are absent).
+look-alike widgets) — plus dense-noise worst cases and **real photographs**.
+
+The sample photographs come from
+[OpenCV's `samples/data`](https://github.com/opencv/opencv/tree/4.12.0/samples/data)
+(Apache-2.0, fetched on demand by `bench/testdata/fetch.sh`, not committed to
+this repo; the suite runs with synthetic scenes only when they are absent):
+
+| image | size | template | content |
+|---|---|---|---|
+| `fruits.jpg` | 512×480 | 80×80 @ (305,210) | fruit bowl, saturated colors |
+| `baboon.jpg` | 512×512 | 64×64 @ (250,180) | fur, high-frequency texture |
+| `building.jpg` | 868×600 | 100×100 @ (420,240) | architecture, repeating windows |
+| `graf1.png` | 800×640 | 120×120 @ (350,260) | graffiti wall (VGG dataset) |
+| `starry_night.jpg` | 752×600 | 128×128 @ (400,300) | painting, swirling gradients |
 
 Four implementations are measured on every scene, all returning the same
 location and value:
@@ -47,6 +58,24 @@ location and value:
 > pipeline — 4-channel DFT correlation plus full double-precision integral
 > images — which is exactly what cvmatch restructures: **2.0-3.8x faster than
 > native OpenCV C++ at identical output values, 3.9-8.4x in grayscale mode.**
+
+### Fairness rules
+
+- **End-to-end timing everywhere.** Every implementation is timed over the
+  complete per-call path starting from an in-memory RGBA frame — image/Mat
+  conversion, matching, min/max scan, cleanup. No implementation gets to keep
+  pre-converted inputs or reuse buffers across calls.
+- **Byte-identical inputs.** `bench/cmd/dumpscenes` exports the exact pixel
+  buffers the Go benchmarks use; the C++ benchmark consumes those dumps.
+- **Same OpenCV binary.** The native benchmark links the very static
+  archives shipped in the `cv2` module (not a rebuilt variant), so
+  Go-vs-native comparisons cannot be skewed by build flags. A distro-built
+  OpenCV (Ubuntu 24.04, 4.6.0) was also measured and lands within ±7% of the
+  bundled build on every scene.
+- **Verified-equal outputs.** `TestFullMapParityWithNativeCpp` compares every
+  element of `cvmatch.MatchMap` against the response map dumped by the C++
+  binary — all 13 scenes agree (see Accuracy below), so no speed comes from
+  computing something different.
 
 Reproduce locally with `cd bench && go test -bench . -benchtime 5x` and
 `bench/cpp/build.sh && bench/cpp/native_bench bench/cpp/scenes 5`, or let
@@ -75,16 +104,20 @@ peak-RSS probe and the size report on each push to `main` (and on demand via
 
 ### Accuracy
 
-Three independent checks, all in CI:
+Four independent checks, all runnable in CI:
 
-1. **Element-wise response-map parity vs OpenCV** (`bench/`,
-   `TestFullMapParityWithCv2`): every element of `MatchMap` is compared with
-   OpenCV's `matchTemplate` output. Worst element difference: `2.2e-06` on
-   noise scenes, `1.9e-05` on real photographs, `4.7e-04` on UI scenes with
-   near-flat windows.
-2. **min/max contract parity** (`TestParityWithCv2`): `minVal`/`maxVal` agree
+1. **Element-wise parity vs native C++ OpenCV**
+   (`TestFullMapParityWithNativeCpp`): the C++ binary dumps its full CV_32F
+   response map (`native_bench scenes 1 dump`) and every element of
+   `cvmatch.MatchMap` is compared against it. All 13 scenes agree — worst
+   element difference `2.1e-06` on noise scenes, `4.0e-06`–`8.1e-05` on real
+   photographs, `4.7e-04` on UI scenes with near-flat regions (where the
+   normalized value itself is ~0 and float32 rounding dominates).
+2. **Element-wise parity vs cv2's Go API** (`TestFullMapParityWithCv2`):
+   same comparison through the wrapper — identical outcome.
+3. **min/max contract parity** (`TestParityWithCv2`): `minVal`/`maxVal` agree
    to ~6 decimals and locations are identical on all thirteen scenarios.
-3. **Float64 brute-force reference** (main module): every response-map element
+4. **Float64 brute-force reference** (main module): every response-map element
    stays within `1e-4` of a from-the-definition implementation across
    single/multi-channel, strided, and degenerate inputs (1x1 templates,
    template == image, zero-variance templates, varying alpha).
@@ -109,6 +142,52 @@ Window sums and sums-of-squares are integers accumulated in `double`, so they
 are **bit-identical** to OpenCV's integral-image values; the only float32
 rounding source is the correlation itself, which OpenCV also computes in
 float32 — that is why parity holds to ~1e-6 on well-conditioned scenes.
+
+## Why it can beat OpenCV at identical output
+
+OpenCV's `matchTemplate` is not slow because of sloppy code — it is slow
+because of **what its generic pipeline does per call**. Count the work for
+one 1920×1080 RGBA `Match` (template 128×128):
+
+| per-call work | OpenCV (cv2 path) | cvmatch |
+|---|---|---|
+| input handover | `image.Image` → redraw/copy into `Mat` (8.3 MB) | zero-copy: C reads Go's `*image.RGBA` buffer in place |
+| channels correlated | 4 (alpha included) | 3 (constant alpha provably contributes zero — skipped) |
+| DFT row transforms | complex path per channel | 2 real rows packed per complex FFT (half the row FFTs), zero pad rows skipped |
+| DFT column transforms | strided per-column walks | batched butterflies over contiguous rows (vectorizes, cache-friendly) |
+| window statistics | materialize `sum` + `sqsum` double integral images: **~132 MB written to DRAM, then read back** | O(width) sliding column sums: **~60 KB working set, stays in L1/L2** |
+| min/max | separate `minMaxLoc` pass over the 8 MB result | fused into the normalization pass |
+| result values | — | element-wise equal (verified vs the C++ binary) |
+
+The decisive line is the integral images: on a modern CPU a 1080p RGBA
+`matchTemplate` is largely **memory-bandwidth-bound**, and ~140 MB of DRAM
+traffic per call is pure overhead when the same integer window sums can be
+produced incrementally in cache. The identities that make the shortcuts safe
+are exact, not approximate:
+
+- a sliding column sum over integers in `double` yields *bit-identical*
+  values to subtracting integral-image corners — both are exact integer
+  arithmetic below 2^53;
+- for a channel that is constant within each image, `templSdv = 0` and
+  `corr − wndSum·templMean` cancels algebraically, so dropping the alpha
+  plane changes no output bit;
+- the correlation itself stays float32 block-DFT — the same numeric path
+  OpenCV uses — which is why the response maps agree to ~1e-6.
+
+Three hypotheses the benchmarks rule out, all measured on the same scenes:
+
+1. **Not the Go wrapper.** Native C++ linked against the identical static
+   libs is within ~0-4% of cv2's Go API on every scene.
+2. **Not the distro/build flags.** Ubuntu 24.04's own OpenCV 4.6 build lands
+   within ±7% of the bundled build.
+3. **Not the missing IPP.** `ipp_matchTemplate` bails out on any
+   multi-channel input and never covers `TM_CCOEFF_NORMED`, so IPP cannot
+   accelerate this call — and empirically a `WITH_IPP=ON` build of the same
+   4.12 source (official defaults, IPPICV 2022.1.0, Release, full AVX2/AVX512
+   dispatch) measured **1.2-3.7x slower** on these scenes (e.g. 725 ms vs
+   245 ms on window/button, 1109 ms vs 293 ms on noise-1080p/32) because the
+   IPP DFT path inside `crossCorr` underperforms OpenCV's own DFT here.
+   cv2's `WITH_IPP=OFF` build choice is a win, not a handicap.
 
 ## Optimization details
 
