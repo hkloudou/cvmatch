@@ -272,6 +272,29 @@ Three hypotheses the benchmarks rule out, all measured on the same scenes:
    IPP DFT path inside `crossCorr` underperforms OpenCV's own DFT here.
    cv2's `WITH_IPP=OFF` build choice is a win, not a handicap.
 
+## Concurrency: what callers get for free vs what needs the library
+
+Every public function is **safe for concurrent use** — there is no shared
+mutable state; each call allocates its own scratch (`TestConcurrentMatch`
+runs the suite under `-race`). That splits parallelism into two distinct
+problems:
+
+- **Throughput (many matches): just use goroutines — no library support
+  needed.** Matching 100 screenshots, or one screenshot against 20 button
+  templates, scales to ~N× on N cores by running `Match` calls concurrently.
+  This is the recommended pattern and it already works.
+- **Latency (one big match): only the library can help.** A single 4K
+  `Match` takes ~500 ms on one core; a caller cannot speed *that one call*
+  up from outside — splitting the work across cores inside the call is the
+  in-library multithreading lever in the headroom list below.
+- **DIY middle ground:** because every TM_CCOEFF_NORMED output depends only
+  on its own window, a caller *can* split one large parent into horizontal
+  strips overlapping by `subHeight−1` rows, `Match` them concurrently and
+  merge the extrema. Results land in the same float32-rounding class as the
+  whole-image call (the FFT tiling shifts, so values differ at ~1e-6 like
+  any replan); ties at the strip merge need the row-major-first rule to
+  mirror `minMaxLoc` exactly.
+
 ## Is OpenCV's algorithm the optimum? Remaining headroom
 
 Deep-dive, with every claim either measured on this codebase or adversarially
@@ -352,6 +375,20 @@ matching) but also exactness OpenCV itself doesn't have. That is the
 cleanest evidence that OpenCV's pipeline is an engineering compromise, not
 an optimum: correct asymptotics, beatable constants, and sub-optimal
 accuracy by design.
+
+Where exactly would NTT output differ from OpenCV? Only in the raw
+correlation's rounding. For a 128×128 RGB template, `corr` reaches ~1e9
+while float32 resolves only ~64 apart at that magnitude, so OpenCV's (and
+cvmatch's) correlation is off by up to ±32 before normalization — that is
+precisely the ~1e-6 noise the parity tests measure, and NTT would remove it.
+The best-match location virtually never changes; the *value* becomes exact
+and, notably, **bit-identical across every platform and both cores** (float
+FFT results legally vary with FMA/SIMD; exact integers cannot). If this mode
+is ever added it should be a separate function (e.g. `MatchExact`) or an
+options parameter — *not* a global variable: a package-level toggle is a
+concurrency hazard and would silently change library behaviour for every
+caller in the process, breaking the default OpenCV-identical contract at a
+distance.
 
 ## Optimization details
 
