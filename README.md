@@ -17,7 +17,9 @@ import "github.com/hkloudou/cvmatch"
 // Drop-in replacement for cv2.Match (same signature, same numbers):
 minVal, minX, minY, maxVal, maxX, maxY := cvmatch.Match(parent, sub)
 
-// Grayscale fast path (~2.5x faster again; ideal for screenshots/UI hunting):
+// Grayscale fast path (~2.5x faster again; ideal for screenshots/UI
+// hunting). Alpha is dropped here by design — the same semantics as
+// OpenCV's COLOR_RGBA2GRAY; use Match when alpha carries signal:
 minVal, minX, minY, maxVal, maxX, maxY = cvmatch.MatchGray(parent, sub)
 
 // Full response map (find every occurrence above a threshold):
@@ -162,7 +164,10 @@ Four independent checks, all runnable in CI:
 1. **Element-wise parity vs native C++ OpenCV**
    (`TestFullMapParityWithNativeCpp`): the C++ binary dumps its full CV_32F
    response map (`native_bench scenes 1 dump`) and every element of
-   `cvmatch.MatchMap` is compared against it. All 13 scenes agree — worst
+   `cvmatch.MatchMap` is compared against it. All 14 scenes agree —
+   including a **varying-alpha** scene that defeats the constant-channel
+   skip and pins the full 4-channel path against OpenCV (worst element
+   diff `1.6e-06`) — worst
    element difference `2.1e-06` on noise scenes, `4.0e-06`–`8.1e-05` on real
    photographs, `4.7e-04` on UI scenes with near-flat regions (where the
    normalized value itself is ~0 and float32 rounding dominates).

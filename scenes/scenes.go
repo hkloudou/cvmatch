@@ -42,6 +42,19 @@ func makeNoise(w, h, sw, sh, px, py int) (*image.RGBA, *image.RGBA) {
 	return parent, crop(parent, image.Rect(px, py, px+sw, py+sh))
 }
 
+// makeNoiseAlpha is makeNoise with a non-constant alpha plane.
+func makeNoiseAlpha(w, h, sw, sh, px, py int) (*image.RGBA, *image.RGBA) {
+	rng := rand.New(rand.NewSource(2))
+	parent := image.NewRGBA(image.Rect(0, 0, w, h))
+	for i := 0; i < len(parent.Pix); i += 4 {
+		parent.Pix[i] = uint8(rng.Intn(256))
+		parent.Pix[i+1] = uint8(rng.Intn(256))
+		parent.Pix[i+2] = uint8(rng.Intn(256))
+		parent.Pix[i+3] = uint8(64 + rng.Intn(192))
+	}
+	return parent, crop(parent, image.Rect(px, py, px+sw, py+sh))
+}
+
 // Scenarios returns every scene: synthetic UI screenshots, dense noise, and
 // — when bench/testdata has been populated by fetch.sh — real photographs
 // from OpenCV's samples/data.
@@ -70,6 +83,12 @@ func All(testdata string) []Scene {
 	add("noise1080p_sub32", p, s, 977, 604, false)
 	p, s = makeNoise(3840, 2160, 256, 256, 1200, 900)
 	add("noise4k_sub256", p, s, 1200, 900, false)
+
+	// Varying alpha: defeats the constant-channel skip so the full
+	// 4-channel path runs, and pins it element-wise against real OpenCV
+	// (which treats alpha as a data channel on CV_8UC4 input).
+	p, s = makeNoiseAlpha(640, 480, 64, 48, 217, 143)
+	add("noise640_alpha", p, s, 217, 143, true)
 
 	return append(list, realScenes(testdata)...)
 }
