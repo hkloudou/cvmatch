@@ -73,9 +73,12 @@ jobs:
             cpp/native_bench cpp/scenes 5 dump
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Element-wise parity vs native C++ response maps
+      - name: Element-wise parity vs native C++ response maps (cgo core)
         working-directory: bench
         run: go test -v -run TestFullMapParityWithNativeCpp | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Element-wise parity vs native C++ response maps (pure-Go core)
+        working-directory: bench
+        run: CGO_ENABLED=0 go test -v -run TestFullMapParityWithNativeCpp | tee -a "$GITHUB_STEP_SUMMARY"
       - name: cvmatch matrix — cgo core, 1 and 4 threads
         run: |
           {
