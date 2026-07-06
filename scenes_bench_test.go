@@ -17,6 +17,9 @@ import (
 // The photo scenes require bench/testdata/fetch.sh to have run.
 func benchScenes(b *testing.B, fn func(parent, sub image.Image) (float32, int, int, float32, int, int)) {
 	for _, s := range scenes.All("bench/testdata") {
+		if s.PX < 0 { // low-score parity scenes have no position to assert
+			continue
+		}
 		b.Run(s.Name, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {

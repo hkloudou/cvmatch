@@ -109,9 +109,11 @@ int main(int argc, char **argv) {
 
     if (dump) dumpResult(dir + "/" + name + ".result.raw", result);
 
-    bool ok = maxLoc.x == px && maxLoc.y == py && maxVal > 0.99;
+    bool check = px >= 0; /* low-score scenes carry px = -1 */
+    bool ok = !check || (maxLoc.x == px && maxLoc.y == py && maxVal > 0.99);
     printf("%-28s %9.1f ms %9.1f ms   %s (%d,%d) max=%.6f\n", name.c_str(),
-           bestFull, bestCore, ok ? "OK " : "BAD", maxLoc.x, maxLoc.y, maxVal);
+           bestFull, bestCore, !check ? "-- " : ok ? "OK " : "BAD", maxLoc.x,
+           maxLoc.y, maxVal);
     if (!ok) return 1;
   }
   return 0;

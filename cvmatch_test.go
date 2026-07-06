@@ -317,3 +317,65 @@ func TestAlphaMixedConstancy(t *testing.T) {
 		}
 	}
 }
+
+// TestFindAllOccurrences demonstrates and verifies the MatchMap recipe:
+// the same template stamped at five known spots is recovered exactly by
+// threshold + local-maximum suppression.
+func TestFindAllOccurrences(t *testing.T) {
+	rng := rand.New(rand.NewSource(101))
+	parent := image.NewRGBA(image.Rect(0, 0, 400, 300))
+	for i := 0; i < len(parent.Pix); i += 4 { // weak background noise
+		parent.Pix[i] = uint8(rng.Intn(64))
+		parent.Pix[i+1] = uint8(rng.Intn(64))
+		parent.Pix[i+2] = uint8(rng.Intn(64))
+		parent.Pix[i+3] = 255
+	}
+	tpl := image.NewRGBA(image.Rect(0, 0, 32, 24))
+	copy(tpl.Pix, randPix(len(tpl.Pix), rng))
+	for i := 3; i < len(tpl.Pix); i += 4 {
+		tpl.Pix[i] = 255
+	}
+	spots := []image.Point{{10, 12}, {200, 40}, {350, 260}, {60, 240}, {180, 150}}
+	for _, p := range spots {
+		for y := 0; y < 24; y++ {
+			copy(parent.Pix[(p.Y+y)*parent.Stride+p.X*4:(p.Y+y)*parent.Stride+(p.X+32)*4],
+				tpl.Pix[y*tpl.Stride:])
+		}
+	}
+
+	resp, w, h := MatchMap(parent, tpl)
+	var hits []image.Point
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			v := resp[y*w+x]
+			if v < 0.999 {
+				continue
+			}
+			isMax := true // NMS over a template-sized neighborhood
+			for dy := -12; dy <= 12 && isMax; dy++ {
+				for dx := -16; dx <= 16; dx++ {
+					nx, ny := x+dx, y+dy
+					if nx >= 0 && ny >= 0 && nx < w && ny < h && resp[ny*w+nx] > v {
+						isMax = false
+						break
+					}
+				}
+			}
+			if isMax {
+				hits = append(hits, image.Point{x, y})
+			}
+		}
+	}
+	if len(hits) != len(spots) {
+		t.Fatalf("expected %d occurrences, found %d: %v", len(spots), len(hits), hits)
+	}
+	found := map[image.Point]bool{}
+	for _, h := range hits {
+		found[h] = true
+	}
+	for _, p := range spots {
+		if !found[p] {
+			t.Fatalf("planted occurrence at %v not found; hits: %v", p, hits)
+		}
+	}
+}

@@ -42,6 +42,28 @@ func makeNoise(w, h, sw, sh, px, py int) (*image.RGBA, *image.RGBA) {
 	return parent, crop(parent, image.Rect(px, py, px+sw, py+sh))
 }
 
+// degrade returns a copy of tpl with deterministic per-byte RGB noise in
+// [-amp, +amp], simulating a stale/compressed reference image whose match
+// score should land well below 1.0.
+func degrade(tpl *image.RGBA, amp int) *image.RGBA {
+	rng := rand.New(rand.NewSource(5))
+	out := image.NewRGBA(tpl.Bounds())
+	copy(out.Pix, tpl.Pix)
+	for i := 0; i < len(out.Pix); i += 4 {
+		for k := 0; k < 3; k++ {
+			v := int(out.Pix[i+k]) + rng.Intn(2*amp+1) - amp
+			if v < 0 {
+				v = 0
+			}
+			if v > 255 {
+				v = 255
+			}
+			out.Pix[i+k] = uint8(v)
+		}
+	}
+	return out
+}
+
 // makeNoiseAlpha is makeNoise with a non-constant alpha plane.
 func makeNoiseAlpha(w, h, sw, sh, px, py int) (*image.RGBA, *image.RGBA) {
 	rng := rand.New(rand.NewSource(2))
@@ -89,6 +111,16 @@ func All(testdata string) []Scene {
 	// (which treats alpha as a data channel on CV_8UC4 input).
 	p, s = makeNoiseAlpha(640, 480, 64, 48, 217, 143)
 	add("noise640_alpha", p, s, 217, 143, true)
+
+	// Low-score scenes (PX = -1: no position to assert, excluded from the
+	// speed benchmarks). Every other scene peaks at ~1.0, which leaves the
+	// mid-range of the response map unpinned; "degraded" perturbs a real
+	// crop so the peak lands well below 1, and "absent" searches a patch
+	// that is not in the image at all, so the whole map is noise-level.
+	// Both carry FullMap so native-C++ parity covers those value ranges.
+	add("degraded_button", ui.img, degrade(crop(ui.img, ui.button), 40), -1, -1, true)
+	np, _ := makeNoise(256, 256, 1, 1, 0, 0)
+	add("absent_patch", ui.img, crop(np, image.Rect(60, 60, 140, 120)), -1, -1, true)
 
 	return append(list, realScenes(testdata)...)
 }

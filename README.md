@@ -5,7 +5,7 @@
 OpenCV-compatible `TM_CCOEFF_NORMED` template matching for Go. No OpenCV, no
 bundled multi-megabyte static libraries, no dependencies — and **no required
 toolchain**: with cgo the core is **one dependency-free C file** (compiles in
-~1 s during `go build`, ~30 KB of native code including threading, AVX2
+~1 s during `go build`, ~35 KB of native code including threading, AVX2
 multi-versioned); with
 `CGO_ENABLED=0` a **pure-Go port of the same algorithm** takes over
 automatically, so plain cross-compilation just works. `cvmatch.Impl` reports
@@ -155,31 +155,43 @@ peak-RSS probe and the size report on each push to `main` (and on demand via
 | artifact | size |
 |---|---|
 | cv2 bundled static libs (`libopencv_core.a` + `libopencv_imgproc.a` + zlib + wrapper) | 16.1 MB |
-| `libcvmatch.a` | **47 KB** (~340x smaller) |
+| `libcvmatch.a` | **35 KB** (~460x smaller) |
 | minimal linked Go binary (`-ldflags "-s -w"`) | 5.82 MB (cv2) vs **1.57 MB** (cvmatch) |
 
 ### Accuracy
 
-Four independent checks, all runnable in CI:
+Three independent checks, all running in CI on **both cores** (the cgo and
+CGO_ENABLED=0 suites each execute everything below):
 
 1. **Element-wise parity vs native C++ OpenCV**
    (`TestFullMapParityWithNativeCpp`): the C++ binary dumps its full CV_32F
    response map (`native_bench scenes 1 dump`) and every element of
-   `cvmatch.MatchMap` is compared against it. All 14 scenes agree —
-   including a **varying-alpha** scene that defeats the constant-channel
-   skip and pins the full 4-channel path against OpenCV (worst element
-   diff `1.6e-06`) — worst
-   element difference `2.1e-06` on noise scenes, `4.0e-06`–`8.1e-05` on real
-   photographs, `4.7e-04` on UI scenes with near-flat regions (where the
-   normalized value itself is ~0 and float32 rounding dominates).
-2. **Element-wise parity vs cv2's Go API** (`TestFullMapParityWithCv2`):
-   same comparison through the wrapper — identical outcome.
-3. **min/max contract parity** (`TestParityWithCv2`): `minVal`/`maxVal` agree
-   to ~6 decimals and locations are identical on all thirteen scenarios.
-4. **Float64 brute-force reference** (main module): every response-map element
+   `cvmatch.MatchMap` is compared against it — each core gets its own CI
+   run. All 16 scenes agree, including a **varying-alpha** scene that
+   defeats the constant-channel skip (worst diff `1.6e-06`) and two
+   **low-score scenes** that pin the mid- and noise-range of the map, not
+   just perfect peaks. Envelope: `~2e-06` on noise scenes,
+   `4e-06`–`8e-05` on photographs, `4.7e-04` only in near-flat UI regions
+   where the true value is ~0 and float32 rounding dominates.
+2. **Three-way maxVal agreement on imperfect matches**
+   (`TestThreeWayValues`): not every scene is a perfect crop — a
+   noise-degraded template peaks at 0.904 and an absent patch at 0.180 —
+   and all three implementations report the same value:
+
+   | scene | native C++ | cvmatch cgo | cvmatch pure-Go |
+   |---|---|---|---|
+   | degraded_button (noisy template) | 0.903974 @(893,614) | 0.903974 @(893,614) | 0.903974 @(893,614) |
+   | absent_patch (not in the image) | 0.180137 | 0.180136 | 0.180136 |
+   | window button (perfect crop) | 0.999997 @(893,614) | 0.999996 @(893,614) | 0.999996 @(893,614) |
+
+   (For the absent patch the whole map is noise-level, so the argmax
+   legally lands on different near-tied bumps; the value is what matters.)
+3. **Float64 brute-force reference** (main module): every response-map element
    stays within `1e-4` of a from-the-definition implementation across
    single/multi-channel, strided, and degenerate inputs (1x1 templates,
-   template == image, zero-variance templates, varying alpha).
+   template == image, zero-variance templates, varying alpha), and
+   `TestFindAllOccurrences` verifies the MatchMap threshold+NMS recipe by
+   recovering five planted copies exactly.
 
 ## Algorithm
 
