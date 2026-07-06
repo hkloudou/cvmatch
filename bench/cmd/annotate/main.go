@@ -59,6 +59,7 @@ func main() {
 	want := map[string]bool{
 		"window1600_button96x32": true, "photo_fruits": true, "photo_baboon": true,
 		"photo_building": true, "photo_graf1": true, "photo_starry_night": true,
+		"noise640_alpha": true, // saved as PNG: JPEG would discard the alpha plane
 	}
 	green := color.RGBA{0, 224, 64, 255}
 	for _, s := range scenes.All("testdata") {
@@ -70,7 +71,11 @@ func main() {
 		copy(annotated.Pix, s.Parent.Pix)
 		sb := s.Sub.Bounds()
 		drawRect(annotated, image.Rect(maxX, maxY, maxX+sb.Dx(), maxY+sb.Dy()), green, 3)
-		save(filepath.Join(*out, s.Name+".jpg"), annotated, true)
+		if s.Name == "noise640_alpha" {
+			save(filepath.Join(*out, s.Name+".png"), annotated, false)
+		} else {
+			save(filepath.Join(*out, s.Name+".jpg"), annotated, true)
+		}
 		save(filepath.Join(*out, s.Name+".tpl.png"), s.Sub, false)
 		fmt.Printf("%s\tmaxVal=%.6f\tloc=(%d,%d)\n", s.Name, maxV, maxX, maxY)
 	}

@@ -63,6 +63,7 @@ location `Match` returned for each template (images live on the
 | ![building template](../../raw/assets/demo/photo_building.tpl.png) | ![building](../../raw/assets/demo/photo_building.jpg) | `maxVal=1.000000` @ (420,240) |
 | ![graf template](../../raw/assets/demo/photo_graf1.tpl.png) | ![graf](../../raw/assets/demo/photo_graf1.jpg) | `maxVal=0.999999` @ (350,260) |
 | ![starry template](../../raw/assets/demo/photo_starry_night.tpl.png) | ![starry night](../../raw/assets/demo/photo_starry_night.jpg) | `maxVal=0.999999` @ (400,300) |
+| ![alpha template](../../raw/assets/demo/noise640_alpha.tpl.png) | ![varying alpha](../../raw/assets/demo/noise640_alpha.png) | `maxVal=1.000000` @ (217,143) — **varying-alpha** scene (PNG, alpha preserved): full 4-channel path, pinned element-wise vs OpenCV |
 
 ## Benchmarks
 
