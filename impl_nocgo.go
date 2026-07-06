@@ -10,7 +10,3 @@ const Impl = "purego"
 func matchU8(img []uint8, istride, iw, ih int, tpl []uint8, tstride, tw, th, cn, step, threads int, result []float32) (float32, int, int, float32, int, int) {
 	return matchU8Go(img, istride, iw, ih, tpl, tstride, tw, th, cn, step, threads, result)
 }
-
-func matchExactU8(img []uint8, istride, iw, ih int, tpl []uint8, tstride, tw, th, cn, step, threads int, result []float32) (float32, int, int, float32, int, int) {
-	return matchExactGo(img, istride, iw, ih, tpl, tstride, tw, th, cn, step, threads, result)
-}

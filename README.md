@@ -5,8 +5,8 @@
 OpenCV-compatible `TM_CCOEFF_NORMED` template matching for Go. No OpenCV, no
 bundled multi-megabyte static libraries, no dependencies — and **no required
 toolchain**: with cgo the core is **one dependency-free C file** (compiles in
-~1 s during `go build`, ~47 KB of native code including the exact-NTT mode
-and threading, AVX2 multi-versioned); with
+~1 s during `go build`, ~30 KB of native code including threading, AVX2
+multi-versioned); with
 `CGO_ENABLED=0` a **pure-Go port of the same algorithm** takes over
 automatically, so plain cross-compilation just works. `cvmatch.Impl` reports
 which core is active ("cgo" / "purego"); tests pin both to identical output.
@@ -23,9 +23,6 @@ minVal, minX, minY, maxVal, maxX, maxY = cvmatch.MatchGray(parent, sub)
 // Full response map (find every occurrence above a threshold):
 resp, w, h := cvmatch.MatchMap(parent, sub)
 
-// Exact mode: integer-exact correlation (NTT), bit-identical on every
-// platform and both cores; more accurate than OpenCV, but slower:
-minVal, minX, minY, maxVal, maxX, maxY = cvmatch.MatchExact(parent, sub)
 ```
 
 `Match` panics if an image is empty or `sub` is larger than `parent`, matching
@@ -255,10 +252,7 @@ this matrix on every push). `Match`, milliseconds:
 | photo fruits (single tile) | 12.8 | 11.4 | 60.2 | 52.7 | 51 |
 | photo building (single tile) | 40.9 | 39.3 | 217.5 | 208.5 | 93 |
 
-Selected other rows (1080p/128): `MatchGray` 58.8 / 24.7 / 235.0 / 93.7 ms;
-`MatchExact` 2531 / 972 / 1907 / 747 ms (yes — the pure-Go NTT beats the C
-one: Go's `bits.Mul64` Montgomery multiply out-codegens gcc's `__int128`
-here).
+Selected other rows (1080p/128): `MatchGray` 58.8 / 24.7 / 235.0 / 93.7 ms.
 
 Readings: threading scales 2.5-3.8x wherever the planner produces multiple
 tiles and ~1x on single-tile scenes (only normalization bands parallelize —
@@ -266,8 +260,8 @@ re-tiling would change the FFT rounding path; that residual is headroom
 item 1). The pure-Go core is 4-5x slower than the C core (gc emits scalar
 code vs 8-wide AVX2) yet still beats cv2-with-OpenCV in grayscale on every
 scene and in RGBA on the multi-tile ones — with zero toolchain and zero
-native bytes. `TestPureGoMatchesCgo`, `TestMatchExactCgoVsPureGo` and
-`TestThreadsBitIdentical*` pin all of these variants to the same output.
+native bytes. `TestPureGoMatchesCgo` and `TestThreadsBitIdentical*` pin all
+of these variants to the same output.
 
 ## Why it can beat OpenCV at identical output
 
@@ -465,21 +459,16 @@ Where exactly would NTT output differ from OpenCV? Only in the raw
 correlation's rounding. For a 128×128 RGB template, `corr` reaches ~1e9
 while float32 resolves only ~64 apart at that magnitude, so OpenCV's (and
 cvmatch's) correlation is off by up to ±32 before normalization — that is
-precisely the ~1e-6 noise the parity tests measure, and NTT would remove it.
-The best-match location virtually never changes; the *value* becomes exact
-and, notably, **bit-identical across every platform and both cores** (float
-FFT results legally vary with FMA/SIMD; exact integers cannot). This mode now ships as
-`MatchExact` — a separate function, deliberately *not* a global variable: a
-package-level toggle is a concurrency hazard and would silently change
-library behaviour for every caller in the process, breaking the default
-OpenCV-identical contract at a distance. Measured (4 cores): 1080p/128 in
-979 ms (C) / 750 ms (pure Go) vs 56 ms for `Match` — **17x slower than the
-float path and ~2x slower than cv2**, exactly as the 2–5x-per-op no-SIMD
-prediction implied once the missing real-input packing (2x transforms, 2x
-column width) is priced in. It is an accuracy/determinism product, not a
-speed one; the response maps are bit-identical between the C and Go cores
-(`TestMatchExactCgoVsPureGo`) and track the float64 reference to one
-float32 rounding (`TestMatchExactAgainstReference`).
+precisely the ~1e-6 noise the parity tests measure, and NTT removes it.
+This mode was **built, measured, and then removed** (`MatchExact`, present
+only in the v1.1.x tags): the Montgomery-NTT correlation worked and was
+bit-identical across platforms and both cores, but measured ~17x slower
+than `Match` (64-bit modular butterflies have no SIMD; the two-real-rows
+packing does not survive in Z_p, doubling transform count and column
+width — a data point that also refutes the intuition "integer arithmetic
+is faster than floating point" for this workload). Since this library's
+product goal is speed at OpenCV-identical output, exceeding OpenCV's
+accuracy at a 17x cost earned no keep; the analysis stays recorded here.
 
 ## Optimization details
 

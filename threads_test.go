@@ -30,21 +30,3 @@ func TestThreadsBitIdenticalPureGo(t *testing.T) {
 		}
 	}
 }
-
-func TestThreadsBitIdenticalExact(t *testing.T) {
-	rng := rand.New(rand.NewSource(78))
-	iw, ih, tw, th := 400, 300, 48, 40
-	img, tpl := randPix(iw*ih*4, rng), randPix(tw*th*4, rng)
-	rw, rh := iw-tw+1, ih-th+1
-	ref := make([]float32, rw*rh)
-	matchExactU8(img, iw*4, iw, ih, tpl, tw*4, tw, th, 4, 4, 1, ref)
-	for _, n := range []int{2, 4} {
-		got := make([]float32, rw*rh)
-		matchExactU8(img, iw*4, iw, ih, tpl, tw*4, tw, th, 4, 4, n, got)
-		for i := range ref {
-			if got[i] != ref[i] {
-				t.Fatalf("exact threads=%d: map differs at %d", n, i)
-			}
-		}
-	}
-}

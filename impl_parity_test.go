@@ -81,24 +81,3 @@ func TestThreadsBitIdentical(t *testing.T) {
 		}
 	}
 }
-
-// TestMatchExactCgoVsPureGo: the exact path must be bit-identical across the
-// two cores (integer correlation + identical double normalization).
-func TestMatchExactCgoVsPureGo(t *testing.T) {
-	rng := rand.New(rand.NewSource(88))
-	iw, ih, tw, th := 300, 220, 48, 36
-	img, tpl := randPix(iw*ih*4, rng), randPix(tw*th*4, rng)
-	rw, rh := iw-tw+1, ih-th+1
-	gotC := make([]float32, rw*rh)
-	gotGo := make([]float32, rw*rh)
-	cMinV, cMinX, cMinY, cMaxV, cMaxX, cMaxY := matchExactU8(img, iw*4, iw, ih, tpl, tw*4, tw, th, 4, 4, 3, gotC)
-	gMinV, gMinX, gMinY, gMaxV, gMaxX, gMaxY := matchExactGo(img, iw*4, iw, ih, tpl, tw*4, tw, th, 4, 4, 2, gotGo)
-	for i := range gotC {
-		if gotC[i] != gotGo[i] {
-			t.Fatalf("exact cores differ at %d: %v vs %v", i, gotC[i], gotGo[i])
-		}
-	}
-	if cMinV != gMinV || cMaxV != gMaxV || cMinX != gMinX || cMinY != gMinY || cMaxX != gMaxX || cMaxY != gMaxY {
-		t.Fatal("exact cores extrema differ")
-	}
-}

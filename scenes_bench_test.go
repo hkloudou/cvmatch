@@ -29,6 +29,5 @@ func benchScenes(b *testing.B, fn func(parent, sub image.Image) (float32, int, i
 	}
 }
 
-func BenchmarkMatch(b *testing.B)      { benchScenes(b, cvmatch.Match) }
-func BenchmarkMatchGray(b *testing.B)  { benchScenes(b, cvmatch.MatchGray) }
-func BenchmarkMatchExact(b *testing.B) { benchScenes(b, cvmatch.MatchExact) }
+func BenchmarkMatch(b *testing.B)     { benchScenes(b, cvmatch.Match) }
+func BenchmarkMatchGray(b *testing.B) { benchScenes(b, cvmatch.MatchGray) }

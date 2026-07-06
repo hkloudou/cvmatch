@@ -16,7 +16,7 @@ jobs:
         with:
           go-version: "1.24"
           cache-dependency-path: bench/go.sum
-      - name: Unit tests (float64 reference, cores parity, thread bit-identity, exact mode)
+      - name: Unit tests (float64 reference, cores parity, thread bit-identity)
         run: go test -v ./...
       - name: Race detector (concurrent use + parallel cores)
         run: go test -race ./...
@@ -95,7 +95,7 @@ jobs:
           {
             echo "### cvmatch cgo core (CGO_ENABLED=1), -cpu 1,4"
             echo '```'
-            go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/|BenchmarkMatchExact/' -benchtime 5x -cpu 1,4 -timeout 90m
+            go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: cvmatch matrix — pure-Go core (CGO_ENABLED=0), 1 and 4 threads
@@ -103,7 +103,7 @@ jobs:
           {
             echo "### cvmatch pure-Go core (CGO_ENABLED=0), -cpu 1,4"
             echo '```'
-            CGO_ENABLED=0 go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/|BenchmarkMatchExact/' -benchtime 5x -cpu 1,4 -timeout 90m
+            CGO_ENABLED=0 go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Binary sizes

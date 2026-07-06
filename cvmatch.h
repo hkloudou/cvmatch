@@ -58,18 +58,6 @@ int cvm_match_ccoeff_normed_u8(const uint8_t *img, int img_stride, int iw,
                                int tw, int th, int cn, int step, int nthreads,
                                float *result, CvmExtrema *out);
 
-/* Same contract as cvm_match_ccoeff_normed_u8, but the raw cross-correlation
- * is computed EXACTLY over the integers with a number-theoretic transform
- * (Montgomery arithmetic modulo the prime 29*2^57+1) instead of a float32
- * FFT. The normalized response is therefore free of correlation rounding:
- * more accurate than OpenCV wherever float32 rounds, and bit-identical
- * across platforms, thread counts, and the C/Go cores. Slower than the
- * float path (64-bit modular butterflies, no real-input packing). */
-int cvm_match_exact_u8(const uint8_t *img, int img_stride, int iw, int ih,
-                       const uint8_t *tpl, int tpl_stride, int tw, int th,
-                       int cn, int step, int nthreads, float *result,
-                       CvmExtrema *out);
-
 #ifdef __cplusplus
 }
 #endif

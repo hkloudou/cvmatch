@@ -82,23 +82,6 @@ func MatchGray(parent, sub image.Image) (float32, int, int, float32, int, int) {
 	return matchU8(pPix, pStride, pw, ph, sPix, sStride, sw, sh, 1, 1, threads(), nil)
 }
 
-// MatchExact is Match with the raw cross-correlation computed exactly over
-// the integers (number-theoretic transform modulo 29*2^57+1) instead of a
-// float32 FFT. The normalized response is therefore free of correlation
-// rounding: more accurate than OpenCV wherever float32 rounds, and
-// bit-identical across platforms, thread counts, and the cgo/pure-Go cores.
-// It is slower than Match (64-bit modular arithmetic, no real-input FFT
-// packing) — choose it for determinism and accuracy, not speed.
-func MatchExact(parent, sub image.Image) (float32, int, int, float32, int, int) {
-	pPix, pStride, pw, ph := toRGBA(parent)
-	sPix, sStride, sw, sh := toRGBA(sub)
-	cn := 4
-	if alphaConst(pPix, pStride, pw, ph) && alphaConst(sPix, sStride, sw, sh) {
-		cn = 3
-	}
-	return matchExactU8(pPix, pStride, pw, ph, sPix, sStride, sw, sh, cn, 4, threads(), nil)
-}
-
 // alphaConst reports whether the alpha plane of interleaved RGBA pixels is a
 // single constant value.
 func alphaConst(pix []uint8, stride, w, h int) bool {
