@@ -7,21 +7,41 @@
 // without a C toolchain). The Impl constant reports which one is active;
 // both produce the same output (covered by tests).
 //
-// Match is numerically aligned with gocv/hkloudou-cv2 style
-// Match(parent, sub) built on ImageToMatRGBA + MatchTemplate + MinMaxLoc,
-// while MatchGray trades exact RGBA parity for ~4x less work.
+// Match is numerically aligned with OpenCV's matchTemplate + minMaxLoc on
+// CV_8UC4 input (the classic ImageToMatRGBA-style pipeline), while
+// MatchGray trades exact RGBA parity for ~4x less work.
 package cvmatch
 
 import (
 	"image"
 	"image/draw"
+	"os"
 	"runtime"
+	"strconv"
 )
 
-// threads returns the default worker count for one call: GOMAXPROCS, capped
-// by the cores the algorithm can use. Any count yields bit-identical output.
+// Threads overrides the number of workers a single Match/MatchMap/MatchGray
+// call uses internally. 0 (the default) means automatic: GOMAXPROCS capped
+// at 16. Any other value is clamped to [1, 16]. Every setting produces
+// bit-identical output (asserted by TestThreadsBitIdentical*), so this is a
+// performance/benchmarking knob only — e.g. Threads = 1 pins single-threaded
+// behavior. It can also be set through the CVMATCH_THREADS environment
+// variable, read once at package init. Set it before concurrent use begins;
+// it is a plain variable and is not synchronized.
+var Threads int
+
+func init() {
+	if n, err := strconv.Atoi(os.Getenv("CVMATCH_THREADS")); err == nil && n > 0 {
+		Threads = n
+	}
+}
+
+// threads resolves Threads into the worker count for one call.
 func threads() int {
-	n := runtime.GOMAXPROCS(0)
+	n := Threads
+	if n <= 0 {
+		n = runtime.GOMAXPROCS(0)
+	}
 	if n > 16 {
 		n = 16
 	}

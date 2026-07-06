@@ -1,13 +1,12 @@
 // Native OpenCV C++ benchmark: the same scenes as the Go benchmarks, linked
-// against the *same* prebuilt static OpenCV libraries that hkloudou/cv2
-// bundles, so any difference between this and cv2.Match is pure Go-wrapper
-// overhead (image conversion + Mat copy + cgo), not OpenCV itself.
+// against prebuilt static OpenCV 4.12 archives (WITH_IPP=OFF, Release,
+// SIMD dispatch on), so the baseline is OpenCV itself with no wrapper.
 //
 // Timing is end-to-end per call for fairness with the Go side, which starts
 // from an in-memory RGBA frame: Mat construction with a private copy of the
-// RGBA buffer (what Cv2_Mat_NewFromBytes does), matchTemplate into a fresh
-// result Mat, minMaxLoc, and destruction. A core-only time (matchTemplate +
-// minMaxLoc on prebuilt Mats) is reported as a diagnostic.
+// RGBA buffer, matchTemplate into a fresh result Mat, minMaxLoc, and
+// destruction. A core-only time (matchTemplate + minMaxLoc on prebuilt
+// Mats) is reported as a diagnostic.
 #include <chrono>
 #include <cstdint>
 #include <cstdio>

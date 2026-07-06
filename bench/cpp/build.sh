@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Builds the native OpenCV benchmark against the SAME prebuilt static
-# OpenCV libraries that the hkloudou/cv2 Go module bundles (linux/amd64),
-# using matching upstream headers. Run from bench/cpp/ (or anywhere):
+# Builds the native OpenCV benchmark against prebuilt static OpenCV 4.12.0
+# archives (linux/amd64, WITH_IPP=OFF Release build fetched via the Go
+# module proxy), using matching upstream headers. Run from bench/cpp/:
 #
 #   ./build.sh          # downloads headers on first use, then compiles
 #   ./native_bench scenes 5

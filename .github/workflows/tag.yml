@@ -1,0 +1,29 @@
+name: Tag release
+
+# The development environment pushes branches through a relay that rejects
+# tag refs, so version tags are created here instead: run this workflow
+# (workflow_dispatch) with the desired tag name and it tags the current
+# main HEAD. CI then runs on the tag push as usual.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to create (e.g. v1.2.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ github.event.inputs.tag }}" -m "${{ github.event.inputs.tag }}"
+          git push origin "refs/tags/${{ github.event.inputs.tag }}"

@@ -1,8 +1,6 @@
 // Package bench compares cvmatch directly against native OpenCV C++
-// (bench/cpp/native_bench, linked with the prebuilt static OpenCV that the
-// hkloudou/cv2 module bundles). The Go-wrapper (cv2) comparison lived here
-// through v1.2.x and settled its question — the wrapper adds only ~0-4%
-// over native C++ — so the suite now measures against C++ directly.
+// (bench/cpp/native_bench, linked against prebuilt static OpenCV 4.12
+// archives): element-wise response-map parity and three-way maxVal checks.
 package bench
 
 import (

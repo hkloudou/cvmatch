@@ -8,8 +8,9 @@ import (
 	"github.com/hkloudou/cvmatch/scenes"
 )
 
-// Benchmarks over the shared scene set (identical to bench/'s cv2
-// comparison). Run twice to compare the two cores on equal footing:
+// Benchmarks over the shared scene set (byte-identical to what the native
+// C++ benchmark consumes). Run twice to compare the two cores on equal
+// footing:
 //
 //	go test -bench . -benchtime 5x               # cgo (C core)
 //	CGO_ENABLED=0 go test -bench . -benchtime 5x # pure Go core

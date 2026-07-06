@@ -62,23 +62,23 @@ jobs:
             for impl in baseline cvmatch gray; do ./bin/memprobe -impl "$impl"; done
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Native OpenCV C++ benchmark (same bundled static libs)
+      - name: Native OpenCV C++ benchmark (prebuilt static OpenCV 4.12)
         working-directory: bench
         run: |
           go run ./cmd/dumpscenes -out cpp/scenes
           cpp/build.sh
           {
-            echo "### Native OpenCV C++ (end-to-end, same static libs as cv2)"
+            echo "### Native OpenCV C++ (end-to-end, static OpenCV 4.12)"
             echo '```'
             cpp/native_bench cpp/scenes 5 dump
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Element-wise parity vs native C++ response maps (cgo core)
+      - name: Match + MatchMap parity vs native C++ (cgo core)
         working-directory: bench
-        run: go test -v -run TestFullMapParityWithNativeCpp | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: Element-wise parity vs native C++ response maps (pure-Go core)
+        run: go test -v -run 'TestFullMapParityWithNativeCpp|TestThreeWayValues' | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Match + MatchMap parity vs native C++ (pure-Go core)
         working-directory: bench
-        run: CGO_ENABLED=0 go test -v -run TestFullMapParityWithNativeCpp | tee -a "$GITHUB_STEP_SUMMARY"
+        run: CGO_ENABLED=0 go test -v -run 'TestFullMapParityWithNativeCpp|TestThreeWayValues' | tee -a "$GITHUB_STEP_SUMMARY"
       - name: cvmatch matrix — cgo core, 1 and 4 threads
         run: |
           {

@@ -1,6 +1,6 @@
 // Package scenes builds the deterministic benchmark/parity scenes shared by
-// the cv2-comparison module (bench/) and the main module's pure-Go vs cgo
-// benchmarks: synthetic desktop screenshots, dense noise, and real
+// the native-C++ comparison module (bench/) and the main module's pure-Go vs
+// cgo benchmarks: synthetic desktop screenshots, dense noise, and real
 // photographs from OpenCV samples/data when present.
 package scenes
 
@@ -97,8 +97,9 @@ func All(testdata string) []Scene {
 	add("window4k_button96x32", ui4k.img, crop(ui4k.img, ui4k.button), ui4k.button.Min.X, ui4k.button.Min.Y, false)
 
 	// Dense noise (no flat regions), several image/template size ratios.
-	p, s := makeNoise(1280, 720, 96, 96, 431, 285)
-	add("noise720p_sub96", p, s, 431, 285, true)
+	p720, s720 := makeNoise(1280, 720, 96, 96, 431, 285)
+	add("noise720p_sub96", p720, s720, 431, 285, true)
+	p, s := p720, s720
 	p, s = makeNoise(1920, 1080, 128, 128, 977, 604)
 	add("noise1080p_sub128", p, s, 977, 604, false)
 	p, s = makeNoise(1920, 1080, 32, 32, 977, 604)
@@ -115,10 +116,12 @@ func All(testdata string) []Scene {
 	// Low-score scenes (PX = -1: no position to assert, excluded from the
 	// speed benchmarks). Every other scene peaks at ~1.0, which leaves the
 	// mid-range of the response map unpinned; "degraded" perturbs a real
-	// crop so the peak lands well below 1, and "absent" searches a patch
-	// that is not in the image at all, so the whole map is noise-level.
-	// Both carry FullMap so native-C++ parity covers those value ranges.
+	// crop so the peak lands well below 1, "half_degraded" pushes it to
+	// mid-range, and "absent" searches a patch that is not in the image at
+	// all, so the whole map is noise-level. All carry FullMap so native-C++
+	// parity covers those value ranges.
 	add("degraded_button", ui.img, degrade(crop(ui.img, ui.button), 40), -1, -1, true)
+	add("half_degraded_noise", p720, degrade(s720, 170), -1, -1, true)
 	np, _ := makeNoise(256, 256, 1, 1, 0, 0)
 	add("absent_patch", ui.img, crop(np, image.Rect(60, 60, 140, 120)), -1, -1, true)
 

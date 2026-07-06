@@ -34,6 +34,19 @@ func drawRect(img *image.RGBA, r image.Rectangle, c color.RGBA, thick int) {
 	}
 }
 
+// rawNRGBA reinterprets an *image.RGBA buffer as NRGBA without touching the
+// bytes. The matcher (like OpenCV on CV_8UC4) reads raw bytes with no
+// premultiplication semantics, but Go's png.Encode treats *image.RGBA as
+// alpha-premultiplied and un-premultiplies on encode — which wraps R/G/B
+// values that exceed alpha and would publish a PNG whose pixels are NOT the
+// bytes the benchmarks and parity tests actually consumed. Encoding the
+// same memory as NRGBA stores every byte verbatim (PNG's native
+// straight-alpha layout), so the published file both renders with real
+// per-pixel transparency and round-trips back to the exact test input.
+func rawNRGBA(m *image.RGBA) *image.NRGBA {
+	return &image.NRGBA{Pix: m.Pix, Stride: m.Stride, Rect: m.Rect}
+}
+
 func save(path string, img image.Image, asJPEG bool) {
 	f, err := os.Create(path)
 	if err != nil {
@@ -72,11 +85,13 @@ func main() {
 		sb := s.Sub.Bounds()
 		drawRect(annotated, image.Rect(maxX, maxY, maxX+sb.Dx(), maxY+sb.Dy()), green, 3)
 		if s.Name == "noise640_alpha" {
-			save(filepath.Join(*out, s.Name+".png"), annotated, false)
+			// raw bytes verbatim: see rawNRGBA
+			save(filepath.Join(*out, s.Name+".png"), rawNRGBA(annotated), false)
+			save(filepath.Join(*out, s.Name+".tpl.png"), rawNRGBA(s.Sub), false)
 		} else {
 			save(filepath.Join(*out, s.Name+".jpg"), annotated, true)
+			save(filepath.Join(*out, s.Name+".tpl.png"), s.Sub, false)
 		}
-		save(filepath.Join(*out, s.Name+".tpl.png"), s.Sub, false)
 		fmt.Printf("%s\tmaxVal=%.6f\tloc=(%d,%d)\n", s.Name, maxV, maxX, maxY)
 	}
 }
