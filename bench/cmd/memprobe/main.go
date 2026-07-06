@@ -11,7 +11,6 @@ import (
 	"os"
 	"strings"
 
-	cv2 "github.com/hkloudou/cv2"
 	"github.com/hkloudou/cvmatch"
 )
 
@@ -46,7 +45,7 @@ func vmHWM() string {
 }
 
 func main() {
-	impl := flag.String("impl", "cvmatch", "cv2 | cvmatch | gray | baseline")
+	impl := flag.String("impl", "cvmatch", "cvmatch | gray | baseline")
 	flag.Parse()
 
 	parent, sub := makeImages(1920, 1080, 128, 128, 977, 604)
@@ -55,8 +54,6 @@ func main() {
 	var maxV float32
 	var maxX, maxY int
 	switch *impl {
-	case "cv2":
-		_, _, _, maxV, maxX, maxY = cv2.Match(parent, sub)
 	case "cvmatch":
 		_, _, _, maxV, maxX, maxY = cvmatch.Match(parent, sub)
 	case "gray":

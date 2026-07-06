@@ -15,7 +15,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
-          cache-dependency-path: bench/go.sum
+          cache: false
       - name: Unit tests (float64 reference, cores parity, thread bit-identity)
         run: go test -v ./...
       - name: Race detector (concurrent use + parallel cores)
@@ -40,10 +40,6 @@ jobs:
             size cvmatch.o | tail -1
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Fetch real sample images (OpenCV samples/data)
-        run: bench/testdata/fetch.sh
-      - name: Numeric parity vs OpenCV (hkloudou/cv2)
-        run: cd bench && go test -v -run 'Parity' | tee -a "$GITHUB_STEP_SUMMARY"
 
   benchmark:
     runs-on: ubuntu-latest
@@ -53,19 +49,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
-          cache-dependency-path: bench/go.sum
+          cache: false
       - name: Fetch real sample images (OpenCV samples/data)
         run: bench/testdata/fetch.sh
-      - name: Benchmarks (cvmatch vs hkloudou/cv2)
-        working-directory: bench
-        run: |
-          go test -run xxx -bench . -benchtime 5x -timeout 50m | tee bench.txt
-          {
-            echo "### Benchmarks"
-            echo '```'
-            cat bench.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
       - name: Peak RSS (VmHWM, fresh process per implementation)
         working-directory: bench
         run: |
@@ -73,7 +59,7 @@ jobs:
           {
             echo "### Peak memory (1080p / 128px match)"
             echo '```'
-            for impl in baseline cv2 cvmatch gray; do ./bin/memprobe -impl "$impl"; done
+            for impl in baseline cvmatch gray; do ./bin/memprobe -impl "$impl"; done
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Native OpenCV C++ benchmark (same bundled static libs)
@@ -106,14 +92,13 @@ jobs:
             CGO_ENABLED=0 go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Binary sizes
+      - name: Binary size
         working-directory: bench
         run: |
           go build -ldflags="-s -w" -o bin/binsize-cvmatch ./cmd/binsize-cvmatch
-          go build -ldflags="-s -w" -o bin/binsize-cv2 ./cmd/binsize-cv2
           {
-            echo "### Minimal binary sizes (-ldflags \"-s -w\")"
+            echo "### Minimal binary size (-ldflags \"-s -w\")"
             echo '```'
-            ls -l bin/binsize-cvmatch bin/binsize-cv2
+            ls -l bin/binsize-cvmatch
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

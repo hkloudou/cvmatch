@@ -82,27 +82,24 @@ the suite runs with synthetic scenes only when they are absent):
 | [`graf1.png`](../../raw/assets/samples/graf1.png) | 800×640 | 120×120 @ (350,260) | graffiti wall (VGG dataset) |
 | [`starry_night.jpg`](../../raw/assets/samples/starry_night.jpg) | 752×600 | 128×128 @ (400,300) | painting, swirling gradients |
 
-Four implementations are measured on every scene, all returning the same
-location and value:
+The baseline is **native OpenCV C++** — `bench/cpp/native_bench`, plain C++
+linked against a prebuilt static OpenCV 4.12 (the same binary the
+`hkloudou/cv2` module bundles), timed **end-to-end per call** for fairness
+(from an in-memory RGBA buffer: Mat copy → `matchTemplate` → `minMaxLoc` →
+release), best-of-5 — measured against **cvmatch.Match** and
+**cvmatch.MatchGray**, all returning the same location and value.
 
-- **OpenCV C++ (native)** — `bench/cpp/native_bench`, plain C++ linked
-  against the *exact same* prebuilt static OpenCV 4.12 libraries that
-  `hkloudou/cv2` bundles, timed **end-to-end per call** for fairness (from an
-  in-memory RGBA buffer: Mat copy → `matchTemplate` → `minMaxLoc` → release),
-  best-of-5;
-- **cv2.Match (Go)** — [`hkloudou/cv2`](https://github.com/hkloudou/cv2)
-  v0.41200.0 through its Go API;
-- **cvmatch.Match** / **cvmatch.MatchGray** — this library.
-
-> **Is the Go wrapper the bottleneck? No.** Native C++ and cv2's Go API land
-> within ~0-4% of each other on every scene (e.g. 1080p/128: 390.5 ms native
-> vs 392.7 ms Go; window/button: 245.0 vs 241.1 ms). The cost is OpenCV's own
-> pipeline — 4-channel DFT correlation plus full double-precision integral
-> images — which is exactly what cvmatch restructures. Single-threaded,
-> cvmatch is **2.0-3.8x faster than native OpenCV C++ at identical output
-> values**; with its internal bit-identical parallelism on 4 cores it is
-> **1.9-9.9x faster (7-9x on the big scenes), and 10-16x in grayscale mode**
-> (OpenCV's matchTemplate path cannot use extra cores at all).
+> The Go-wrapper question was measured and settled before retiring the
+> wrapper from this suite: `hkloudou/cv2`'s Go API landed within **~0-4%**
+> of native C++ on every scene (e.g. 1080p/128: 390.5 ms native vs 392.7 ms
+> Go), so all cv2 numbers in the tables below are interchangeable with
+> native C++. The cost is OpenCV's own pipeline — 4-channel DFT correlation
+> plus full double-precision integral images — which is exactly what
+> cvmatch restructures. Single-threaded, cvmatch is **2.0-3.8x faster than
+> native OpenCV C++ at identical output values**; with its internal
+> bit-identical parallelism on 4 cores it is **1.9-9.9x faster (7-9x on the
+> big scenes), and 10-16x in grayscale mode** (OpenCV's matchTemplate path
+> cannot use extra cores at all).
 
 ### Fairness rules
 
@@ -117,14 +114,14 @@ location and value:
   Go-vs-native comparisons cannot be skewed by build flags. A distro-built
   OpenCV (Ubuntu 24.04, 4.6.0) was also measured and lands within ±7% of the
   bundled build on every scene.
-- **Threading disclosed, and both sides get the cores.** cvmatch.Match
+- **Threading disclosed, and both sides got the cores.** cvmatch.Match
   parallelizes one call internally with provably bit-identical output
   (`TestThreadsBitIdentical*`); OpenCV's matchTemplate path is
-  single-threaded by design, so the suite also benchmarks
-  **cv2 + caller-side 4-way strip parallelism** (`BenchmarkCv2MatchStrips4`
-  — the strongest 4-core play available to a cv2 user): big scenes still
-  favor cvmatch 1.9-3.9x (button 74.5 vs 32 ms, 4K button 511 vs 133 ms,
-  1080p/128 105 vs 56 ms), while two single-tile scenes flip to cv2+strips
+  single-threaded by design, so before retiring the wrapper this suite also
+  measured **OpenCV + caller-side 4-way strip parallelism** (the strongest
+  4-core play available to an OpenCV user): big scenes still favored
+  cvmatch 1.9-3.9x (button 74.5 vs 32 ms, 4K button 511 vs 133 ms,
+  1080p/128 105 vs 56 ms), while two single-tile scenes flipped to strips
   (panel 86 vs 104 ms, building 24 vs 39 ms) — exactly the intra-tile
   residual documented in the headroom section. Like-for-like single-thread
   numbers are in the thread/CGO matrix below.
@@ -181,8 +178,13 @@ Four independent checks, all runnable in CI:
 ## Algorithm
 
 The pipeline is exactly OpenCV's `matchTemplate(TM_CCOEFF_NORMED)`
-(`modules/imgproc/src/templmatch.cpp`; the algorithm is identical in 4.8.1 and
-5.x):
+(`modules/imgproc/src/templmatch.cpp`). Verified by diffing the C++ sources
+directly: **4.8.1 → 4.12.0** changes only error-constant naming, an
+expression refactor in the *masked* path (not this pipeline — an empty mask
+takes the unmasked path replicated here) and an IPP enum cosmetic;
+**4.12.0 → 5.x** only removes the legacy C-API `cvMatchTemplate` shim. The
+unmasked TM_CCOEFF_NORMED pipeline is byte-identical across 4.8.1, 4.12.0
+and 5.x:
 
 1. `crossCorr()` — cross-correlation computed with block-based DFT
    (overlap-save tiling, `blockScale = 4.5`, `minBlockSize = 256`, template
@@ -531,10 +533,11 @@ OpenCV pipeline that cv2/gocv ship:
 - `cvmatch.go` — public API and zero-copy image conversion.
 - `scenes/` — deterministic benchmark scenes shared by the main module's
   cgo-vs-pure-Go benchmarks and the cv2 comparison in `bench/`.
-- `bench/` — separate module holding the `hkloudou/cv2` comparison (UI +
-  noise + photo scenario builders, benchmarks, element-wise parity tests,
-  `memprobe` peak-RSS tool, binary-size probes) so the root module stays
-  dependency-free.
+- `bench/` — separate module holding the native-C++ comparison
+  (element-wise parity test, `memprobe` peak-RSS tool, binary-size probe)
+  so the root module stays dependency-free. Through v1.2.x it also carried
+  the `hkloudou/cv2` Go-wrapper comparison, retired after settling that the
+  wrapper adds only ~0-4% over native C++.
 - `bench/cpp/` — native OpenCV C++ benchmark linked against the same static
   libraries that cv2 bundles (`build.sh` fetches matching headers;
   `cmd/dumpscenes` exports byte-identical scene images).
