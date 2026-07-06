@@ -219,20 +219,23 @@ func TestConstantAlphaSkip(t *testing.T) {
 	rng := rand.New(rand.NewSource(21))
 	iw, ih, tw, th := 120, 90, 24, 18
 	img, tpl := randPix(iw*ih*4, rng), randPix(tw*th*4, rng)
-	for i := 3; i < len(img); i += 4 {
-		img[i] = 200 // constant, but different from the template's
-	}
-	for i := 3; i < len(tpl); i += 4 {
-		tpl[i] = 55
-	}
 	rw, rh := iw-tw+1, ih-th+1
-	got3 := make([]float32, rw*rh)
-	got4 := make([]float32, rw*rh)
-	matchU8(img, iw*4, iw, ih, tpl, tw*4, tw, th, 3, 4, 4, got3)
-	matchU8(img, iw*4, iw, ih, tpl, tw*4, tw, th, 4, 4, 4, got4)
-	for i := range got3 {
-		if d := math.Abs(float64(got3[i]) - float64(got4[i])); d > 1e-5 {
-			t.Fatalf("cn=3 vs cn=4 mismatch at %d: %v vs %v", i, got3[i], got4[i])
+	// different constants per image, including the 0/255 extremes
+	for _, pair := range [][2]uint8{{200, 55}, {0, 255}, {255, 0}, {128, 128}} {
+		for i := 3; i < len(img); i += 4 {
+			img[i] = pair[0]
+		}
+		for i := 3; i < len(tpl); i += 4 {
+			tpl[i] = pair[1]
+		}
+		got3 := make([]float32, rw*rh)
+		got4 := make([]float32, rw*rh)
+		matchU8(img, iw*4, iw, ih, tpl, tw*4, tw, th, 3, 4, 4, got3)
+		matchU8(img, iw*4, iw, ih, tpl, tw*4, tw, th, 4, 4, 4, got4)
+		for i := range got3 {
+			if d := math.Abs(float64(got3[i]) - float64(got4[i])); d > 1e-5 {
+				t.Fatalf("alpha=%v: cn=3 vs cn=4 mismatch at %d: %v vs %v", pair, i, got3[i], got4[i])
+			}
 		}
 	}
 }
@@ -257,6 +260,60 @@ func TestVaryingAlpha(t *testing.T) {
 	for i := range want {
 		if d := math.Abs(float64(got[i]) - want[i]); d > 1e-4 {
 			t.Fatalf("varying-alpha mismatch at %d: %v vs %v", i, got[i], want[i])
+		}
+	}
+}
+
+// TestAlphaMatters proves processing alpha is not decorative: on images
+// whose alpha plane varies, dropping the channel (cn=3) produces a
+// materially different response map than the full 4-channel computation
+// OpenCV performs — which is exactly why Match only skips alpha when it is
+// provably a zero contributor.
+func TestAlphaMatters(t *testing.T) {
+	rng := rand.New(rand.NewSource(91))
+	iw, ih, tw, th := 160, 120, 32, 24
+	img, tpl := randPix(iw*ih*4, rng), randPix(tw*th*4, rng)
+	rw, rh := iw-tw+1, ih-th+1
+	got3 := make([]float32, rw*rh)
+	got4 := make([]float32, rw*rh)
+	matchU8(img, iw*4, iw, ih, tpl, tw*4, tw, th, 3, 4, 2, got3)
+	matchU8(img, iw*4, iw, ih, tpl, tw*4, tw, th, 4, 4, 2, got4)
+	worst := 0.0
+	for i := range got3 {
+		if d := math.Abs(float64(got3[i]) - float64(got4[i])); d > worst {
+			worst = d
+		}
+	}
+	if worst < 1e-3 {
+		t.Fatalf("varying alpha should change the map; cn=3 vs cn=4 worst diff only %g", worst)
+	}
+}
+
+// TestAlphaMixedConstancy: the skip must not trigger when only ONE image has
+// a constant alpha plane; Match must equal the full 4-channel reference.
+func TestAlphaMixedConstancy(t *testing.T) {
+	rng := rand.New(rand.NewSource(92))
+	parent := image.NewRGBA(image.Rect(0, 0, 120, 90))
+	copy(parent.Pix, randPix(len(parent.Pix), rng)) // varying alpha
+	sub := image.NewRGBA(image.Rect(0, 0, 24, 18))
+	for y := 0; y < 18; y++ {
+		copy(sub.Pix[y*sub.Stride:y*sub.Stride+24*4], parent.Pix[(40+y)*parent.Stride+60*4:])
+	}
+	for i := 3; i < len(sub.Pix); i += 4 {
+		sub.Pix[i] = 128 // sub constant, parent varying -> full path required
+	}
+	_, _, _, maxV, maxX, maxY := Match(parent, sub)
+	want := refMatch(parent.Pix, parent.Stride, 120, 90, sub.Pix, sub.Stride, 24, 18, 4, 4)
+	got := make([]float32, len(want))
+	gMinV, _, _, gMaxV, gMaxX, gMaxY := matchU8(parent.Pix, parent.Stride, 120, 90, sub.Pix, sub.Stride, 24, 18, 4, 4, 2, got)
+	_ = gMinV
+	if maxV != gMaxV || maxX != gMaxX || maxY != gMaxY {
+		t.Fatalf("Match took the skip despite mixed alpha constancy: (%d,%d) %v vs cn4 (%d,%d) %v",
+			maxX, maxY, maxV, gMaxX, gMaxY, gMaxV)
+	}
+	for i := range want {
+		if d := math.Abs(float64(got[i]) - want[i]); d > 1e-4 {
+			t.Fatalf("mixed-constancy map deviates from 4-channel reference at %d: %v vs %v", i, got[i], want[i])
 		}
 	}
 }
