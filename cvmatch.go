@@ -103,10 +103,10 @@ func MatchGray(parent, sub image.Image) (float32, int, int, float32, int, int) {
 	sPix, sStride, sw, sh, sOwned := toGray(sub)
 	r1, r2, r3, r4, r5, r6 := matchU8(pPix, pStride, pw, ph, sPix, sStride, sw, sh, 1, 1, threads(), nil)
 	if pOwned {
-		putBytes(pPix)
+		bytePool.put(pPix)
 	}
 	if sOwned {
-		putBytes(sPix)
+		bytePool.put(sPix)
 	}
 	return r1, r2, r3, r4, r5, r6
 }
@@ -177,7 +177,7 @@ func toGray(img image.Image) (pix []uint8, stride, w, h int, owned bool) {
 // fixed-point coefficients: (4899*R + 9617*G + 1868*B + 8192) >> 14.
 // Integer arithmetic — the result is exact regardless of evaluation order.
 func rgbToGray(pix []uint8, stride, w, h int) []uint8 {
-	out := getBytes(w * h)
+	out := bytePool.get(w * h)
 	for y := 0; y < h; y++ {
 		src := pix[y*stride : y*stride+w*4]
 		dst := out[y*w : y*w+w]
