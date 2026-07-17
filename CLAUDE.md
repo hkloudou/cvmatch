@@ -136,6 +136,6 @@ orange family = MatchGray; solid = SIMD build, light = default).
   cores existed remain the bit-identity anchor, alongside the native
   OpenCV parity jobs in `bench/`.
 - Phase 4 made the assembly a global opt-in switch (`-tags cvmatch_asm`):
-  the default build is pure high-level Go (the safe mode, ~3-4x slower),
-  and the benchmark comparison became five-way (native + both builds on
-  both architectures).
+  the default build is pure high-level Go (the safe mode; the kernels
+  measure ~4-5x on amd64, ~2.5x on arm64), and the benchmark comparison
+  became five-way (native + both builds on both architectures).
