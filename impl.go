@@ -200,6 +200,25 @@ func bfly(p, q *complex64, wr, wi float32) {
 	*q = complex(real(u)-vr, imag(u)-vi)
 }
 
+// bflyV is bfly by value — identical op sequence, but operands stay in
+// registers so fused stage pairs can chain butterflies without a memory
+// round trip between layers.
+func bflyV(u, q complex64, wr, wi float32) (complex64, complex64) {
+	vr := float32(real(q)*wr) - float32(imag(q)*wi)
+	vi := float32(real(q)*wi) + float32(imag(q)*wr)
+	return complex(real(u)+vr, imag(u)+vi), complex(real(u)-vr, imag(u)-vi)
+}
+
+// twdir returns w's components with the inverse-direction sign applied to
+// the imaginary part. Multiplying by ±1 is an exact sign operation, so
+// this replaces the former per-butterfly s*imag multiply bit-identically.
+func twdir(w complex64, inverse bool) (float32, float32) {
+	if inverse {
+		return real(w), -imag(w)
+	}
+	return real(w), imag(w)
+}
+
 func fftGo(a []complex64, tw []complex64, pairs []int32, inverse bool) {
 	n := len(a)
 	for k := 0; k+1 < len(pairs); k += 2 {
@@ -210,36 +229,56 @@ func fftGo(a []complex64, tw []complex64, pairs []int32, inverse bool) {
 		simd.FFTStages(a, tw, inverse)
 		return
 	}
-	s := float32(1)
-	if inverse {
-		s = -1
-	}
-	// The half=1 and half=2 stages are flattened into single loops with the
-	// (tiny) twiddle sets hoisted; each element still sees exactly the
-	// arithmetic of the generic stage loop, so results are bit-identical.
-	if n >= 2 {
-		w0r, w0i := real(tw[1]), s*imag(tw[1])
-		for i := 0; i < n; i += 2 {
-			p := a[i : i+2 : i+2]
-			bfly(&p[0], &p[1], w0r, w0i)
-		}
-	}
+	// The half=1,2 stages are fused into one quad pass (both layers of a
+	// closed 4-element group chain in registers), and the remaining
+	// cascade fuses stage pairs the same way — exactly the structure of
+	// the asm kernels. Each element still sees exactly the arithmetic of
+	// the generic stage loop, so results are bit-identical.
 	if n >= 4 {
-		w0r, w0i := real(tw[2]), s*imag(tw[2])
-		w1r, w1i := real(tw[3]), s*imag(tw[3])
+		w1r, w1i := twdir(tw[1], inverse)
+		w2ar, w2ai := twdir(tw[2], inverse)
+		w2br, w2bi := twdir(tw[3], inverse)
 		for i := 0; i < n; i += 4 {
 			p := a[i : i+4 : i+4]
-			bfly(&p[0], &p[2], w0r, w0i)
-			bfly(&p[1], &p[3], w1r, w1i)
+			x0, x1 := bflyV(p[0], p[1], w1r, w1i)
+			x2, x3 := bflyV(p[2], p[3], w1r, w1i)
+			x0, x2 = bflyV(x0, x2, w2ar, w2ai)
+			x1, x3 = bflyV(x1, x3, w2br, w2bi)
+			p[0], p[1], p[2], p[3] = x0, x1, x2, x3
+		}
+	} else if n == 2 {
+		w0r, w0i := twdir(tw[1], inverse)
+		bfly(&a[0], &a[1], w0r, w0i)
+	}
+	half := 4
+	for ; half*2 < n; half *= 4 {
+		for i := 0; i < n; i += half * 4 {
+			for j := 0; j < half; j++ {
+				w1r, w1i := twdir(tw[half+j], inverse)
+				w2ar, w2ai := twdir(tw[2*half+j], inverse)
+				w2br, w2bi := twdir(tw[3*half+j], inverse)
+				p := a[i+j : i+j+3*half+1 : i+j+3*half+1]
+				x0, x1 := bflyV(p[0], p[half], w1r, w1i)
+				x2, x3 := bflyV(p[2*half], p[3*half], w1r, w1i)
+				x0, x2 = bflyV(x0, x2, w2ar, w2ai)
+				x1, x3 = bflyV(x1, x3, w2br, w2bi)
+				p[0], p[half], p[2*half], p[3*half] = x0, x1, x2, x3
+			}
 		}
 	}
-	for half := 4; half < n; half <<= 1 {
+	for ; half < n; half <<= 1 {
 		w := tw[half : half*2]
 		for i := 0; i < n; i += half << 1 {
 			p := a[i : i+half : i+half]
 			q := a[i+half : i+half*2 : i+half*2]
-			for j := 0; j < half; j++ {
-				bfly(&p[j], &q[j], real(w[j]), s*imag(w[j]))
+			if inverse {
+				for j := 0; j < half; j++ {
+					bfly(&p[j], &q[j], real(w[j]), -imag(w[j]))
+				}
+			} else {
+				for j := 0; j < half; j++ {
+					bfly(&p[j], &q[j], real(w[j]), imag(w[j]))
+				}
 			}
 		}
 	}
@@ -256,29 +295,34 @@ func fftColsGo(d []complex64, n, width int, tw []complex64, pairs []int32, inver
 		copy(ri, rj)
 		copy(rj, tmp[:width])
 	}
-	s := float32(1)
-	if inverse {
-		s = -1
-	}
+	// Fused stage pairs: rows {i+j, +half, +2half, +3half} are closed
+	// under stages half and 2*half, so each pass streams the matrix once
+	// instead of twice. Butterfly order within a quad follows the stage
+	// order, so results are bit-identical — in the kernels and in the
+	// register-chained scalar loop alike.
 	half := 1
-	if simd.Enabled {
-		// Fused stage pairs: rows {i+j, +half, +2half, +3half} are closed
-		// under stages half and 2*half, so each pass streams the matrix
-		// once instead of twice. Butterfly order within a quad follows the
-		// stage order, so results are bit-identical.
-		for ; half*2 < n; half *= 4 {
-			for i := 0; i < n; i += half * 4 {
-				for j := 0; j < half; j++ {
-					w1 := complex(real(tw[half+j]), s*imag(tw[half+j]))
-					w2a := complex(real(tw[2*half+j]), s*imag(tw[2*half+j]))
-					w2b := complex(real(tw[3*half+j]), s*imag(tw[3*half+j]))
-					r := i + j
-					simd.FFTCols4(
-						d[r*width:r*width+width],
-						d[(r+half)*width:(r+half)*width+width],
-						d[(r+half*2)*width:(r+half*2)*width+width],
-						d[(r+half*3)*width:(r+half*3)*width+width],
-						w1, w2a, w2b)
+	for ; half*2 < n; half *= 4 {
+		for i := 0; i < n; i += half * 4 {
+			for j := 0; j < half; j++ {
+				w1r, w1i := twdir(tw[half+j], inverse)
+				w2ar, w2ai := twdir(tw[2*half+j], inverse)
+				w2br, w2bi := twdir(tw[3*half+j], inverse)
+				r := i + j
+				p0 := d[r*width : r*width+width]
+				p1 := d[(r+half)*width : (r+half)*width+width]
+				p2 := d[(r+half*2)*width : (r+half*2)*width+width]
+				p3 := d[(r+half*3)*width : (r+half*3)*width+width]
+				if simd.Enabled {
+					simd.FFTCols4(p0, p1, p2, p3,
+						complex(w1r, w1i), complex(w2ar, w2ai), complex(w2br, w2bi))
+					continue
+				}
+				for c := range p0 {
+					x0, x1 := bflyV(p0[c], p1[c], w1r, w1i)
+					x2, x3 := bflyV(p2[c], p3[c], w1r, w1i)
+					x0, x2 = bflyV(x0, x2, w2ar, w2ai)
+					x1, x3 = bflyV(x1, x3, w2br, w2bi)
+					p0[c], p1[c], p2[c], p3[c] = x0, x1, x2, x3
 				}
 			}
 		}
@@ -286,7 +330,7 @@ func fftColsGo(d []complex64, n, width int, tw []complex64, pairs []int32, inver
 	for ; half < n; half <<= 1 {
 		for i := 0; i < n; i += half << 1 {
 			for j := 0; j < half; j++ {
-				wr, wi := real(tw[half+j]), s*imag(tw[half+j])
+				wr, wi := twdir(tw[half+j], inverse)
 				p := d[(i+j)*width : (i+j)*width+width]
 				q := d[(i+j+half)*width : (i+j+half)*width+width]
 				if simd.Enabled {
