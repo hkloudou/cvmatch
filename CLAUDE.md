@@ -60,8 +60,8 @@ Any transformation is legal only if it provably preserves every output bit:
 - **amd64**: hand-written AVX2 in `simd_amd64.s` (runtime-detected;
   Plan9 syntax, `NOSPLIT`, `VZEROUPPER` on every exit).
 - **arm64**: Go's assembler has no un-fused vector FP ops, so bodies are
-  written as annotated ARM64 assembly in `_gen/kernels.S` and spliced into
-  `simd_arm64.s` as WORD streams by `_gen/gen.py` (clang cross-assembles;
+  written as annotated ARM64 assembly in `_gen/kernels_*.S` and spliced
+  into `simd_arm64.s` as WORD streams by `_gen/gen.py` (clang cross-assembles;
   relocation-free constants only; registers x0-x15/v0-v31, no stack; each
   body ends in a single `ret`). Regenerate with `go generate ./internal/simd`;
   CI diffs the regenerated stream, so never edit `simd_arm64.s` by hand.
