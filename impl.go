@@ -627,7 +627,13 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 	// row-pair and elementwise phases inside each block. Pure scheduling of
 	// disjoint work: per-element arithmetic and channel order are unchanged,
 	// so output stays bit-identical for every (threads, ntiles) combination.
+	// Tiny blocks cannot amortize the per-pass fan-out (a 20x20 match
+	// regressed ~3x when it fanned out unconditionally — codex finding on
+	// PR #13), so the team only engages when the spectrum carries real work.
 	team := threads / nw
+	if specN < 1<<16 {
+		team = 1
+	}
 	runParallel(nw, func(w int) {
 		spec := cplxPool.get(specN)
 		z := cplxPool.get(p.dftW)
