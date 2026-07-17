@@ -1,4 +1,10 @@
+//go:build cvmatch_asm
+
 package cvmatch
+
+// Kernel-only tests: they exercise the assembly directly (and toggle
+// simd.Enabled, which is a constant in default builds), so the whole file
+// rides the cvmatch_asm tag.
 
 import (
 	"math"

@@ -4,9 +4,14 @@
 Inputs (any subset; missing values are carried over from the existing
 benchdata.json so partial re-measurements stay coherent per field):
 
-  --go FILE       `go test -bench . -benchtime 5x -cpu 1,4` output
-  --go-arm64 FILE the same run from an arm64 machine (keys gain an
-                  'A' suffix: matchA1, grayA4, ...)
+  --asm FILE      `go test -tags cvmatch_asm -bench . -benchtime 5x -cpu 1,4`
+                  output (SIMD build; keys asm1/asm4 for Match,
+                  agray1/agray4 for MatchGray)
+  --go FILE       the same run of the default build — pure Go, no
+                  assembly (keys go1/go4, gray1/gray4)
+  --asm-arm64 / --go-arm64 FILE
+                  the same two runs from an arm64 machine (keys gain an
+                  'A' suffix: asmA1, goA4, grayA4, ...)
   --native FILE   `bench/cpp/native_bench cpp/scenes N` output
   --mem FILE      concatenated `memprobe -impl {baseline,cvmatch,gray}` lines
   --native-mem KB peak RSS (VmHWM kB) of native_bench on the 1080p/128 scene
@@ -25,8 +30,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Everything genchart.py reads; carried-over keys outside this vocabulary
 # (e.g. from retired implementations) are pruned on every run.
-SCENE_KEYS = {"native", "match1", "match4", "gray1", "gray4",
-              "matchA1", "matchA4", "grayA1", "grayA4"}
+SCENE_KEYS = {"native",
+              "asm1", "asm4", "go1", "go4", "agray1", "agray4", "gray1", "gray4",
+              "asmA1", "asmA4", "goA1", "goA4",
+              "agrayA1", "agrayA4", "grayA1", "grayA4"}
 MEM_KEYS = {"native", "match", "gray", "baseline"}
 
 
@@ -68,7 +75,9 @@ def parse_mem(path):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--asm")
     ap.add_argument("--go")
+    ap.add_argument("--asm-arm64")
     ap.add_argument("--go-arm64")
     ap.add_argument("--native")
     ap.add_argument("--mem")
@@ -88,18 +97,22 @@ def main():
         data["hostArm64"] = args.host_arm64
     scenes = data.setdefault("scenes", {})
 
-    def put_go(path, suffix):
+    def put_go(path, match_key, gray_key, suffix):
         for (kind, scene, cpus), ms in parse_go_bench(path).items():
-            key = ("match" if kind == "Match" else "gray") + suffix + str(cpus)
+            key = (match_key if kind == "Match" else gray_key) + suffix + str(cpus)
             scenes.setdefault(scene, {})[key] = round(ms, 1)
 
     if args.native:
         for scene, ms in parse_native(args.native).items():
             scenes.setdefault(scene, {})["native"] = round(ms, 1)
+    if args.asm:
+        put_go(args.asm, "asm", "agray", "")
     if args.go:
-        put_go(args.go, "")
+        put_go(args.go, "go", "gray", "")
+    if args.asm_arm64:
+        put_go(args.asm_arm64, "asm", "agray", "A")
     if args.go_arm64:
-        put_go(args.go_arm64, "A")
+        put_go(args.go_arm64, "go", "gray", "A")
     if args.mem:
         mem = parse_mem(args.mem)
         for k_src, k_dst in (("baseline", "baseline"), ("cvmatch", "match"), ("gray", "gray")):

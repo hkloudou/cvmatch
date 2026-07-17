@@ -1,10 +1,10 @@
 name: Bench charts
 
-# Re-measures native OpenCV C++ and the cvmatch library (amd64 + arm64) in
-# one session on every push to main, regenerates docs/benchdata.json + the
-# README SVG charts + the measured-matrix table (docs/collect.py ->
-# docs/genchart.py), and commits the refresh with [skip ci] so no workflows
-# re-trigger.
+# Re-measures native OpenCV C++ and cvmatch — both build modes (default
+# pure Go and -tags cvmatch_asm) on both architectures — in one session on
+# every push to main, regenerates docs/benchdata.json + the README SVG
+# charts + the measured-matrix table (docs/collect.py -> docs/genchart.py),
+# and commits the refresh with [skip ci] so no workflows re-trigger.
 
 on:
   workflow_dispatch:
@@ -32,9 +32,10 @@ jobs:
           cache: false
       - name: Fetch real sample images (OpenCV samples/data)
         run: bench/testdata/fetch.sh
-      - name: Measure cvmatch on arm64 (-cpu 1,4)
+      - name: Measure cvmatch on arm64 (-cpu 1,4, both builds)
         run: |
           mkdir -p /tmp/arm64
+          go test -tags cvmatch_asm -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m | tee /tmp/arm64/asm.txt
           go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m | tee /tmp/arm64/go.txt
           CPU=$(lscpu | awk -F': +' '/Model name/{print $2; exit}')
           echo "GitHub Actions ubuntu-24.04-arm ($(nproc)-vCPU ${CPU:-arm64}, linux/arm64)" > /tmp/arm64/host.txt
@@ -82,8 +83,10 @@ jobs:
           cpp/native_bench /tmp/mem1 1 mem | tee /tmp/native-mem.txt
           grep -o 'peakHWM=[0-9]*' /tmp/native-mem.txt | grep -o '[0-9]*' > /tmp/native-hwm.txt
           cat /tmp/native-hwm.txt
-      - name: Measure cvmatch (-cpu 1,4)
-        run: go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m | tee /tmp/gobench.txt
+      - name: Measure cvmatch (-cpu 1,4, both builds)
+        run: |
+          go test -tags cvmatch_asm -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m | tee /tmp/gobench-asm.txt
+          go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m | tee /tmp/gobench.txt
       - name: Measure peak RSS (memprobe, fresh process per implementation)
         working-directory: bench
         run: |
@@ -95,7 +98,8 @@ jobs:
           HOST="GitHub Actions ubuntu-latest ($(nproc)-vCPU ${CPU}, linux/amd64)"
           NATMEM=$(cat /tmp/native-hwm.txt)
           python3 docs/collect.py \
-            --go /tmp/gobench.txt --go-arm64 /tmp/arm64/go.txt \
+            --asm /tmp/gobench-asm.txt --go /tmp/gobench.txt \
+            --asm-arm64 /tmp/arm64/asm.txt --go-arm64 /tmp/arm64/go.txt \
             --native /tmp/native.txt --mem /tmp/memprobe.txt \
             ${NATMEM:+--native-mem "$NATMEM"} \
             --host "$HOST" --host-arm64 "$(cat /tmp/arm64/host.txt)"

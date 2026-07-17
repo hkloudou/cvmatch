@@ -1,4 +1,4 @@
-//go:build gc
+//go:build gc && cvmatch_asm
 
 #include "textflag.h"
 

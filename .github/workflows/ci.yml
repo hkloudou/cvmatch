@@ -16,17 +16,23 @@ jobs:
         with:
           go-version: "1.24"
           cache: false
-      - name: Unit tests (float64 reference, golden output anchors, SIMD-vs-scalar parity)
+      - name: Unit tests — default build (pure Go, golden output anchors)
         run: go test -v ./...
-      - name: Race detector (concurrent use + parallel workers)
-        run: go test -race ./...
-      - name: Vet
-        run: go vet ./... && cd bench && go vet ./...
-      - name: Cross-compile smoke (pure Go, no C toolchain anywhere)
+      - name: Unit tests — SIMD build (-tags cvmatch_asm, AVX2 kernels + asm-vs-scalar parity)
+        run: go test -tags cvmatch_asm -v ./...
+      - name: Race detector (both builds)
+        run: |
+          go test -race ./...
+          go test -tags cvmatch_asm -race ./...
+      - name: Vet (both builds)
+        run: |
+          go vet ./... && go vet -tags cvmatch_asm ./...
+          cd bench && go vet ./...
+      - name: Cross-compile smoke (no C toolchain anywhere)
         run: |
           GOOS=windows GOARCH=amd64 go build ./...
-          GOOS=darwin GOARCH=arm64 go build ./...
-          GOOS=linux GOARCH=arm64 go build ./...
+          GOOS=darwin GOARCH=arm64 go build -tags cvmatch_asm ./...
+          GOOS=linux GOARCH=arm64 go build -tags cvmatch_asm ./...
           GOOS=linux GOARCH=riscv64 go build ./...
 
   test-arm64:
@@ -43,14 +49,26 @@ jobs:
         run: |
           python3 internal/simd/_gen/gen.py
           git diff --exit-code internal/simd/simd_arm64.s
-      - name: Unit tests (NEON kernels on real hardware, golden output anchors)
+      - name: Unit tests — default build (pure Go, golden output anchors)
         run: go test -v ./...
-      - name: Race detector
-        run: go test -race ./...
-      - name: cvmatch matrix — arm64 NEON, 1 and 4 threads
+      - name: Unit tests — SIMD build (NEON kernels on real hardware)
+        run: go test -tags cvmatch_asm -v ./...
+      - name: Race detector (both builds)
+        run: |
+          go test -race ./...
+          go test -tags cvmatch_asm -race ./...
+      - name: cvmatch matrix — arm64 NEON (-tags cvmatch_asm), 1 and 4 threads
         run: |
           {
-            echo "### arm64 (NEON), -cpu 1,4"
+            echo "### arm64 SIMD build (NEON, -tags cvmatch_asm), -cpu 1,4"
+            echo '```'
+            go test -tags cvmatch_asm -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: cvmatch matrix — arm64 default build (pure Go), 1 and 4 threads
+        run: |
+          {
+            echo "### arm64 default build (pure Go), -cpu 1,4"
             echo '```'
             go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m
             echo '```'
@@ -72,7 +90,7 @@ jobs:
         run: |
           go build -o bin/memprobe ./cmd/memprobe
           {
-            echo "### Peak memory (1080p / 128px match)"
+            echo "### Peak memory (1080p / 128px match, default build)"
             echo '```'
             for impl in baseline cvmatch gray; do ./bin/memprobe -impl "$impl"; done
             echo '```'
@@ -88,13 +106,24 @@ jobs:
             cpp/native_bench cpp/scenes 5 dump
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Match + MatchMap parity vs native C++
+      - name: Match + MatchMap parity vs native C++ (default build)
         working-directory: bench
         run: go test -v -run 'TestFullMapParityWithNativeCpp|TestNativeValues' | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: cvmatch matrix — 1 and 4 threads
+      - name: Match + MatchMap parity vs native C++ (SIMD build)
+        working-directory: bench
+        run: go test -tags cvmatch_asm -v -run 'TestFullMapParityWithNativeCpp|TestNativeValues' | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: cvmatch matrix — SIMD build (-tags cvmatch_asm), 1 and 4 threads
         run: |
           {
-            echo "### cvmatch, -cpu 1,4"
+            echo "### cvmatch SIMD build (-tags cvmatch_asm), -cpu 1,4"
+            echo '```'
+            go test -tags cvmatch_asm -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: cvmatch matrix — default build (pure Go), 1 and 4 threads
+        run: |
+          {
+            echo "### cvmatch default build (pure Go), -cpu 1,4"
             echo '```'
             go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m
             echo '```'

@@ -37,6 +37,11 @@ Any transformation is legal only if it provably preserves every output bit:
 
 ## SIMD kernel workflow (`internal/simd`)
 
+- The kernels are **opt-in**: they compile only under `-tags cvmatch_asm`
+  (on amd64/arm64 + gc). The default build is 100% high-level Go — the
+  safe mode — with `simd.Enabled` a constant false so every kernel call
+  site dead-code-eliminates. The SIMD build is worth ~3-4x end to end;
+  both modes must stay bit-identical and both run in CI on both arches.
 - Shared, arch-independent contracts live in `simd_kernels.go`; every
   kernel's doc comment states its exactness argument and bounds contract.
 - **amd64**: hand-written AVX2 in `simd_amd64.s` (runtime-detected;
@@ -57,12 +62,15 @@ Any transformation is legal only if it provably preserves every output bit:
 ## Validation gates (run all before pushing kernel/core changes)
 
 ```sh
-go vet ./... && (cd bench && go vet ./...)
-go test -count=1 .                    # includes the golden-output anchors
-go test -race -count=1 .
-GOOS=linux GOARCH=arm64 go test -c -o /tmp/t.arm64 . \
-  && qemu-aarch64-static /tmp/t.arm64      # full suite under emulation
-# TestGoldenOutputs passing on both architectures IS the cross-arch
+go vet ./... && go vet -tags cvmatch_asm ./... && (cd bench && go vet ./...)
+go test -count=1 .                    # default build (golden anchors, scalar)
+go test -tags cvmatch_asm -count=1 .  # SIMD build (kernels + asm-vs-scalar parity)
+go test -race -count=1 . && go test -tags cvmatch_asm -race -count=1 .
+GOOS=linux GOARCH=arm64 go test -tags cvmatch_asm -c -o /tmp/t.arm64 . \
+  && qemu-aarch64-static /tmp/t.arm64      # NEON suite under emulation
+GOOS=linux GOARCH=arm64 go test -c -o /tmp/tg.arm64 . \
+  && qemu-aarch64-static /tmp/tg.arm64     # arm64 default build too
+# TestGoldenOutputs passing on both architectures in both modes IS the
 # bit-identity proof (the constants pin every output bit)
 for t in linux/386 linux/riscv64 windows/amd64 wasip1/wasm darwin/arm64; do
   GOOS=${t%/*} GOARCH=${t#*/} go build ./...; done
@@ -107,9 +115,13 @@ element-wise against a native OpenCV C++ binary.
 `bench-charts.yml` (push to main): a `bench-arm64` job uploads raw
 benchmark output as an artifact; the `charts` job measures amd64 + native
 OpenCV, then `docs/collect.py` merges everything into `docs/benchdata.json`
-(arm64 keys carry an `A` suffix) and `docs/genchart.py` renders the SVGs
-and rewrites the README between the `benchmatrix` markers. Keep chart
-series colors meaning-stable across all charts.
+and `docs/genchart.py` renders the SVGs and rewrites the README between
+the `benchmatrix` markers. The comparison is five-way: native OpenCV,
+then {amd64, arm64} × {SIMD build, default build}, each with Match and
+MatchGray. Keys: `asm*`/`agray*` = `-tags cvmatch_asm`, `go*`/`gray*` =
+default build, `A` suffix = arm64. Keep chart series colors
+meaning-stable across all charts (green = native, blue family = Match,
+orange family = MatchGray; solid = SIMD build, light = default).
 
 ## History (context for future work)
 
@@ -122,3 +134,7 @@ series colors meaning-stable across all charts.
   on both architectures); the golden-output tests recorded while both
   cores existed remain the bit-identity anchor, alongside the native
   OpenCV parity jobs in `bench/`.
+- Phase 4 made the assembly a global opt-in switch (`-tags cvmatch_asm`):
+  the default build is pure high-level Go (the safe mode, ~3-4x slower),
+  and the benchmark comparison became five-way (native + both builds on
+  both architectures).

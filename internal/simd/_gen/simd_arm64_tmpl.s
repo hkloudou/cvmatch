@@ -1,8 +1,8 @@
-//go:build gc
+//go:build gc && cvmatch_asm
 
 #include "textflag.h"
 
-// NEON kernels for the pure-Go core on arm64 — the twins of the AVX2
+// NEON kernels for arm64 — the twins of the AVX2
 // kernels in simd_amd64.s, bit-identical to the generic Go loops (see
 // kernels.S in this directory for the annotated source). Go's assembler
 // has no un-fused vector FP arithmetic, so each body below is a generated
