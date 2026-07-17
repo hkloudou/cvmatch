@@ -10,7 +10,9 @@ package cvmatch
 import (
 	"fmt"
 	"math"
+	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/hkloudou/cvmatch/internal/simd"
 )
@@ -609,17 +611,34 @@ func blockInverseEmitGo(p *goPlan, spec, z []complex64, res []float32, rw, x0, y
 // arithmetic is identical for any worker count.
 func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, th, rw, rh, threads int, p *goPlan, result []float32) {
 	specN := p.dftH * p.hw
+	// Tiny blocks cannot amortize a per-pass fan-out (a 20x20 match
+	// regressed ~3x when it fanned out unconditionally — codex finding on
+	// PR #13), so team parallelism only engages when the spectrum carries
+	// real work.
+	teamOK := specN >= 1<<16
 	tspec := cplxPool.get(cn * specN)
-	z0 := cplxPool.get(p.dftW)
-	scale := 1 / (float32(p.dftW) * float32(p.dftH))
-	for k := 0; k < cn; k++ {
-		ts := tspec[k*specN : (k+1)*specN]
-		blockForwardGo(tpl[k:], tstride, step, 0, 0, tw, th, p, ts, z0, 1)
-		for i := range ts {
-			ts[i] = complex(real(ts[i])*scale, imag(ts[i])*scale)
-		}
+	// Template spectra: the channels are disjoint, and within one channel
+	// the team path and the chunked scale partition elementwise work — all
+	// pure scheduling, per-element arithmetic unchanged.
+	tcw := min(threads, cn)
+	tteam := 1
+	if teamOK {
+		tteam = threads / tcw
 	}
-	cplxPool.put(z0)
+	runParallel(tcw, func(w int) {
+		z := cplxPool.get(p.dftW)
+		defer cplxPool.put(z)
+		scale := 1 / (float32(p.dftW) * float32(p.dftH))
+		for k := w; k < cn; k += tcw {
+			ts := tspec[k*specN : (k+1)*specN]
+			blockForwardGo(tpl[k:], tstride, step, 0, 0, tw, th, p, ts, z, tteam)
+			runParallel(tteam, func(u int) {
+				for i := u * specN / tteam; i < (u+1)*specN/tteam; i++ {
+					ts[i] = complex(real(ts[i])*scale, imag(ts[i])*scale)
+				}
+			})
+		}
+	})
 	ntx := (rw + p.blockW - 1) / p.blockW
 	nty := (rh + p.blockH - 1) / p.blockH
 	ntiles := ntx * nty
@@ -632,17 +651,36 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 	// row-pair and elementwise phases inside each block. Pure scheduling of
 	// disjoint work: per-element arithmetic and channel order are unchanged,
 	// so output stays bit-identical for every (threads, ntiles) combination.
-	// Tiny blocks cannot amortize the per-pass fan-out (a 20x20 match
-	// regressed ~3x when it fanned out unconditionally — codex finding on
-	// PR #13), so the team only engages when the spectrum carries real work.
-	team := threads / nw
-	if specN < 1<<16 {
-		team = 1
+	team := 1
+	if teamOK {
+		team = threads / nw
 	}
+	// Tiles are claimed from a shared queue, longest first (ragged edge
+	// tiles load less data), so no worker sits on a full tile while the
+	// rest idle out — tiles own disjoint result regions, so claim order
+	// cannot affect output.
+	order := i32Pool.get(ntiles)
+	for t := range order {
+		order[t] = int32(t)
+	}
+	if nw > 1 {
+		sort.SliceStable(order, func(a, b int) bool {
+			ta, tb := int(order[a]), int(order[b])
+			ca := int64(min(p.blockW, rw-(ta%ntx)*p.blockW)+tw-1) * int64(min(p.blockH, rh-(ta/ntx)*p.blockH)+th-1)
+			cb := int64(min(p.blockW, rw-(tb%ntx)*p.blockW)+tw-1) * int64(min(p.blockH, rh-(tb/ntx)*p.blockH)+th-1)
+			return ca > cb
+		})
+	}
+	var next atomic.Int64
 	runParallel(nw, func(w int) {
 		spec := cplxPool.get(specN)
 		z := cplxPool.get(p.dftW)
-		for t := w; t < ntiles; t += nw {
+		for {
+			ti := next.Add(1) - 1
+			if ti >= int64(ntiles) {
+				break
+			}
+			t := int(order[ti])
 			x0, y0 := (t%ntx)*p.blockW, (t/ntx)*p.blockH
 			bw, bh := min(p.blockW, rw-x0), min(p.blockH, rh-y0)
 			for k := 0; k < cn; k++ {
@@ -663,6 +701,7 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 		cplxPool.put(spec)
 		cplxPool.put(z)
 	})
+	i32Pool.put(order)
 	cplxPool.put(tspec)
 }
 
@@ -686,6 +725,9 @@ func colBuildGo(colSum []int32, colSum2 []int64, img []uint8, istride, iw, cn, c
 	for i := range colSum2 {
 		colSum2[i] = 0
 	}
+	// (A build-as-slide-from-zero-row variant was measured: it deletes the
+	// switch below but costs ~2x integer work per built row and showed +9%
+	// e2e on purego 1T gray — the dedicated loops stay.)
 	u4 := cs == 4 && step == 4
 	for y := y0; y < y0+th; y++ {
 		row := img[y*istride:]
