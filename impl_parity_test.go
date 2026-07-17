@@ -9,8 +9,10 @@ import (
 )
 
 // TestPureGoMatchesCgo compares the pure-Go core against the C core
-// element-by-element (both response map and min/max contract) so the
-// CGO_ENABLED=0 fallback provably computes the same thing.
+// element-by-element. Both cores execute the same single-rounded IEEE op
+// sequence (shared deterministic twiddles, pinned fp-contract, explicit
+// float32 roundings in Go), so the response maps and extrema must be
+// BIT-IDENTICAL, not merely close.
 func TestPureGoMatchesCgo(t *testing.T) {
 	rng := rand.New(rand.NewSource(99))
 	cases := []struct{ iw, ih, tw, th, cn, step int }{
@@ -30,17 +32,15 @@ func TestPureGoMatchesCgo(t *testing.T) {
 		gotGo := make([]float32, rw*rh)
 		cMinV, cMinX, cMinY, cMaxV, cMaxX, cMaxY := matchU8(img, c.iw*c.step, c.iw, c.ih, tpl, c.tw*c.step, c.tw, c.th, c.cn, c.step, 4, gotC)
 		gMinV, gMinX, gMinY, gMaxV, gMaxX, gMaxY := matchU8Go(img, c.iw*c.step, c.iw, c.ih, tpl, c.tw*c.step, c.tw, c.th, c.cn, c.step, 4, gotGo)
-		worst := 0.0
 		for i := range gotC {
-			if d := math.Abs(float64(gotC[i]) - float64(gotGo[i])); d > worst {
-				worst = d
+			if math.Float32bits(gotC[i]) != math.Float32bits(gotGo[i]) {
+				t.Fatalf("case %d: map differs at %d: cgo %v (%08x) vs purego %v (%08x)",
+					ci, i, gotC[i], math.Float32bits(gotC[i]), gotGo[i], math.Float32bits(gotGo[i]))
 			}
 		}
-		if worst > 1e-5 {
-			t.Fatalf("case %d: worst |cgo-purego| diff %g", ci, worst)
-		}
 		if cMinX != gMinX || cMinY != gMinY || cMaxX != gMaxX || cMaxY != gMaxY ||
-			math.Abs(float64(cMinV-gMinV)) > 1e-5 || math.Abs(float64(cMaxV-gMaxV)) > 1e-5 {
+			math.Float32bits(cMinV) != math.Float32bits(gMinV) ||
+			math.Float32bits(cMaxV) != math.Float32bits(gMaxV) {
 			t.Fatalf("case %d: extrema mismatch cgo(%v@%d,%d %v@%d,%d) purego(%v@%d,%d %v@%d,%d)",
 				ci, cMinV, cMinX, cMinY, cMaxV, cMaxX, cMaxY, gMinV, gMinX, gMinY, gMaxV, gMaxX, gMaxY)
 		}

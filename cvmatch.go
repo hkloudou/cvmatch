@@ -5,7 +5,9 @@
 // C99 file used through cgo (the fast path), and a pure-Go port selected
 // automatically when cgo is unavailable (CGO_ENABLED=0, cross-compilation
 // without a C toolchain). The Impl constant reports which one is active;
-// both produce the same output (covered by tests).
+// both produce bit-identical output (asserted exactly by the tests: the
+// cores run the same single-rounded IEEE op sequence, including a shared
+// deterministic twiddle generator, independent of the system libm).
 //
 // Match is numerically aligned with OpenCV's matchTemplate + minMaxLoc on
 // CV_8UC4 input (the classic ImageToMatRGBA-style pipeline), while
@@ -97,9 +99,16 @@ func MatchMap(parent, sub image.Image) (res []float32, w, h int) {
 // images) before matching. For RGB screenshots the response map is very
 // close to the 4-channel one but costs roughly a quarter of the work.
 func MatchGray(parent, sub image.Image) (float32, int, int, float32, int, int) {
-	pPix, pStride, pw, ph := toGray(parent)
-	sPix, sStride, sw, sh := toGray(sub)
-	return matchU8(pPix, pStride, pw, ph, sPix, sStride, sw, sh, 1, 1, threads(), nil)
+	pPix, pStride, pw, ph, pOwned := toGray(parent)
+	sPix, sStride, sw, sh, sOwned := toGray(sub)
+	r1, r2, r3, r4, r5, r6 := matchU8(pPix, pStride, pw, ph, sPix, sStride, sw, sh, 1, 1, threads(), nil)
+	if pOwned {
+		putBytes(pPix)
+	}
+	if sOwned {
+		putBytes(sPix)
+	}
+	return r1, r2, r3, r4, r5, r6
 }
 
 // alphaConst reports whether the alpha plane of interleaved RGBA pixels is a
@@ -144,32 +153,34 @@ func toRGBA(img image.Image) (pix []uint8, stride, w, h int) {
 
 // toGray returns single-channel 8-bit pixels plus stride. *image.Gray and
 // the Y plane of *image.YCbCr are used in place with zero copies; RGBA and
-// NRGBA are converted with OpenCV's fixed-point BT.601 weights.
-func toGray(img image.Image) (pix []uint8, stride, w, h int) {
+// NRGBA are converted with OpenCV's fixed-point BT.601 weights into a
+// pooled buffer (owned reports it so the caller can recycle it).
+func toGray(img image.Image) (pix []uint8, stride, w, h int, owned bool) {
 	b := bounds(img)
 	w, h = b.Dx(), b.Dy()
 	switch m := img.(type) {
 	case *image.Gray:
-		return m.Pix[m.PixOffset(b.Min.X, b.Min.Y):], m.Stride, w, h
+		return m.Pix[m.PixOffset(b.Min.X, b.Min.Y):], m.Stride, w, h, false
 	case *image.YCbCr:
-		return m.Y[m.YOffset(b.Min.X, b.Min.Y):], m.YStride, w, h
+		return m.Y[m.YOffset(b.Min.X, b.Min.Y):], m.YStride, w, h, false
 	case *image.RGBA:
-		return rgbToGray(m.Pix[m.PixOffset(b.Min.X, b.Min.Y):], m.Stride, w, h), w, w, h
+		return rgbToGray(m.Pix[m.PixOffset(b.Min.X, b.Min.Y):], m.Stride, w, h), w, w, h, true
 	case *image.NRGBA:
-		return rgbToGray(m.Pix[m.PixOffset(b.Min.X, b.Min.Y):], m.Stride, w, h), w, w, h
+		return rgbToGray(m.Pix[m.PixOffset(b.Min.X, b.Min.Y):], m.Stride, w, h), w, w, h, true
 	}
 	gray := image.NewGray(image.Rect(0, 0, w, h))
 	draw.Draw(gray, gray.Bounds(), img, b.Min, draw.Src)
-	return gray.Pix, gray.Stride, w, h
+	return gray.Pix, gray.Stride, w, h, false
 }
 
 // rgbToGray converts interleaved 4-byte pixels using OpenCV's RGB2GRAY
 // fixed-point coefficients: (4899*R + 9617*G + 1868*B + 8192) >> 14.
+// Integer arithmetic — the result is exact regardless of evaluation order.
 func rgbToGray(pix []uint8, stride, w, h int) []uint8 {
-	out := make([]uint8, w*h)
+	out := getBytes(w * h)
 	for y := 0; y < h; y++ {
-		src := pix[y*stride:]
-		dst := out[y*w:]
+		src := pix[y*stride : y*stride+w*4]
+		dst := out[y*w : y*w+w]
 		for x := 0; x < w; x++ {
 			r, g, b := uint32(src[x*4]), uint32(src[x*4+1]), uint32(src[x*4+2])
 			dst[x] = uint8((4899*r + 9617*g + 1868*b + 8192) >> 14)

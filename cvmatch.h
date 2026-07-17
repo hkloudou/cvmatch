@@ -10,13 +10,16 @@
  *      with OpenCV's exact rounding guards (min(0.5, 10*FLT_EPSILON*wndSum2)
  *      cutoff and the 1.125 saturation band).
  *
- * Unlike OpenCV, window sums are produced by O(width) sliding column sums
- * instead of full double-precision integral images, the global min/max scan
- * is fused into the normalization pass, and the work can be spread over
- * nthreads workers (tile-level correlation, band-level normalization) with
- * bit-identical output for any thread count — every output element's
- * arithmetic sequence is unchanged, and the window sums are integer-valued
- * doubles, so band-local rebuilds are exact.
+ * Unlike OpenCV, window sums are produced by O(width) sliding integer
+ * column sums instead of full double-precision integral images (the
+ * statistics are exact integers, so the double window math sees identical
+ * inputs), the min/max scan runs over the stored float32 rows, and the
+ * work is spread over nthreads workers (tile-level correlation, band-level
+ * normalization; a persistent worker pool) with bit-identical output for
+ * any thread count — every output element's arithmetic sequence is
+ * unchanged, and band-local rebuilds are exact. Hot loops carry explicit
+ * AVX2 kernels behind a runtime check; twiddles come from an internal
+ * deterministic sincospi, so output does not depend on the system libm.
  */
 #ifndef CVMATCH_H
 #define CVMATCH_H

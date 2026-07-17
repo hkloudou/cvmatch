@@ -13,8 +13,12 @@ cores ship in the package:
   algorithm, selected automatically, so plain cross-compilation works.
 
 `cvmatch.Impl` reports which core is active (`"cgo"` / `"purego"`). The two
-cores, and native OpenCV C++ itself, are pinned to the same output by the
-test suite — see [Accuracy](#accuracy-cgo--pure-go--native-c-compared)
+cores produce **bit-identical output** — same response map bytes, same
+extrema — asserted exactly by the test suite (both run the same
+single-rounded IEEE op sequence, including a shared deterministic twiddle
+generator, so neither depends on the system libm). Both are additionally
+pinned element-wise against native OpenCV C++ — see
+[Accuracy](#accuracy-cgo--pure-go--native-c-compared)
 for the measured three-way comparison, and
 [Benchmarks](#benchmarks-cgo--pure-go--native-c) for where each one is
 faster and where it is not.
@@ -161,23 +165,46 @@ against it, once per core:
 
 The larger UI-scene numbers are where the true score is ~0 in near-flat
 regions and float32 rounding dominates; the *peak* values agree to 1e-6
-everywhere (table above). The two Go cores are additionally compared
-against **each other** element-wise (`TestPureGoMatchesCgo`, ≤1e-5 over
-seven shapes including 1/3/4-channel, strided and degenerate cases), and
-each core is compared against a **float64 brute-force reference**
-implementing OpenCV's formulas from the definition (≤1e-4; includes 1x1
-templates, template == image, zero-variance templates, varying alpha).
+everywhere (table above). Each core is also compared against a **float64
+brute-force reference** implementing OpenCV's formulas from the definition
+(≤1e-4; includes 1x1 templates, template == image, zero-variance
+templates, varying alpha).
 
 **Bit-identity guarantees** (exact equality, not tolerances):
-`TestThreadsBitIdentical` / `TestThreadsBitIdenticalPureGo` /
-`TestThreadsVar` assert byte-equal maps and extrema for 1/2/3/4/8/16
-workers in both cores, and `TestConstantAlphaSkip` asserts the
-constant-alpha skip is a no-op on both cores.
+
+- `TestPureGoMatchesCgo` asserts the pure-Go core's response maps and
+  extrema are **bit-identical to the C core's** over seven shapes
+  including 1/3/4-channel, strided and degenerate cases. This holds by
+  construction: both cores execute the same single-rounded IEEE op
+  sequence — explicit float32 roundings in the Go butterflies, pinned
+  fp-contraction in C, one shared deterministic `sincospi` for twiddles
+  (no libm trig in either core, so the output does not vary across
+  glibc/musl/OS math libraries).
+- `TestSIMDMatchesScalar` asserts the AVX2 assembly kernels equal the
+  generic Go loops bit-for-bit (each vector lane performs exactly the
+  scalar op sequence).
+- `TestThreadsBitIdentical` / `TestThreadsBitIdenticalPureGo` /
+  `TestThreadsVar` assert byte-equal maps and extrema for 1/2/3/4/8/16
+  workers in both cores, and `TestConstantAlphaSkip` asserts the
+  constant-alpha skip is a no-op on both cores.
 
 Everything in this section runs in CI on every push, twice: once with
 `CGO_ENABLED=1` and once with `CGO_ENABLED=0`.
 
 ## Benchmarks: CGO / pure-Go / native C++
+
+> **Note on the current numbers.** The tables below were measured before
+> the latest optimization round and will be refreshed from CI. Since then
+> both cores got explicit AVX2 kernels (FFT butterflies, conj-multiply,
+> the normalize sqrt/divide scan), integer sliding column sums,
+> swap-pair bit reversal, per-size FFT table caching, and — in the C
+> core — a persistent worker pool replacing thread spawn per call; the
+> pure-Go core additionally recycles all scratch through pools
+> (steady-state matching allocates ~0). Measured on a 4-vCPU AVX2 box:
+> the C core runs ~1.3–1.9× faster than the tables below and the pure-Go
+> core ~3–4× faster, closing to within ~1.05–1.4× of the C core.
+> Peak RSS is unchanged. Every optimization preserved output
+> bit-for-bit (hash-verified per change against the full scene matrix).
 
 Scenarios cover a realistic workload — finding a button, a toolbar icon or
 a panel inside a rendered desktop window (flat regions, gradients, text,
@@ -392,8 +419,9 @@ run.
 
 ## Concurrency and the Threads switch
 
-Every public function is **safe for concurrent use** — there is no shared
-mutable state; each call allocates its own scratch (`TestConcurrentMatch`
+Every public function is **safe for concurrent use** — calls share no
+result state; scratch buffers are recycled through synchronized pools and
+every pooled buffer is fully overwritten before use (`TestConcurrentMatch`
 runs the suite under `-race`). That splits parallelism into two distinct
 problems:
 
