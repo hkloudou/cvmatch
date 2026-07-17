@@ -1,18 +1,24 @@
 name: Bench charts
 
-# The canonical benchmark pipeline: re-measures native OpenCV C++ and
-# cvmatch — both build modes (default pure Go and -tags cvmatch_asm) on
-# both architectures — in one session, regenerates docs/benchdata.json +
-# the README SVG charts + the measured-matrix table (docs/collect.py ->
-# docs/genchart.py), and commits the refresh with [skip ci].
+# The only benchmark pipeline. Measures native OpenCV C++ and both
+# cvmatch builds (default no-asm and -tags cvmatch_asm) on amd64 and
+# arm64 IN PARALLEL — one job per architecture, identical steps — then a
+# render job merges the raw outputs and publishes benchdata.json, the
+# SVGs and the full matrix to the `assets` branch. main is never touched:
+# the README references the stable assets URLs, so a refresh is one
+# commit on `assets` and zero churn anywhere else.
 #
-# Runs weekly and on demand (dispatch it after perf-relevant merges, on
-# main or on a branch) — deliberately NOT on every push, so main history
-# is not churned by a bot commit per merge and chart numbers only move
-# when someone actually asks for a re-measurement.
+# Runs weekly and on demand. Dispatch with publish=false to get the
+# rendered charts as a workflow artifact instead of publishing (for perf
+# iteration on a branch).
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Push results to the assets branch"
+        type: boolean
+        default: true
   schedule:
     - cron: "17 3 * * 1"
 
@@ -24,47 +30,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  bench-arm64:
-    runs-on: ubuntu-24.04-arm
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-          cache: false
-      - name: Fetch real sample images (OpenCV samples/data)
-        run: bench/testdata/fetch.sh
-      - name: Build native OpenCV benchmark (prebuilt static OpenCV 4.12, arm64)
-        working-directory: bench
-        run: |
-          go run ./cmd/dumpscenes -out cpp/scenes
-          cpp/build.sh
-      - name: Measure native OpenCV C++ on arm64
-        run: |
-          mkdir -p /tmp/arm64
-          (cd bench && cpp/native_bench cpp/scenes 7) | tee /tmp/arm64/native.txt
-      - name: Measure cvmatch on arm64 (-cpu 1,4, both builds)
-        run: |
-          go test -tags cvmatch_asm -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m | tee /tmp/arm64/asm.txt
-          go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m | tee /tmp/arm64/go.txt
-          CPU=$(lscpu | awk -F': +' '/Model name/{print $2; exit}')
-          echo "GitHub Actions ubuntu-24.04-arm ($(nproc)-vCPU ${CPU:-arm64}, linux/arm64)" > /tmp/arm64/host.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: arm64-bench
-          path: /tmp/arm64/
-          retention-days: 3
-
-  charts:
-    runs-on: ubuntu-latest
-    needs: bench-arm64
+  bench:
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     defaults:
       run:
         # bash with -eo pipefail, so a failing benchmark can't hide behind
-        # the tee and get parsed into the committed dataset
+        # the tee and get parsed into the published dataset
         shell: bash
     steps:
       - uses: actions/checkout@v4
@@ -72,21 +50,29 @@ jobs:
         with:
           go-version: "1.24"
           cache: false
-      - uses: actions/download-artifact@v4
-        with:
-          name: arm64-bench
-          path: /tmp/arm64
       - name: Fetch real sample images (OpenCV samples/data)
         run: bench/testdata/fetch.sh
-      - name: Build native OpenCV benchmark (prebuilt static OpenCV 4.12)
+      - name: Build native OpenCV benchmark (prebuilt static OpenCV 4.12, ${{ matrix.arch }})
         working-directory: bench
         run: |
           go run ./cmd/dumpscenes -out cpp/scenes
           cpp/build.sh
-      - name: Measure native OpenCV C++ (speed, then 1080p peak RSS)
+      - name: Measure native OpenCV C++
+        run: |
+          mkdir -p /tmp/out
+          (cd bench && cpp/native_bench cpp/scenes 7) | tee /tmp/out/native.txt
+      - name: Measure cvmatch (-cpu 1,4, both builds)
+        run: |
+          go test -tags cvmatch_asm -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m | tee /tmp/out/asm.txt
+          go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m | tee /tmp/out/go.txt
+          CPU=$(lscpu | awk -F': +' '/Model name/{print $2; exit}')
+          echo "GitHub Actions ${{ matrix.runner }} ($(nproc)-vCPU ${CPU:-unknown}, linux/${{ matrix.arch }})" > /tmp/out/host.txt
+      - name: Measure peak RSS (memprobe + native one-shot probe, amd64 leg)
+        if: matrix.arch == 'amd64'
         working-directory: bench
         run: |
-          cpp/native_bench cpp/scenes 7 | tee /tmp/native.txt
+          go build -o /tmp/memprobe ./cmd/memprobe
+          for impl in baseline cvmatch gray; do /tmp/memprobe -impl "$impl"; done | tee /tmp/out/memprobe.txt
           mkdir -p /tmp/mem1
           grep noise1080p_sub128 cpp/scenes/manifest.tsv > /tmp/mem1/manifest.tsv
           cp "cpp/scenes/$(awk '{print $4}' /tmp/mem1/manifest.tsv)" \
@@ -94,45 +80,65 @@ jobs:
           # one-shot probe: fresh process, exactly one end-to-end match,
           # peak RSS read by the process itself (comparable to memprobe)
           cpp/native_bench /tmp/mem1 1 mem | tee /tmp/native-mem.txt
-          grep -o 'peakHWM=[0-9]*' /tmp/native-mem.txt | grep -o '[0-9]*' > /tmp/native-hwm.txt
-          cat /tmp/native-hwm.txt
-      - name: Measure cvmatch (-cpu 1,4, both builds)
+          grep -o 'peakHWM=[0-9]*' /tmp/native-mem.txt | grep -o '[0-9]*' > /tmp/out/native-hwm.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ matrix.arch }}
+          path: /tmp/out/
+          retention-days: 3
+
+  render:
+    runs-on: ubuntu-latest
+    needs: bench
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: assets
+          path: assets
+      - uses: actions/download-artifact@v4
+        with:
+          name: bench-amd64
+          path: /tmp/amd64
+      - uses: actions/download-artifact@v4
+        with:
+          name: bench-arm64
+          path: /tmp/arm64
+      - name: Render benchdata, charts and matrix
         run: |
-          go test -tags cvmatch_asm -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m | tee /tmp/gobench-asm.txt
-          go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m | tee /tmp/gobench.txt
-      - name: Measure peak RSS (memprobe, fresh process per implementation)
-        working-directory: bench
-        run: |
-          go build -o /tmp/memprobe ./cmd/memprobe
-          for impl in baseline cvmatch gray; do /tmp/memprobe -impl "$impl"; done | tee /tmp/memprobe.txt
-      - name: Regenerate benchdata, charts and README matrix
-        run: |
-          CPU=$(lscpu | awk -F': +' '/Model name/{print $2; exit}')
-          HOST="GitHub Actions ubuntu-latest ($(nproc)-vCPU ${CPU}, linux/amd64)"
-          NATMEM=$(cat /tmp/native-hwm.txt)
+          mkdir -p assets/bench
+          NATMEM=$(cat /tmp/amd64/native-hwm.txt)
           python3 docs/collect.py \
-            --asm /tmp/gobench-asm.txt --go /tmp/gobench.txt \
+            --asm /tmp/amd64/asm.txt --go /tmp/amd64/go.txt \
             --asm-arm64 /tmp/arm64/asm.txt --go-arm64 /tmp/arm64/go.txt \
-            --native /tmp/native.txt --native-arm64 /tmp/arm64/native.txt \
-            --mem /tmp/memprobe.txt \
+            --native /tmp/amd64/native.txt --native-arm64 /tmp/arm64/native.txt \
+            --mem /tmp/amd64/memprobe.txt \
             ${NATMEM:+--native-mem "$NATMEM"} \
-            --host "$HOST" --host-arm64 "$(cat /tmp/arm64/host.txt)"
-          python3 docs/genchart.py
+            --host "$(cat /tmp/amd64/host.txt)" --host-arm64 "$(cat /tmp/arm64/host.txt)" \
+            -o assets/bench/benchdata.json
+          python3 docs/genchart.py --data assets/bench/benchdata.json --out assets/bench
           {
-            echo "### Refreshed benchmark data (docs/benchdata.json)"
-            echo '```json'
-            cat docs/benchdata.json
-            echo ""
-            echo '```'
+            echo "### Refreshed measured matrix"
+            cat assets/bench/matrix.md
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Commit the refresh
+      - name: Publish to the assets branch
+        if: ${{ github.event_name == 'schedule' || inputs.publish }}
+        working-directory: assets
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/benchdata.json docs/bench-light.svg docs/bench-dark.svg docs/mem-light.svg docs/mem-dark.svg README.md
+          git add bench/
           if git diff --cached --quiet; then
-            echo "charts unchanged"
+            echo "measurements unchanged"
           else
-            git commit -m "docs: refresh benchmark charts and matrix [skip ci]"
+            git commit -m "bench: refresh measured charts and matrix"
             git push
           fi
+      - uses: actions/upload-artifact@v4
+        if: ${{ !(github.event_name == 'schedule' || inputs.publish) }}
+        with:
+          name: rendered-charts
+          path: assets/bench/

@@ -90,13 +90,14 @@ element-wise against a native OpenCV C++ binary.
 - **1T numbers are the primary signal**; 4T on shared runners carries
   ±2-5% noise and shows outliers in both directions.
 - **`bench-charts.yml` is the only benchmark pipeline** (weekly cron +
-  `workflow_dispatch`, runnable on any branch — on a branch it commits
-  the refreshed charts to that branch). Regular CI runs correctness
-  gates only; the ci.yml matrix steps execute only when ci.yml itself is
-  dispatched (the quick perf-iteration loop, matrices tee'd into the job
-  log for programmatic diffing).
-- After merging a perf-relevant PR, dispatch `bench-charts.yml` on main
-  to refresh the published numbers; routine merges do not re-measure.
+  `workflow_dispatch`, runnable on any ref; results publish to the
+  `assets` branch, or stay a workflow artifact with `publish=false`).
+  Regular CI runs correctness gates only; the ci.yml matrix steps
+  execute only when ci.yml itself is dispatched (the quick
+  perf-iteration loop, matrices tee'd into the job log for programmatic
+  diffing).
+- After merging a perf-relevant PR, dispatch `bench-charts.yml` to
+  refresh the published numbers; routine merges do not re-measure.
 - Profile before optimizing (`-cpuprofile` + `go tool pprof`); benchmark
   noise has repeatedly falsified plausible hypotheses in this repo.
 
@@ -119,23 +120,28 @@ element-wise against a native OpenCV C++ binary.
 
 ## Charts pipeline
 
-`bench-charts.yml` (weekly cron + dispatch): a `bench-arm64` job measures
-native OpenCV (same prebuilt static 4.12, `libs/linux_arm64`) plus both
-cvmatch builds and uploads raw output as an artifact; the `charts` job
-does the identical amd64 measurements, then `docs/collect.py` merges
-everything into `docs/benchdata.json` and `docs/genchart.py` renders the
-SVGs and rewrites the README between the `benchmatrix` markers,
-including a derived measured-summary paragraph (speedup ranges, memory)
-so prose never carries hand-written numbers. **amd64 and arm64 are peer
-configurations with identical comparison dimensions**: one speed chart
-with one panel per architecture (representative scenes; full detail in
-the two same-shaped tables), each showing native OpenCV + {asm, no-asm}
-× {Match, MatchGray} with ratios vs that architecture's native. Keys:
-`asm*`/`agray*` = `-tags cvmatch_asm`, `go*`/`gray*` = default build,
-`native`, `A` suffix = arm64 (`nativeA`). Colors are meaning-stable
-(green = native, blue family = Match, orange family = MatchGray; solid =
-asm, light = no-asm); build labels are asm / no-asm — never "pure Go",
-both builds are pure Go in the no-cgo sense.
+`bench-charts.yml` (weekly cron + dispatch): two parallel `bench` matrix
+jobs — one per architecture, identical steps — each measure native
+OpenCV (prebuilt static 4.12; `build.sh` picks `libs/linux_$GOARCH`)
+plus both cvmatch builds and upload raw output; a `render` job merges
+them via `docs/collect.py` and `docs/genchart.py` and **publishes
+`bench/{benchdata.json, bench-*.svg, mem-*.svg, matrix.md}` to the
+`assets` branch** — main is never touched and the README is never
+rewritten (it references the stable `../../raw/assets/bench/...` URLs
+and links `matrix.md`). Dispatch with `publish=false` to get the
+rendered bundle as a workflow artifact instead (perf iteration).
+`matrix.md` carries the two same-shaped tables plus the derived summary
+paragraph (speedup ranges, memory), so no measured number is ever
+hand-written. **amd64 and arm64 are peer configurations with identical
+comparison dimensions**: one speed chart, one panel per architecture
+(representative scenes; full detail in the tables), each showing native
+OpenCV + {asm, no-asm} × {Match, MatchGray} with ratios vs that
+architecture's native. Keys: `asm*`/`agray*` = `-tags cvmatch_asm`,
+`go*`/`gray*` = default build, `native`, `A` suffix = arm64
+(`nativeA`). Colors are meaning-stable (green = native, blue family =
+Match, orange family = MatchGray; solid = asm, light = no-asm); build
+labels are asm / no-asm — never "pure Go", both builds are pure Go in
+the no-cgo sense.
 
 ## History (context for future work)
 
