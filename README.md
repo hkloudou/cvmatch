@@ -1,30 +1,23 @@
 # cvmatch
 
-[![CI](../../actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml) [![Go Reference](https://pkg.go.dev/badge/github.com/hkloudou/cvmatch.svg)](https://pkg.go.dev/github.com/hkloudou/cvmatch) ![CGO optional](https://img.shields.io/badge/CGO-optional-success)
+[![CI](../../actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml) [![Go Reference](https://pkg.go.dev/badge/github.com/hkloudou/cvmatch.svg)](https://pkg.go.dev/github.com/hkloudou/cvmatch) ![pure Go](https://img.shields.io/badge/pure%20Go-no%20cgo-success)
 
-OpenCV-compatible `TM_CCOEFF_NORMED` template matching for Go, with no
-OpenCV, no bundled static libraries and no dependencies. Two interchangeable
-cores ship in the package:
+OpenCV-compatible `TM_CCOEFF_NORMED` template matching in **pure Go** — no
+OpenCV, no cgo, no bundled static libraries, no dependencies. Hand-written
+SIMD kernels (AVX2 on amd64, NEON on arm64, Go assembly behind a runtime
+check) accelerate the hot loops; every other platform runs the same scalar
+Go code with identical output, and plain cross-compilation just works.
 
-- **cgo core** (default): one dependency-free C99 file, ~97 KB of native
-  code including threading, AVX2 kernels and multi-versioning; compiles
-  in ~1 s during `go build`.
-- **pure-Go core** (`CGO_ENABLED=0`, or no C toolchain): a port of the same
-  algorithm with its own hand-written SIMD kernels — AVX2 on amd64, NEON
-  on arm64 (Go assembly, no cgo) — selected automatically, so plain
-  cross-compilation works. On amd64 it now measures *faster* than the cgo
-  core across the benchmark matrix.
-
-`cvmatch.Impl` reports which core is active (`"cgo"` / `"purego"`). The two
-cores produce **bit-identical output** — same response map bytes, same
-extrema — asserted exactly by the test suite (both run the same
-single-rounded IEEE op sequence, including a shared deterministic twiddle
-generator, so neither depends on the system libm). Both are additionally
-pinned element-wise against native OpenCV C++ — see
-[Accuracy](#accuracy-cgo--pure-go--native-c-compared)
-for the measured three-way comparison, and
-[Benchmarks](#benchmarks-cgo--pure-go--native-c) for where each one is
-faster and where it is not.
+Output is pinned two ways. Element-wise against **native OpenCV C++** on
+every CI run — see [Accuracy](#accuracy-cvmatch-vs-native-c) for the
+measured comparison. And **bit-exactly** against golden output hashes: the
+library once shipped a cgo/C core, and the pure-Go pipeline reproduces its
+output maps bit-for-bit (the golden constants were recorded from the C
+core, cross-validated, before it was retired for being the slower core on
+both amd64 and arm64 — see
+[Benchmarks](#benchmarks-cvmatch-vs-native-c)). The same bits come out on
+every architecture, thread count, and with SIMD on or off; `cvmatch.Impl`
+reports `"purego"`, kept for compatibility.
 
 ```go
 import "github.com/hkloudou/cvmatch"
@@ -109,11 +102,10 @@ All claims below were checked against OpenCV's C++ source
   template norm cancels *algebraically*, so `Match` skips it — ~25% less
   work, provably identical output. The skip triggers only when **both**
   images have a constant alpha plane; tests cover the skip
-  (`TestConstantAlphaSkip`, four constants including 0/255, asserted on
-  **both cores**), the non-skip (`TestVaryingAlpha`,
-  `TestAlphaMixedConstancy`), and the fact that alpha genuinely matters
-  when it varies (`TestAlphaMatters`: cn=3 vs cn=4 maps differ materially
-  — also on both cores). The varying-alpha scene is additionally pinned
+  (`TestConstantAlphaSkip`, four constants including 0/255), the non-skip
+  (`TestVaryingAlpha`, `TestAlphaMixedConstancy`), and the fact that alpha
+  genuinely matters when it varies (`TestAlphaMatters`: cn=3 vs cn=4 maps
+  differ materially). The varying-alpha scene is additionally pinned
   element-wise against native C++ output in CI.
 - **A Go-specific gotcha, documented for fairness:** Go's `*image.RGBA` is
   alpha-**premultiplied** by convention, while PNG (and `image.NRGBA`, and
@@ -130,20 +122,18 @@ All claims below were checked against OpenCV's C++ source
   is therefore encoded from the identical bytes reinterpreted as NRGBA, so
   the published file byte-for-byte equals the tested input.
 
-## Accuracy: CGO / pure-Go / native C++ compared
+## Accuracy: cvmatch vs native C++
 
-The claim "same result as OpenCV" is measured, not asserted, and it is
-measured on **all three implementations** over the full scene set — not
-only on perfect crops. Two scenes are deliberately degraded so the peak
-lands mid-range, and one searches a patch that is not in the image at all,
-so the noise floor of the map is compared too.
+The claim "same result as OpenCV" is measured, not asserted, over the full
+scene set — not only on perfect crops. Two scenes are deliberately degraded
+so the peak lands mid-range, and one searches a patch that is not in the
+image at all, so the noise floor of the map is compared too.
 
-**`Match` (best value), all three implementations** — from
-`TestThreeWayValues`, run in CI for each core against the same response
-maps dumped by the C++ binary; the four rows below span the score range
-(the full 17-scene log is printed in every CI run):
+**`Match` (best value)** — from `TestNativeValues`, run in CI against the
+same response maps dumped by the C++ binary; the four rows below span the
+score range (the full 17-scene log is printed in every CI run):
 
-| scene | peak | native C++ | cvmatch (both cores — bit-identical) |
+| scene | peak | native C++ | cvmatch |
 |---|---|---|---|
 | window button (perfect crop) | ~1.0 | 0.999997 @(893,614) | 0.999996 @(893,614) |
 | degraded_button (noisy template) | high | 0.903974 @(893,614) | 0.903974 @(893,614) |
@@ -154,11 +144,10 @@ For the absent patch the whole map is noise-level, so the argmax legally
 lands on different near-tied bumps; the value is what matters. Positions
 agree exactly on every scene with a real peak.
 
-**`MatchMap` (every element), each core vs native C++** — from
+**`MatchMap` (every element) vs native C++** — from
 `TestFullMapParityWithNativeCpp`: the C++ binary dumps its full CV_32F
 response map per scene and every element of `cvmatch.MatchMap` is compared
-against it, once per core (the two cores are bit-identical, so their
-envelope is one column):
+against it:
 
 | scene group | worst element diff vs native C++ |
 |---|---|
@@ -169,40 +158,42 @@ envelope is one column):
 
 The larger UI-scene numbers are where the true score is ~0 in near-flat
 regions and float32 rounding dominates; the *peak* values agree to 1e-6
-everywhere (table above). Each core is also compared against a **float64
+everywhere (table above). The library is also compared against a **float64
 brute-force reference** implementing OpenCV's formulas from the definition
 (≤1e-4; includes 1x1 templates, template == image, zero-variance
 templates, varying alpha).
 
 **Bit-identity guarantees** (exact equality, not tolerances):
 
-- `TestPureGoMatchesCgo` asserts the pure-Go core's response maps and
-  extrema are **bit-identical to the C core's** over seven shapes
-  including 1/3/4-channel, strided and degenerate cases. This holds by
-  construction: both cores execute the same single-rounded IEEE op
-  sequence — explicit float32 roundings in the Go butterflies, pinned
-  fp-contraction in C, one shared deterministic `sincospi` for twiddles
-  (no libm trig in either core, so the output does not vary across
-  glibc/musl/OS math libraries).
-- `TestSIMDMatchesScalar` asserts the AVX2 assembly kernels equal the
-  generic Go loops bit-for-bit (each vector lane performs exactly the
-  scalar op sequence).
-- `TestThreadsBitIdentical` / `TestThreadsBitIdenticalPureGo` /
-  `TestThreadsVar` assert byte-equal maps and extrema for 1/2/3/4/8/16
-  workers in both cores, and `TestConstantAlphaSkip` asserts the
-  constant-alpha skip is a no-op on both cores.
+- `TestGoldenOutputs` pins the exact output bits — FNV-64 hashes of whole
+  response maps plus extrema — over nine dispatch shapes (1/3/4-channel,
+  strided, packed-RGB, degenerate). The constants were recorded from the
+  retired cgo/C core and cross-validated against this pipeline before its
+  removal, and the C core was itself pinned element-wise against native
+  OpenCV; the anchors must reproduce on **every architecture** (the same
+  single-rounded IEEE op sequence runs everywhere, including a
+  deterministic `sincospi` for twiddles — no libm trig, so output does not
+  vary across glibc/musl/OS math libraries).
+- `TestSIMDMatchesScalar` asserts the assembly kernels (AVX2 and NEON)
+  equal the generic Go loops bit-for-bit (each vector lane performs
+  exactly the scalar op sequence).
+- `TestThreadsBitIdentical` / `TestThreadsVar` assert byte-equal maps and
+  extrema for 1/2/3/4/8/16 workers, and `TestConstantAlphaSkip` asserts
+  the constant-alpha skip is a no-op.
 
-Everything in this section runs in CI on every push, twice: once with
-`CGO_ENABLED=1` and once with `CGO_ENABLED=0`.
+Everything in this section runs in CI on every push, on both amd64 and
+arm64 runners.
 
-## Benchmarks: CGO / pure-Go / native C++
+## Benchmarks: cvmatch vs native C++
 
 > The charts, the measured matrix and `docs/benchdata.json` are
-> **auto-generated**: the `bench-charts` workflow re-measures all three
-> implementations in one session on every push to `main` and commits the
-> refreshed SVGs and table (`docs/collect.py` parses the raw outputs,
-> `docs/genchart.py` renders). The machine is named in the chart subtitle
-> and above the table.
+> **auto-generated**: the `bench-charts` workflow re-measures native
+> OpenCV and cvmatch (amd64 and arm64) in one session on every push to
+> `main` and commits the refreshed SVGs and table (`docs/collect.py`
+> parses the raw outputs, `docs/genchart.py` renders). The machine is
+> named in the chart subtitle and above the table. Series colors mean the
+> same thing on every chart: green = native OpenCV C++,
+> blue = `cvmatch.Match`, orange = `cvmatch.MatchGray`.
 
 Scenarios cover a realistic workload — finding a button, a toolbar icon or
 a panel inside a rendered desktop window (flat regions, gradients, text,
@@ -254,27 +245,26 @@ kind sits between the timer and OpenCV.
   most of its 1T gap. Single-thread columns are in the matrix below for
   like-for-like reading.
 - **Verified-equal outputs.** The parity suite above compares every
-  response-map element of each core against the C++ binary — no speed
-  comes from computing something different.
+  response-map element against the C++ binary — no speed comes from
+  computing something different.
 - **One machine, one session.** All numbers in the charts and the matrix
   come from one session on the machine named in the chart subtitle (the
   `bench-charts` workflow refreshes them on every push to `main`); expect
   some run-to-run variance on shared cloud CPUs. CI additionally
-  re-measures both Go cores on every push (`-cpu 1,4`), publishing raw
+  re-measures on every push (`-cpu 1,4`, amd64 and arm64), publishing raw
   numbers in the job summary.
 
-Reproduce locally with `go test -bench . -benchtime 5x -cpu 1,4` (and
-`CGO_ENABLED=0` for the pure-Go core), plus
+Reproduce locally with `go test -bench . -benchtime 5x -cpu 1,4`, plus
 `bench/cpp/build.sh && bench/cpp/native_bench bench/cpp/scenes 7`.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/bench-dark.svg">
-  <img alt="Benchmark: native OpenCV C++ vs cvmatch cgo and pure-Go cores at identical output" src="docs/bench-light.svg">
+  <img alt="Benchmark: native OpenCV C++ vs cvmatch at identical output" src="docs/bench-light.svg">
 </picture>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/bench-arm64-dark.svg">
-  <img alt="arm64 benchmark: cvmatch cgo core vs pure-Go NEON core at identical output" src="docs/bench-arm64-light.svg">
+  <img alt="arm64 benchmark: cvmatch Match and MatchGray on NEON kernels" src="docs/bench-arm64-light.svg">
 </picture>
 
 <picture>
@@ -282,65 +272,65 @@ Reproduce locally with `go test -bench . -benchtime 5x -cpu 1,4` (and
   <img alt="Peak memory for one 1080p match: native OpenCV C++ vs cvmatch" src="docs/mem-light.svg">
 </picture>
 
-### The full matrix: three implementations × threads (measured)
+### The full matrix (measured)
 
 <!-- benchmatrix:begin — auto-generated by docs/genchart.py, do not edit by hand -->
 `Match`, milliseconds, measured on GitHub Actions ubuntu-latest (4-vCPU AMD EPYC 7763 64-Core Processor, linux/amd64).
 Native C++ is the best of 7 end-to-end runs, single-threaded because
-that is how OpenCV's `matchTemplate` runs; the Go columns are
-`go test -benchtime 5x` averages from `-cpu 1,4`:
+that is how OpenCV's `matchTemplate` runs; the cvmatch columns are
+`go test -benchtime 5x` averages from `-cpu 1,4`, with the 4T speedup
+over native alongside:
 
-| scene | native C++ | cgo 1T | cgo 4T | pure-Go 1T | pure-Go 4T |
-|---|---|---|---|---|---|
-| Window 1600×1000 · button 96×32 | 184.4 | 52.0 | 25.8 | 43.7 | **23.3** |
-| Window 1600×1000 · icon 24×24 | 149.7 | 42.6 | 21.5 | 37.6 | **19.4** |
-| Window 1600×1000 · panel 300×200 | 158.7 | 57.8 | 52.9 | 48.6 | **46.1** |
-| Noise 1280×720 · sub 96×96 | 116.4 | 39.0 | 23.6 | 34.1 | **23.4** |
-| Noise 1920×1080 · sub 128×128 | 280.2 | 73.6 | **38.4** | 62.6 | 39.9 |
-| Noise 1920×1080 · sub 32×32 | 196.4 | 56.1 | 27.7 | 50.6 | **25.8** |
-| Noise 640×480 · varying alpha, 4ch | 28.8 | 13.9 | **8.2** | 12.7 | 8.4 |
-| Window 3840×2160 · button 96×32 | 863.8 | 254.0 | 125.1 | 224.7 | **109.7** |
-| Noise 3840×2160 · sub 256×256 | 1195.6 | 364.5 | 199.6 | 296.8 | **176.3** |
-| fruits 512×480 · sub 80×80 | 49.6 | 6.5 | 6.1 | 6.1 | **6.0** |
-| baboon 512×512 · sub 64×64 | 31.9 | 6.7 | 6.7 | 6.6 | **6.0** |
-| building 868×600 · sub 100×100 | 74.5 | 20.7 | 21.4 | 19.0 | **17.8** |
-| graf1 800×640 · sub 120×120 | 89.5 | 21.7 | 20.9 | 19.6 | **18.7** |
-| starry_night 752×600 · sub 128×128 | 64.9 | 21.4 | 20.5 | **18.1** | **18.1** |
-
-`MatchGray` at 1080p/128 for scale: cgo 27.5 / 14.8 ms, pure-Go 23.2 / 13.3 ms (1T / 4T). Native C++ has no gray
-row in this suite — a fair baseline would need cvtColor + 1-channel
-matchTemplate timed end-to-end, which was not measured; treat MatchGray
-numbers as cvmatch-internal.
-
-**arm64** — the same `Match` matrix from the arm64 CI leg (GitHub Actions ubuntu-24.04-arm (4-vCPU Neoverse-N2, linux/arm64)). No native
-OpenCV baseline is built there, so the columns compare the two
-cvmatch cores — NEON pure-Go vs the C core:
-
-| scene | cgo 1T | cgo 4T | pure-Go 1T | pure-Go 4T |
+| scene | native C++ | cvmatch 1T | cvmatch 4T | 4T vs native |
 |---|---|---|---|---|
-| Window 1600×1000 · button 96×32 | 90.4 | 30.0 | 88.9 | **27.1** |
-| Window 1600×1000 · icon 24×24 | 74.0 | 20.5 | 74.0 | **20.4** |
-| Window 1600×1000 · panel 300×200 | 102.6 | 93.5 | 99.4 | **90.5** |
-| Noise 1280×720 · sub 96×96 | 73.2 | **39.9** | 71.5 | 40.7 |
-| Noise 1920×1080 · sub 128×128 | 132.6 | **50.0** | 128.8 | 50.1 |
-| Noise 1920×1080 · sub 32×32 | 99.3 | **27.1** | 98.6 | 27.5 |
-| Noise 640×480 · varying alpha, 4ch | 26.0 | **13.9** | 25.7 | 14.2 |
-| Window 3840×2160 · button 96×32 | 458.4 | **125.6** | 453.7 | 129.2 |
-| Noise 3840×2160 · sub 256×256 | 647.7 | 231.0 | 623.6 | **225.4** |
-| fruits 512×480 · sub 80×80 | 11.5 | **10.3** | 11.7 | 10.5 |
-| baboon 512×512 · sub 64×64 | 12.0 | **10.7** | 12.1 | **10.7** |
-| building 868×600 · sub 100×100 | 38.7 | 36.2 | 37.9 | **36.1** |
-| graf1 800×640 · sub 120×120 | 39.1 | 36.9 | 38.3 | **36.6** |
-| starry_night 752×600 · sub 128×128 | 37.7 | 36.1 | 37.0 | **35.9** |
+| Window 1600×1000 · button 96×32 | 184.4 | 43.7 | **23.3** | 7.91× |
+| Window 1600×1000 · icon 24×24 | 149.7 | 37.6 | **19.4** | 7.72× |
+| Window 1600×1000 · panel 300×200 | 158.7 | 48.6 | **46.1** | 3.44× |
+| Noise 1280×720 · sub 96×96 | 116.4 | 34.1 | **23.4** | 4.97× |
+| Noise 1920×1080 · sub 128×128 | 280.2 | 62.6 | **39.9** | 7.02× |
+| Noise 1920×1080 · sub 32×32 | 196.4 | 50.6 | **25.8** | 7.61× |
+| Noise 640×480 · varying alpha, 4ch | 28.8 | 12.7 | **8.4** | 3.43× |
+| Window 3840×2160 · button 96×32 | 863.8 | 224.7 | **109.7** | 7.87× |
+| Noise 3840×2160 · sub 256×256 | 1195.6 | 296.8 | **176.3** | 6.78× |
+| fruits 512×480 · sub 80×80 | 49.6 | 6.1 | **6.0** | 8.27× |
+| baboon 512×512 · sub 64×64 | 31.9 | 6.6 | **6.0** | 5.32× |
+| building 868×600 · sub 100×100 | 74.5 | 19.0 | **17.8** | 4.19× |
+| graf1 800×640 · sub 120×120 | 89.5 | 19.6 | **18.7** | 4.79× |
+| starry_night 752×600 · sub 128×128 | 64.9 | 18.1 | **18.1** | 3.59× |
 
-`MatchGray` at 1080p/128 on arm64: cgo 49.0 / 18.4 ms, pure-Go 46.6 / 18.1 ms (1T / 4T).
+`MatchGray` at 1080p/128 for scale: 23.2 / 13.3 ms
+(1T / 4T). Native C++ has no gray row in this suite — a fair baseline
+would need cvtColor + 1-channel matchTemplate timed end-to-end, which
+was not measured; treat MatchGray numbers as cvmatch-internal.
+
+**arm64** — the same `Match` matrix from the arm64 CI leg (GitHub Actions ubuntu-24.04-arm (4-vCPU Neoverse-N2, linux/arm64)),
+NEON kernels, bit-identical output to the amd64 rows above:
+
+| scene | cvmatch 1T | cvmatch 4T |
+|---|---|---|
+| Window 1600×1000 · button 96×32 | 88.9 | **27.1** |
+| Window 1600×1000 · icon 24×24 | 74.0 | **20.4** |
+| Window 1600×1000 · panel 300×200 | 99.4 | **90.5** |
+| Noise 1280×720 · sub 96×96 | 71.5 | **40.7** |
+| Noise 1920×1080 · sub 128×128 | 128.8 | **50.1** |
+| Noise 1920×1080 · sub 32×32 | 98.6 | **27.5** |
+| Noise 640×480 · varying alpha, 4ch | 25.7 | **14.2** |
+| Window 3840×2160 · button 96×32 | 453.7 | **129.2** |
+| Noise 3840×2160 · sub 256×256 | 623.6 | **225.4** |
+| fruits 512×480 · sub 80×80 | 11.7 | **10.5** |
+| baboon 512×512 · sub 64×64 | 12.1 | **10.7** |
+| building 868×600 · sub 100×100 | 37.9 | **36.1** |
+| graf1 800×640 · sub 120×120 | 38.3 | **36.6** |
+| starry_night 752×600 · sub 128×128 | 37.0 | **35.9** |
+
+`MatchGray` at 1080p/128 on arm64: 46.6 / 18.1 ms (1T / 4T).
 <!-- benchmatrix:end -->
 
 **Readings, including where cvmatch does *not* win:**
 
-- The **cgo core** is faster than native OpenCV on every scene
-  single-threaded — roughly 1.9x on the 4-channel varying-alpha scene
-  (no constant-alpha skip there — 4 full channels) up to ~6.5x on the
+- cvmatch is **faster than native OpenCV on every scene
+  single-threaded** — from ~2.2x on the 4-channel varying-alpha scene
+  (no constant-alpha skip there — 4 full channels) up to ~8x on the
   smallest photo. Internal threading adds another 2–3.5x on multi-tile
   scenes (the big windows/noise scenes land at ~7–12x total on 4 cores).
 - Threading helps least on **single-tile scenes** (panel, the photos):
@@ -351,34 +341,29 @@ cvmatch cores — NEON pure-Go vs the C core:
   parallelism over OpenCV can close most of its gap on such scenes (see
   fairness rules) — that residual is real and documented in the headroom
   section.
-- The **pure-Go core now also beats native OpenCV single-threaded on
-  every scene** (from ~2.2x on varying-alpha to ~8x on fruits) — its
-  assembly kernels execute the same op sequence the C core does, with two
-  full backends: AVX2 on amd64 and NEON on arm64 (bit-identical to each
-  other, asserted by hashing whole response maps across architectures).
-  Architectures without kernels fall back to scalar Go and lose the SIMD
-  edge. With the full kernel set (FFT stages and fused column-stage
-  pairs, pack/untangle/combine/emit, sliding column sums, the normalize
-  tail, the min/max scan and RGBA→gray) it measures **ahead of the cgo
-  core** on the amd64 matrix — cgo is no longer the fast path there, it
-  is the reference implementation.
-- The Go rows allocate almost nothing in cgo mode (32 B/op for `Match`);
-  the pure-Go core recycles its scratch through pools, so steady-state
-  matching allocates ~0 too (a few MB/op appear on the largest scenes
-  when GC clears the pools between calls).
+- The speed comes from assembly kernels with two full backends — AVX2 on
+  amd64 and NEON on arm64, bit-identical to each other (asserted by the
+  golden hashes reproducing on both CI architectures). Architectures
+  without kernels run the same algorithm in scalar Go and lose only the
+  SIMD edge. This pure-Go pipeline retired the original cgo/C core by
+  out-benchmarking it on both architectures; the golden tests carry the
+  C core's cross-validated output forward as the permanent anchor.
+- Steady-state matching allocates ~0: scratch is recycled through pools
+  (a few MB/op appear on the largest scenes when GC clears the pools
+  between calls).
 
 ### Native code size and memory (linux/amd64)
 
 | artifact | size |
 |---|---|
 | static OpenCV archives the C++ baseline links (`libopencv_core.a` + `libopencv_imgproc.a` + zlib) | 16.1 MB |
-| minimal `Match` binary, `-ldflags "-s -w"` | **1.57 MB** (a comparable OpenCV-linked Go binary measured 5.82 MB before that comparison was retired) |
+| minimal `Match` binary, `-ldflags "-s -w"`, pure Go | **1.53 MB** (a comparable OpenCV-linked Go binary measured 5.82 MB before that comparison was retired) |
 
 Peak whole-process memory for one 1920×1080 / 128×128 match (VmHWM, fresh
 process per run, values from `docs/benchdata.json`; the native probe is
 `native_bench … mem` — one end-to-end match, the process reads its own
-VmHWM): idle Go process ~12.6 MB, `cvmatch.Match` ~47 MB,
-`cvmatch.MatchGray` ~41 MB, native OpenCV C++ ~155 MB. OpenCV
+VmHWM): idle Go process ~14 MB, `cvmatch.Match` ~48 MB,
+`cvmatch.MatchGray` ~42 MB, native OpenCV C++ ~155 MB. OpenCV
 materializes full double-precision integral
 images (~132 MB written per 1080p RGBA call); cvmatch replaces them with
 O(width) sliding sums, so its peak is dominated by the input frame and the
@@ -420,7 +405,7 @@ Three categories, from harmless to functional:
 |---|---|
 | sliding column sums instead of `sum`/`sqsum` integral images | both are exact integer arithmetic in `double` (< 2^53) — bit-identical window statistics |
 | `minMaxLoc` fused into the normalization pass | same row-major scan, same strict-comparison first-occurrence tie rule, comparing the same rounded float32 values OpenCV would scan |
-| constant-channel (alpha) skip | algebraic cancellation: a per-image-constant channel contributes exactly 0 to numerator, denominator and `templNorm` (`TestConstantAlphaSkip` asserts cn=3 ≡ cn=4 on both cores) |
+| constant-channel (alpha) skip | algebraic cancellation: a per-image-constant channel contributes exactly 0 to numerator, denominator and `templNorm` (`TestConstantAlphaSkip` asserts cn=3 ≡ cn=4) |
 | zero-copy input, template spectrum pre-scaled by `1/(dftW·dftH)` | pure plumbing; same numbers enter the math |
 
 **B. Float32 rounding-path differences (bounded, measured)**
@@ -429,7 +414,6 @@ Three categories, from harmless to functional:
 |---|---|
 | power-of-two FFT (radix-2, two-real-rows-per-complex-FFT) instead of OpenCV's mixed-radix 2^a·3^b·5^c DFT | different DFT sizes and summation orders ⇒ different float32 rounding, *not* different math. Measured element-wise vs the C++ binary — see the Accuracy table |
 | DFT scratch capped at 2^21 complex elements (OpenCV has no cap) | for pathologically large templates the tiling gets finer — again a rounding-path change only |
-| compiler FMA contraction in the C core (gcc `-O3`) vs none in OpenCV's own kernels | sub-ulp differences folded into the same envelope |
 
 **C. Scope differences (things cvmatch deliberately does not do)**
 
@@ -464,7 +448,7 @@ problems:
   templates, scales to ~N× on N cores by running `Match` calls concurrently.
 - **Latency (one big match): one call spreads its FFT tiles and
   normalization bands across workers with bit-identical output for any
-  worker count** (asserted byte-for-byte by `TestThreadsBitIdentical*`).
+  worker count** (asserted byte-for-byte by `TestThreadsBitIdentical`).
   Single-tile scenes parallelize only the normalization pass by design —
   re-tiling would change the FFT rounding path.
 - **DIY middle ground:** because every TM_CCOEFF_NORMED output depends only
@@ -485,8 +469,7 @@ or `CVMATCH_THREADS=1` in the environment (read once at package init).
 Any value produces bit-identical results — it is a performance knob only,
 mainly useful for benchmarking and for capping the library's CPU use inside
 a loaded service. Set it before concurrent use; it is a plain package
-variable. (The C core additionally honors a `CVM_MAX_THREADS` env cap, and
-`-DCVM_NO_TARGET_CLONES` at build time disables AVX2 multi-versioning.)
+variable.
 
 ## Recipe: describing a window (one frame, many ROIs, many templates)
 
@@ -542,7 +525,7 @@ OpenCV's `matchTemplate` is not slow because of sloppy code — the cost is in
 | DFT column transforms | strided per-column walks | batched butterflies over contiguous rows (vectorizes, cache-friendly) |
 | window statistics | materialize `sum` + `sqsum` double integral images: **~132 MB written to DRAM, then read back** | O(width) sliding integer column sums: **~60 KB working set, stays in L1/L2** |
 | min/max | separate `minMaxLoc` pass over the 8 MB result | scanned per row inside the normalization pass, while the data is cache-hot |
-| hot loops | generic SIMD dispatch | explicit AVX2 kernels (FFT butterflies, conj-multiply, normalize sqrt/divide) behind a runtime check, in both cores |
+| hot loops | generic SIMD dispatch | explicit AVX2/NEON kernels (FFT butterflies, conj-multiply, normalize sqrt/divide) behind a runtime check |
 | result values | — | element-wise equal (verified vs the C++ binary) |
 
 The decisive line is the integral images: on a modern CPU a 1080p RGBA
@@ -574,9 +557,9 @@ Three alternative explanations were measured and ruled out:
 ## Is OpenCV's algorithm the optimum? Remaining headroom
 
 Deep-dive, with every claim either measured on this codebase or adversarially
-reviewed. First, where a 1080p/128 `Match` spends its time (C core,
-stage-isolated harness, measured before the AVX2-kernel round; both stages
-got faster since, with correlation keeping the dominant share):
+reviewed. First, where a 1080p/128 `Match` spends its time (stage-isolated
+harness, measured before the SIMD-kernel rounds; both stages got faster
+since, with correlation keeping the dominant share):
 
 | stage | gray (1ch) | RGBA (3ch after alpha skip) | share |
 |---|---|---|---|
@@ -596,11 +579,10 @@ images, 4 forced channels, unfused scans), and the list below is headroom
 *this* implementation still leaves on the table under the same
 results-identical-to-OpenCV contract.
 
-Ranked levers — several landed in the AVX2-kernel round, the rest remain:
+Ranked levers — several landed in the SIMD-kernel rounds, the rest remain:
 
 1. **Multithreading — implemented (measured 2.5–3.8x on 4 cores for
-   multi-tile scenes; thread spawn per call has since been replaced by a
-   persistent worker pool).** Correlation tiles stride across workers (each
+   multi-tile scenes).** Correlation tiles stride across workers (each
    with private scratch, channels accumulated in order per tile) and
    normalization splits into row bands, each rebuilding its own column sums
    — bit-exact *only because* the window statistics are exact integers
@@ -611,20 +593,18 @@ Ranked levers — several landed in the AVX2-kernel round, the rest remain:
    axes (independent row-FFT pairs, width-chunked column butterflies) are
    still on the table, and until they land, strip-parallel OpenCV can close
    most of its gap on such scenes (see fairness rules).
-2. **A better FFT kernel — the SIMD half landed.** The hot loops now run
-   explicit AVX2 kernels (interleaved-complex butterflies, broadcast-twiddle
-   column passes) with a swap-pair bit reversal and flattened small stages;
-   that was worth roughly a third of the correlation time. The pure-Go
-   core's kernel round went further: its column FFT consumes *fused stage
-   pairs* (a closed quad of rows makes one memory round trip for two
-   butterfly layers — legal bit-exactly because butterflies chain the same
-   values registers or not), and its row FFT folds the half=1/2 stages
-   into the same asm pass. The remaining half is algorithmic: split-radix
-   cuts operation counts ~31% at these sizes (radix-4 only ~15%) — but
-   unlike the SIMD work it *changes the rounding path*, so it moves
-   outputs within the float32 envelope instead of preserving them
-   bit-for-bit, and it stays unimplemented while the bit-identical-cores
-   contract is worth more than the constant.
+2. **A better FFT kernel — the SIMD half landed.** The hot loops run
+   explicit assembly kernels (interleaved-complex butterflies,
+   broadcast-twiddle column passes) with a swap-pair bit reversal; the
+   column FFT consumes *fused stage pairs* (a closed quad of rows makes
+   one memory round trip for two butterfly layers — legal bit-exactly
+   because butterflies chain the same values registers or not), and the
+   row FFT folds the half=1/2 stages into the same asm pass. The remaining
+   half is algorithmic: split-radix cuts operation counts ~31% at these
+   sizes (radix-4 only ~15%) — but unlike the SIMD work it *changes the
+   rounding path*, so it moves outputs within the float32 envelope instead
+   of preserving them bit-for-bit, and it stays unimplemented while the
+   anchored-output contract is worth more than the constant.
 3. **Mixed-radix (2·3·5) DFT sizes** would cut power-of-two padding waste (up
    to 2x per dimension worst case; exactly zero in lucky cases — 897+127
    lands on 1024 precisely). Same caveat as split-radix: different rounding
@@ -643,15 +623,15 @@ Ranked levers — several landed in the AVX2-kernel round, the rest remain:
    double-add chains (~20 cycles/pixel), not on sqrt or DRAM. Exactly the
    predicted fix landed: the integer window sums are spilled per chunk
    (order-free because exact) and the sqrt/divide/guard tail runs as a
-   branchless AVX2 kernel over cache-resident lanes. The pure-Go core also
-   runs the per-row column-sum slide and the fused min/max scan (with
-   OpenCV's first-occurrence ties, via a lexicographic (value, index)
-   lane tournament) as kernels. The residual is the window-sum spill's
-   sequential prefix; SIMD prefix-sum lanes remain possible.
+   branchless vector kernel over cache-resident lanes, as do the per-row
+   column-sum slide and the fused min/max scan (with OpenCV's
+   first-occurrence ties, via a lexicographic (value, index) lane
+   tournament). The residual is the window-sum spill's sequential prefix;
+   SIMD prefix-sum lanes remain possible.
 6. **Plumbing — mostly implemented:** per-size twiddle/swap-pair tables are
-   now cached for the process lifetime and the pure-Go core pools all
-   scratch. Remaining: skipping the normalized write-back when the caller
-   wants only `Match` extrema — a few ms on big scenes.
+   cached for the process lifetime and all scratch is pooled. Remaining:
+   skipping the normalized write-back when the caller wants only `Match`
+   extrema — a few ms on big scenes.
 
 **What the contract forbids — including being *better*.** With 8-bit inputs,
 a number-theoretic transform over the prime 29·2^57+1 computes the raw
@@ -672,7 +652,7 @@ cvmatch's) correlation is off by up to ±32 before normalization — that is
 precisely the ~1e-6 noise the parity tests measure, and NTT removes it.
 This mode was **built, measured, and then removed** (`MatchExact`, present
 only in the v1.1.x tags): the Montgomery-NTT correlation worked and was
-bit-identical across platforms and both cores, but measured ~17x slower
+bit-identical across platforms, but measured ~17x slower
 than `Match` (64-bit modular butterflies have no SIMD; the two-real-rows
 packing does not survive in Z_p, doubling transform count and column
 width — a data point that also refutes the intuition "integer arithmetic
@@ -702,25 +682,17 @@ Same math, different engineering:
   its real-DFT machinery. Fully-zero padding row pairs are skipped, bit
   reversal runs off a precomputed swap-pair list, and per-size
   twiddle/swap-pair tables are cached for the process lifetime.
-- **Explicit AVX2 kernels, identical values.** The FFT stage cascade, the
+- **Explicit SIMD kernels, identical values.** The FFT stage cascade, the
   column-direction butterflies (contiguous row segments — a straight-line
-  sweep instead of a strided walk), the conjugate multiply and the
-  normalize sqrt/divide tail run hand-written AVX2 behind a runtime CPU
-  check — in the C core *and*, via `internal/simd` assembly, in the pure-Go
-  core. Every vector lane performs exactly the scalar op sequence
-  (individually rounded multiplies and adds, no FMA contraction — pinned
-  off in-source), so the kernels change nothing but time; the remaining
-  scalar code still gets `target_clones("arch=haswell","default")`
-  multi-versioning under glibc (`-DCVM_NO_TARGET_CLONES` opts out).
-- **Persistent worker pool.** One `Match` call used to spawn and join
-  threads per parallel phase; workers are now created once, parked on a
-  condvar between jobs, with the same static share partition (concurrent
-  callers and forked children fall back to spawn-per-call — outputs are
-  identical on every path).
+  sweep instead of a strided walk), the conjugate multiply, the normalize
+  sqrt/divide tail, the sliding column sums, the min/max scan and
+  RGBA→gray run hand-written `internal/simd` assembly — AVX2 behind a
+  runtime CPU check on amd64, NEON on arm64. Every vector lane performs
+  exactly the scalar op sequence (individually rounded multiplies and
+  adds, never FMA), so the kernels change nothing but time.
 - **libm-free trig.** Twiddle factors come from a deterministic internal
-  `sincospi` (exact dyadic reduction + fdlibm-style kernels) implemented
-  identically in C and Go — the source of the two cores' bit-identical
-  outputs, and the reason results no longer vary across glibc/musl.
+  `sincospi` (exact dyadic reduction + fdlibm-style kernels) — the reason
+  results do not vary across glibc/musl/OS math libraries.
 - **Template spectrum pre-scaled.** The `1/(dftW·dftH)` inverse-DFT factor is
   folded into the template spectrum once per channel, so the per-block inverse
   transform needs no extra normalization sweep.
@@ -729,19 +701,17 @@ Same math, different engineering:
   `corr - wndSum·templMean` cancels exactly — so it contributes *nothing* to
   CCOEFF_NORMED. `Match` detects a constant alpha plane (virtually every
   screenshot) with a cheap scan and processes 3 of 4 channels: ~25% less work,
-  bit-equivalent output, asserted on both cores.
+  bit-equivalent output, asserted by `TestConstantAlphaSkip`.
 - **Zero-copy inputs.** `*image.RGBA`, `*image.Gray` and the Y plane of
   `*image.YCbCr` (JPEG) are handed to the core with their native strides —
   sub-images included, no redraw, no copies. The uint8→float conversion
   happens inside the block-load loop, which is a copy the FFT needs anyway;
   the parent image is never converted or duplicated as a whole.
 - **Bounded scratch.** DFT tile buffers are capped (~16 MB each even for
-  pathological template sizes; a few hundred KB in typical scenarios), and the
-  only full-size allocation is the float32 response map itself. Scratch is
-  freed before returning (only the small cached twiddle tables persist) —
-  one 1080p `Match` peaks at ~15 MB of native memory and performs a single
-  32-byte Go allocation; the pure-Go core recycles all scratch through
-  `sync.Pool`.
+  pathological template sizes; a few hundred KB in typical scenarios), and
+  the only full-size allocation is the float32 response map itself. All
+  scratch is recycled through `sync.Pool` (every pooled buffer is fully
+  overwritten before use), so steady-state matching allocates ~0.
 - **`MatchGray`** trades exact RGBA parity for a single-channel pipeline
   (OpenCV's fixed-point BT.601 RGB2GRAY weights; YCbCr images use their Y
   plane directly with zero conversion): ~4x less FFT and normalization work,
@@ -749,18 +719,17 @@ Same math, different engineering:
 
 ## Layout
 
-- `cvmatch.c` / `cvmatch.h` — the native C core (C99, no deps).
-- `impl_purego.go` — the pure-Go port of the same core; `impl_cgo.go` /
-  `impl_nocgo.go` select between them by build tag.
-- `internal/simd/` — the pure-Go core's assembly kernels (AVX2 on amd64,
+- `impl.go` — the matching core: block-FFT correlation, sliding-window
+  normalization, fused minMaxLoc, tile/band parallelism.
+- `internal/simd/` — the assembly kernels (AVX2 on amd64,
   runtime-detected; NEON on arm64): FFT stage cascades and fused
   column-stage quads, byte→complex packing, spectrum untangle/combine,
   result emit, sliding column sums, the normalize tail, first-occurrence
   min/max scan and RGBA→gray, plus the generic fallback declarations.
   Every kernel executes the scalar loop's exact op sequence — asserted
   bit-for-bit by `TestSIMDMatchesScalar` and the kernel unit tests, and
-  across architectures by whole-map hashes. The NEON bodies live in
-  `internal/simd/_gen/kernels.S` (annotated ARM64 assembly) and are
+  across architectures by the golden output hashes. The NEON bodies live
+  in `internal/simd/_gen/kernels.S` (annotated ARM64 assembly) and are
   spliced into `simd_arm64.s` as WORD streams by `_gen/gen.py` (Go's
   assembler has no un-fused vector FP arithmetic); CI regenerates and
   diffs the stream to keep them in lockstep.
@@ -768,7 +737,7 @@ Same math, different engineering:
 - `scenes/` — deterministic benchmark/parity scenes shared by the main
   module's benchmarks and the native comparison in `bench/`.
 - `bench/` — separate module holding the native-C++ comparison
-  (element-wise parity + three-way value tests, `memprobe` peak-RSS tool,
+  (element-wise parity + value tests, `memprobe` peak-RSS tool,
   binary-size probe) so the root module stays dependency-free.
 - `bench/cpp/` — the native OpenCV C++ benchmark (`build.sh` fetches
   prebuilt static OpenCV 4.12 archives and matching headers;
@@ -784,14 +753,11 @@ Same math, different engineering:
 
 ## Requirements and releases
 
-None beyond Go. With cgo enabled (default) any C99 compiler gives the C
-core — Linux, macOS, Windows (mingw); AVX2 multi-versioning engages
-automatically on x86-64 glibc and falls back to portable code elsewhere.
-With `CGO_ENABLED=0` (or no C toolchain at all, e.g. cross-compiling) the
-pure-Go core is selected automatically — same results, zero setup, SIMD
-kernels on both amd64 (AVX2) and arm64 (NEON), and on amd64 it is the
-faster of the two cores (see the matrix). CI runs the full suite on both
-architectures.
+None beyond Go — no C toolchain on any platform, ever: `go build` and any
+cross-compilation just work. SIMD kernels engage automatically on amd64
+(AVX2, runtime-detected) and arm64 (NEON); every other architecture runs
+the scalar Go code with bit-identical output. CI runs the full suite on
+both amd64 and arm64 runners.
 
 Versions are tagged from `main` via the *Tag release* workflow
 (`.github/workflows/tag.yml`); CI runs the full test + parity + benchmark

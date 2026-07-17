@@ -59,14 +59,13 @@ Any transformation is legal only if it provably preserves every output bit:
 ```sh
 go vet ./... && (cd bench && go vet ./...)
 go test -count=1 .                    # includes the golden-output anchors
-CGO_ENABLED=0 go test -count=1 .      # must behave identically
 go test -race -count=1 .
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go test -c -o /tmp/t.arm64 . \
+GOOS=linux GOARCH=arm64 go test -c -o /tmp/t.arm64 . \
   && qemu-aarch64-static /tmp/t.arm64      # full suite under emulation
-# cross-arch bit-identity: hash whole response maps on amd64 and
-# qemu-arm64 for identical deterministic inputs — they must be equal
+# TestGoldenOutputs passing on both architectures IS the cross-arch
+# bit-identity proof (the constants pin every output bit)
 for t in linux/386 linux/riscv64 windows/amd64 wasip1/wasm darwin/arm64; do
-  GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build ./...; done
+  GOOS=${t%/*} GOARCH=${t#*/} go build ./...; done
 ```
 
 `TestSIMDMatchesScalar` (bit-for-bit asm↔scalar), the kernel unit tests

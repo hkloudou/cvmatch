@@ -30,10 +30,10 @@ func TestConcurrentMatch(t *testing.T) {
 				if gx != gWantX || gy != gWantY || gv != gWantV {
 					t.Errorf("concurrent MatchGray diverged: (%d,%d) %v", gx, gy, gv)
 				}
-				// the pure-Go core must be safe too (it is the whole library
-				// under CGO_ENABLED=0)
-				res := make([]float32, (320-32+1)*(240-24+1))
-				matchU8Go(parent.Pix, parent.Stride, 320, 240, sub.Pix, sub.Stride, 32, 24, 3, 4, 2, res)
+				res, w, _ := MatchMap(parent, sub)
+				if res[wantY*w+wantX] != wantV {
+					t.Errorf("concurrent MatchMap diverged at (%d,%d)", wantX, wantY)
+				}
 			}
 		}()
 	}

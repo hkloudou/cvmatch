@@ -37,11 +37,11 @@ func TestSIMDMatchesScalar(t *testing.T) {
 
 		simd.Enabled = true
 		fast := make([]float32, rw*rh)
-		fMinV, fMinX, fMinY, fMaxV, fMaxX, fMaxY := matchU8Go(img, c.iw*c.step, c.iw, c.ih, tpl, c.tw*c.step, c.tw, c.th, c.cn, c.step, 3, fast)
+		fMinV, fMinX, fMinY, fMaxV, fMaxX, fMaxY := matchU8(img, c.iw*c.step, c.iw, c.ih, tpl, c.tw*c.step, c.tw, c.th, c.cn, c.step, 3, fast)
 
 		simd.Enabled = false
 		slow := make([]float32, rw*rh)
-		sMinV, sMinX, sMinY, sMaxV, sMaxX, sMaxY := matchU8Go(img, c.iw*c.step, c.iw, c.ih, tpl, c.tw*c.step, c.tw, c.th, c.cn, c.step, 3, slow)
+		sMinV, sMinX, sMinY, sMaxV, sMaxX, sMaxY := matchU8(img, c.iw*c.step, c.iw, c.ih, tpl, c.tw*c.step, c.tw, c.th, c.cn, c.step, 3, slow)
 
 		for i := range fast {
 			if math.Float32bits(fast[i]) != math.Float32bits(slow[i]) {

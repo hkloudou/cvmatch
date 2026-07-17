@@ -1,19 +1,15 @@
 // Package cvmatch implements OpenCV-compatible TM_CCOEFF_NORMED template
-// matching — no OpenCV, no third-party static libraries, no dependencies.
-//
-// Two interchangeable cores ship in the package: a single self-contained
-// C99 file used through cgo, and a pure-Go port with hand-written AVX2
-// kernels selected automatically when cgo is unavailable (CGO_ENABLED=0,
-// cross-compilation without a C toolchain) — on amd64 the pure-Go core
-// now benchmarks ahead of the C one. The Impl constant reports which one
-// is active; both produce bit-identical output (asserted exactly by the
-// tests: the cores run the same single-rounded IEEE op sequence,
-// including a shared deterministic twiddle generator, independent of the
-// system libm).
+// matching in pure Go — no OpenCV, no cgo, no dependencies. Hand-written
+// SIMD kernels (AVX2 on amd64, NEON on arm64) accelerate the hot loops;
+// every other platform runs the scalar Go code with identical output.
 //
 // Match is numerically aligned with OpenCV's matchTemplate + minMaxLoc on
 // CV_8UC4 input (the classic ImageToMatRGBA-style pipeline), while
-// MatchGray trades exact RGBA parity for ~4x less work.
+// MatchGray trades exact RGBA parity for ~4x less work. Output is
+// bit-identical across architectures, thread counts and SIMD on/off: the
+// pipeline runs one fixed single-rounded IEEE op sequence, including a
+// deterministic twiddle generator independent of the system libm, and the
+// golden tests pin the exact bits.
 package cvmatch
 
 import (
@@ -25,6 +21,11 @@ import (
 
 	"github.com/hkloudou/cvmatch/internal/simd"
 )
+
+// Impl reports the active core. Since the cgo/C core was retired (the Go
+// core benchmarks ahead of it on both amd64 and arm64) there is only one:
+// "purego". Kept for compatibility.
+const Impl = "purego"
 
 // Threads overrides the number of workers a single Match/MatchMap/MatchGray
 // call uses internally. 0 (the default) means automatic: GOMAXPROCS capped
@@ -142,7 +143,7 @@ func bounds(img image.Image) image.Rectangle {
 }
 
 // toRGBA returns interleaved RGBA pixels plus stride. A *image.RGBA is used
-// in place with zero copies (sub-images included — the C side honors the
+// in place with zero copies (sub-images included — the core honors the
 // stride); everything else is redrawn, matching ImageToMatRGBA semantics.
 func toRGBA(img image.Image) (pix []uint8, stride, w, h int) {
 	b := bounds(img)

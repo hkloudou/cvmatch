@@ -1,11 +1,11 @@
 package cvmatch
 
-// Pure-Go port of cvmatch.c, selected automatically when cgo is off (see
-// impl_nocgo.go). It runs the same algorithm — block-FFT cross-correlation
-// with OpenCV's tile heuristic, sliding-column-sum normalization with
-// OpenCV's exact guards, fused minMaxLoc, tile/band parallelism with
-// bit-identical output for any worker count — and is always compiled so
-// tests can compare it against the C core when cgo is on.
+// The cvmatch core: block-FFT cross-correlation with OpenCV's tile
+// heuristic, sliding-column-sum normalization with OpenCV's exact guards,
+// fused minMaxLoc, and tile/band parallelism with bit-identical output for
+// any worker count. Pure Go with SIMD kernels (internal/simd) on the hot
+// loops; TestGoldenOutputs pins its output bits to values cross-validated
+// against OpenCV.
 
 import (
 	"fmt"
@@ -15,7 +15,7 @@ import (
 	"github.com/hkloudou/cvmatch/internal/simd"
 )
 
-const maxThreadsGo = 16
+const maxThreads = 16
 
 // Scratch pools: every pooled buffer is fully overwritten before use
 // (block spectra include their zero padding, column sums are cleared in
@@ -53,8 +53,8 @@ func clampThreads(n int) int {
 	if n < 1 {
 		return 1
 	}
-	if n > maxThreadsGo {
-		return maxThreadsGo
+	if n > maxThreads {
+		return maxThreads
 	}
 	return n
 }
@@ -82,11 +82,11 @@ func runParallel(n int, fn func(w int)) {
 
 // sincospiFrac returns cos, sin of pi*j/half (0 <= j < half, half a power
 // of two): exact dyadic range reduction plus fdlibm-style minimax kernels
-// in plain sequenced double ops — no library trig. cvmatch.c runs the
-// identical op sequence, so both cores' twiddle tables (and therefore
-// their outputs) are bit-identical on every platform regardless of the
-// system libm. The float64 conversions around products pin each op to one
-// rounding (Go may otherwise fuse mul-adds on some architectures).
+// in plain sequenced double ops — no library trig, so the twiddle tables
+// (and therefore the outputs) are bit-identical on every platform
+// regardless of the system libm. The float64 conversions around products
+// pin each op to one rounding (Go may otherwise fuse mul-adds on some
+// architectures).
 func sincospiFrac(j, half int) (float32, float32) {
 	m := 2 * j    // pi*j/half = k*(pi/2) + u*(pi/2), u in [0,1)
 	k := m / half // 0 or 1
@@ -125,7 +125,7 @@ func sincospiFrac(j, half int) (float32, float32) {
 }
 
 // makeTwiddles fills tw[half+j] = exp(-pi*i*j/half) for each power-of-two
-// stage, matching the C layout.
+// stage.
 func makeTwiddles(n int) []complex64 {
 	tw := make([]complex64, n)
 	tw[0] = 1
@@ -186,11 +186,11 @@ func fftTables(n int) *fftTab {
 }
 
 // bfly applies one radix-2 butterfly with explicit float32 single-rounding
-// semantics: the products are rounded to float32 before the add/sub, which
-// is exactly what the C core computes (the gc compiler would otherwise
-// evaluate complex64 products through float64 intermediates on some
-// architectures, and may fuse mul-adds on others; the float32 conversions
-// pin both down). The SIMD kernels implement precisely these ops.
+// semantics: the products are rounded to float32 before the add/sub (the
+// gc compiler would otherwise evaluate complex64 products through float64
+// intermediates on some architectures, and may fuse mul-adds on others;
+// the float32 conversions pin both down). The SIMD kernels implement
+// precisely these ops.
 func bfly(p, q *complex64, wr, wi float32) {
 	qv := *q
 	vr := float32(real(qv)*wr) - float32(imag(qv)*wi)
@@ -421,8 +421,7 @@ func mulConjGo(spec, tspec []complex64) {
 	}
 	for i, a := range spec {
 		b := tspec[i]
-		// Explicit float32 roundings, matching the C core and the SIMD
-		// kernel (see bfly).
+		// Explicit float32 roundings, matching the SIMD kernel (see bfly).
 		re := float32(real(a)*real(b)) + float32(imag(a)*imag(b))
 		im := float32(imag(a)*real(b)) - float32(real(a)*imag(b))
 		spec[i] = complex(re, im)
@@ -632,14 +631,12 @@ func colSlideGo(colSum []int32, colSum2 []int64, rsub, radd []uint8, iw, cn, cs,
 }
 
 // normChunkGo is the result-row chunk for the normalize scan: window sums
-// are spilled per chunk so the buffer stays L1-resident; matches the C
-// core's CVM_NORM_CHUNK.
+// are spilled per chunk so the buffer stays L1-resident.
 const normChunkGo = 256
 
 // normOne evaluates the TM_CCOEFF_NORMED tail for one element. The float64
 // conversions around products pin each op to one rounding (Go may
-// otherwise fuse mul-adds on some architectures); the C core computes the
-// same single-rounded sequence.
+// otherwise fuse mul-adds on some architectures).
 func normOne(num, wndMean2, s2d, invArea, eps, templNorm float64) float32 {
 	wndMean2 = float64(wndMean2 * invArea)
 	diff2 := s2d - wndMean2
@@ -690,7 +687,7 @@ func normalizeBandGo(img []uint8, istride, iw int, cn, step, tw, th, rw, y0, y1 
 	useKernel := simd.Enabled && cn != 2
 
 	ext := goExtrema{minV: math.MaxFloat32, maxV: -math.MaxFloat32, minY: y0, maxY: y0}
-	const eps = 10.0 * 0x1p-23 // 10*FLT_EPSILON, exactly as the C core
+	const eps = 10.0 * 0x1p-23 // 10*FLT_EPSILON, exactly as OpenCV
 
 	for y := y0; ; y++ {
 		var s [4]int64
@@ -890,7 +887,7 @@ func normalizeParallelGo(img []uint8, istride, iw int, tpl []uint8, tstride, tw,
 
 // ----------------------------------------------------------- entrypoint --
 
-func matchU8Go(img []uint8, istride, iw, ih int, tpl []uint8, tstride, tw, th, cn, step, threads int, result []float32) (float32, int, int, float32, int, int) {
+func matchU8(img []uint8, istride, iw, ih int, tpl []uint8, tstride, tw, th, cn, step, threads int, result []float32) (float32, int, int, float32, int, int) {
 	if cn < 1 || cn > 4 || step < cn || tw < 1 || th < 1 || tw > iw || th > ih ||
 		istride < iw*step || tstride < tw*step {
 		panic(fmt.Sprintf("cvmatch: bad match arguments (%dx%d in %dx%d, cn=%d step=%d)", tw, th, iw, ih, cn, step))
