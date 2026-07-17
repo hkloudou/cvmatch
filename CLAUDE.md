@@ -89,6 +89,14 @@ element-wise against a native OpenCV C++ binary.
   compare absolute numbers across hosts; compare only within one run.
 - **1T numbers are the primary signal**; 4T on shared runners carries
   ±2-5% noise and shows outliers in both directions.
+- **Fairness: every vs-native claim is 1T vs 1T.** OpenCV's
+  matchTemplate is single-threaded, so charts and headline ratios never
+  compare cvmatch multi-thread numbers against it. Internal threading
+  stays in the product and is measured in the tables as its own fact.
+- **Ratios only compare within one session on one machine.** Even the
+  scalar/asm ratio shifts between runner microarchitectures (XEON vs
+  EPYC measured 3.3-3.9x vs 4.1-4.2x for identical code), so judging an
+  optimization requires an A/B on the same host, not two refreshes.
 - **`bench-charts.yml` is the only benchmark pipeline** (weekly cron +
   `workflow_dispatch`, runnable on any ref; results publish to the
   `assets` branch, or stay a workflow artifact with `publish=false`).
@@ -103,13 +111,13 @@ element-wise against a native OpenCV C++ binary.
 
 ## PR workflow
 
-- **codex reviews are advisory.** codex auto-reviews new PRs; its
-  findings are suggestions to adjudicate — fix the valid ones, politely
-  rebut the rest, resolve threads. Claude leads the review and does the
-  merging, and when confident merges on green CI without waiting for a
-  codex verdict (owner's standing instruction).
-- A codex **👍 reaction (on the PR body) means approval** and fires no
-  webhook — poll reactions/reviews if waiting. 👀 means still reviewing.
+- **codex is observed, not waited for** (owner's standing instruction):
+  Claude leads and merges on green CI when confident. Afterwards,
+  periodically sweep recent merged PRs for codex comments and treat them
+  as a self-check list — adjudicate late findings, fix forward the valid
+  ones, politely rebut the rest.
+- A codex **👍 reaction (on the PR body) means agreement** and fires no
+  webhook; 👀 means still reviewing. Neither gates anything.
 - Merge with a merge commit titled `Merge PR #N: <summary>`.
 - Never write the literal skip-CI marker (bracketed `skip ci`) in commit
   messages — it suppresses all workflows on the PR. The bench-charts

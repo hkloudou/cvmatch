@@ -293,11 +293,14 @@ summary always agree.
 **Readings, including where cvmatch does *not* win:**
 
 - The **SIMD build** (`-tags cvmatch_asm`) is **faster than native OpenCV
-  on every scene single-threaded** — from ~2.2x on the 4-channel
-  varying-alpha scene (no constant-alpha skip there — 4 full channels) up
-  to ~8x on the smallest photo. Internal threading adds another 2–3.5x on
-  multi-tile scenes (the big windows/noise scenes land at ~7–12x total on
-  4 cores).
+  on every scene, single-threaded vs single-threaded** — from ~2.2x on
+  the 4-channel varying-alpha scene (no constant-alpha skip there — 4
+  full channels) up to ~8x on the smallest photo. That 1T-vs-1T reading
+  is the only vs-native claim this README makes: OpenCV's
+  `matchTemplate` does not use extra cores, so multiplying our
+  multi-thread numbers against its single thread would flatter nobody
+  but us. cvmatch's internal threading (up to ~1.9x on multi-tile
+  scenes, bit-identical output) is measured separately in the tables.
 - The **default build** pays the SIMD multiple back (scalar complex
   arithmetic with pinned roundings resists compiler vectorization — the
   measured summary under the matrix carries the exact ranges), so
