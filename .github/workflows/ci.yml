@@ -31,6 +31,41 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ./...
           CGO_ENABLED=0 GOOS=linux GOARCH=riscv64 go build ./...
 
+  test-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
+      - name: NEON kernel stream matches kernels.S (generator is deterministic)
+        run: |
+          python3 internal/simd/_gen/gen.py
+          git diff --exit-code internal/simd/simd_arm64.s
+      - name: Unit tests, cgo core explicit (NEON pure-Go vs C core parity on arm64)
+        run: CGO_ENABLED=1 go test -v ./...
+      - name: Race detector
+        run: CGO_ENABLED=1 go test -race ./...
+      - name: Pure-Go core tests (CGO_ENABLED=0)
+        run: CGO_ENABLED=0 go test ./... && CGO_ENABLED=0 go vet .
+      - name: cvmatch matrix — arm64 pure-Go core (NEON), 1 and 4 threads
+        run: |
+          {
+            echo "### arm64 pure-Go core (NEON, CGO_ENABLED=0), -cpu 1,4"
+            echo '```'
+            CGO_ENABLED=0 go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: cvmatch matrix — arm64 cgo core, 1 and 4 threads
+        run: |
+          {
+            echo "### arm64 cgo core (CGO_ENABLED=1), -cpu 1,4"
+            echo '```'
+            go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
   benchmark:
     runs-on: ubuntu-latest
     needs: test

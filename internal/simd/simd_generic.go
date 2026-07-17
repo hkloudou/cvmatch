@@ -1,8 +1,9 @@
-//go:build !amd64 || !gc
+//go:build (!amd64 && !arm64) || !gc
 
 package simd
 
-// Non-amd64 (or non-gc) builds run the generic Go loops.
+// Builds without assembly kernels (neither amd64 nor arm64, or a non-gc
+// toolchain) run the generic Go loops.
 
 // Enabled is false where no assembly kernels exist (a var so tests can
 // exercise the SIMD/scalar toggle uniformly across platforms; it must
