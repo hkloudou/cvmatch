@@ -324,7 +324,7 @@ numbers as cvmatch-internal.
   fairness rules) — that residual is real and documented in the headroom
   section.
 - The **pure-Go core now also beats native OpenCV single-threaded on
-  every scene** (from ~1.7x on varying-alpha to ~4x on fruits) — its
+  every scene** (from ~2.2x on varying-alpha to ~8x on fruits) — its
   assembly kernels execute the same op sequence the C core does, with two
   full backends: AVX2 on amd64 and NEON on arm64 (bit-identical to each
   other, asserted by hashing whole response maps across architectures).
