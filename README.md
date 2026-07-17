@@ -273,6 +273,11 @@ Reproduce locally with `go test -bench . -benchtime 5x -cpu 1,4` (and
 </picture>
 
 <picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/bench-arm64-dark.svg">
+  <img alt="arm64 benchmark: cvmatch cgo core vs pure-Go NEON core at identical output" src="docs/bench-arm64-light.svg">
+</picture>
+
+<picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/mem-dark.svg">
   <img alt="Peak memory for one 1080p match: native OpenCV C++ vs cvmatch" src="docs/mem-light.svg">
 </picture>

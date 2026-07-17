@@ -115,7 +115,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/benchdata.json docs/bench-light.svg docs/bench-dark.svg docs/mem-light.svg docs/mem-dark.svg README.md
+          git add docs/benchdata.json docs/bench-light.svg docs/bench-dark.svg docs/bench-arm64-light.svg docs/bench-arm64-dark.svg docs/mem-light.svg docs/mem-dark.svg README.md
           if git diff --cached --quiet; then
             echo "charts unchanged"
           else
