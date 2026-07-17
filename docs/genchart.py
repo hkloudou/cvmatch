@@ -65,9 +65,12 @@ SERIES = [("OpenCV C++ (native)", "native"),
           ("MatchGray (no asm, default)", "graygo")]
 # Identical comparison dimensions on both architectures: native OpenCV +
 # the four cvmatch series, every cvmatch bar annotated vs its own
-# architecture's native baseline.
-KEYS_AMD = ("native", "asm4", "go4", "agray4", "gray4")
-KEYS_ARM = ("nativeA", "asmA4", "goA4", "agrayA4", "grayA4")
+# architecture's native baseline. All bars are SINGLE-THREADED —
+# OpenCV's matchTemplate is single-threaded, so the like-for-like chart
+# is 1T vs 1T; cvmatch's internal multi-threading is real and kept, but
+# it is disclosed in the tables, never used as the headline comparison.
+KEYS_AMD = ("native", "asm1", "go1", "agray1", "gray1")
+KEYS_ARM = ("nativeA", "asmA1", "goA1", "agrayA1", "grayA1")
 REFS = [None, 0, 0, 0, 0]
 
 # The chart shows one representative scene per class (full 14-scene
@@ -177,10 +180,10 @@ def speed_chart(mode):
     out.append(f'<text x="20" y="20" font-size="15" font-weight="600" fill="{t["ink"]}" {FONT}>'
                'Template matching speed — TM_CCOEFF_NORMED, end-to-end call, identical output</text>')
     out.append(f'<text x="20" y="38" font-size="12" fill="{t["muted"]}" {FONT}>'
-               'asm = -tags cvmatch_asm build, no asm = default build · '
-               'OpenCV matchTemplate is single-threaded by design · full 14-scene tables below</text>')
+               'every bar single-threaded (like-for-like: OpenCV matchTemplate is 1T by design) · '
+               'asm = -tags cvmatch_asm, no asm = default build · multi-thread numbers in the tables</text>')
     y = legend(out, t, 60, SERIES)
-    note = 'ms — lower is better · ×  = speedup vs native C++ (&lt;1 = slower)'
+    note = 'ms, 1T — lower is better · ×  = speedup vs native C++ (&lt;1 = slower)'
     for arch, keys, host in (("amd64", KEYS_AMD, HOST),
                              ("arm64", KEYS_ARM, DATA.get("hostArm64", ""))):
         rows = rows_for(CHART_SCENES, keys)
@@ -312,13 +315,24 @@ def matrix_markdown():
     r_arm = [s["goA1"] / s["asmA1"] for s in SC.values() if "goA1" in s and "asmA1" in s]
     r_nat = [s["native"] / s["asm1"] for s in SC.values() if "native" in s and "asm1" in s]
     r_natA = [s["nativeA"] / s["asmA1"] for s in SC.values() if "nativeA" in s and "asmA1" in s]
+    r_thr = [s["asm1"] / s["asm4"] for s in SC.values() if "asm1" in s and "asm4" in s]
     if r_amd and r_arm and r_nat:
         lines += [
             "",
-            f"**Measured summary (1T):** the asm build runs {min(r_amd):.1f}–{max(r_amd):.1f}x",
-            f"faster than the default no-asm build on amd64 ({min(r_arm):.1f}–{max(r_arm):.1f}x on",
-            f"arm64), and beats native OpenCV C++ by {min(r_nat):.1f}–{max(r_nat):.1f}x on amd64"
+            f"**Measured summary (single-threaded, like-for-like):** the asm build runs",
+            f"{min(r_amd):.1f}–{max(r_amd):.1f}x faster than the default no-asm build on amd64",
+            f"({min(r_arm):.1f}–{max(r_arm):.1f}x on arm64), and beats native OpenCV C++ by",
+            f"{min(r_nat):.1f}–{max(r_nat):.1f}x on amd64"
             + (f" and {min(r_natA):.1f}–{max(r_natA):.1f}x on arm64." if r_natA else "."),
+        ]
+    if r_thr:
+        lines += [
+            "",
+            f"Internal multi-threading (4 workers, bit-identical output at any worker",
+            f"count) further improves cvmatch by up to {max(r_thr):.1f}x on the multi-tile",
+            "scenes — the 4T columns above. It is a product feature, not part of the",
+            "vs-native comparison: OpenCV's matchTemplate does not thread, so the",
+            "headline numbers are 1T vs 1T.",
         ]
     if all(k in MEM for k in ("native", "match", "gray", "baseline")):
         lines += [
