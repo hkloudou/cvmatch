@@ -30,6 +30,8 @@ jobs:
         with:
           go-version: "1.24"
           cache: false
+      - name: Fetch real sample images (OpenCV samples/data)
+        run: bench/testdata/fetch.sh
       - name: Measure Go cores on arm64 (-cpu 1,4, both builds)
         run: |
           mkdir -p /tmp/arm64
