@@ -45,6 +45,18 @@ Any transformation is legal only if it provably preserves every output bit:
   run in CI on both arches.
 - Shared, arch-independent contracts live in `simd_kernels.go`; every
   kernel's doc comment states its exactness argument and bounds contract.
+- The asm is split by domain — amd64: `simd_amd64.s` (CPU detection) +
+  `simd_{fft,pack,norm}_amd64.s`; arm64 sources:
+  `_gen/kernels_{fft,pack,norm}.S` (gen.py concatenates and splices; its
+  output is layout-independent, so reordering sources never churns the
+  generated file). File-scoped `<>` symbols must live in the file that
+  uses them.
+- **Comment ratchet**: every kernel body annotates registers at first
+  use; every NEW kernel additionally gets a register-map header block
+  (see NormRow in simd_norm_amd64.s / FFTStages in kernels_fft.S for the
+  format), and whenever an existing kernel is touched, its map is added
+  in the same change. Comments in kernels_*.S are free — they never
+  affect the generated WORD stream.
 - **amd64**: hand-written AVX2 in `simd_amd64.s` (runtime-detected;
   Plan9 syntax, `NOSPLIT`, `VZEROUPPER` on every exit).
 - **arm64**: Go's assembler has no un-fused vector FP ops, so bodies are
