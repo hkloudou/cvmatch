@@ -3,11 +3,17 @@
 auto-generated README sections from docs/benchdata.json.
 
 benchdata.json is produced by docs/collect.py from raw benchmark outputs
-(`go test -bench . -benchtime 5x -cpu 1,4` for both cores,
-`bench/cpp/native_bench`, and the memprobe peak-RSS runs) — all measured in
-one session on one machine so the three-way comparison is coherent. The
-bench-charts GitHub workflow re-measures on every push to main and commits
-the refreshed charts, benchdata.json and README table.
+(`go test -bench . -benchtime 5x -cpu 1,4` for both build modes on the
+amd64 and arm64 runners, `bench/cpp/native_bench`, and the memprobe
+peak-RSS runs) — the amd64 numbers are all measured in one session on one
+machine so the comparison against native OpenCV is coherent. The
+bench-charts GitHub workflow re-measures on every push to main and
+commits the refreshed charts, benchdata.json and README table.
+
+Series colors are meaning-stable across every chart: green = native
+OpenCV C++, blue family = cvmatch.Match, orange family =
+cvmatch.MatchGray; the solid shade is the SIMD build (-tags cvmatch_asm),
+the light shade is the default pure-Go build.
 
 Manual run: python3 docs/collect.py [flags] && python3 docs/genchart.py
 """
@@ -41,31 +47,43 @@ LAYOUT = [
     ("photo_starry_night", "starry_night 752×600 · sub 128×128", "photo"),
 ]
 
-SERIES = ["OpenCV C++ (native, 1 thread)", "cvmatch pure-Go (CGO_ENABLED=0)",
-          "cvmatch.Match (cgo)", "cvmatch.MatchGray (cgo)"]
-# amd64 chart: every Go bar is annotated with its speedup vs native (bar 0)
-REFS = [None, 0, 0, 0]
+# (legend label, color slot); the row value order everywhere follows these.
+SERIES = [("OpenCV C++ (native)", "native"),
+          ("Match (asm)", "match"),
+          ("Match (pure Go)", "matchgo"),
+          ("MatchGray (asm)", "gray"),
+          ("MatchGray (pure Go)", "graygo")]
+KEYS = ("native", "asm4", "go4", "agray4", "gray4")
+REFS = [None, 0, 0, 0, 0]  # annotate cvmatch bars with speedup vs native
 
-# arm64 chart: no native baseline — pure-Go bars annotate vs their cgo twin
-ARM_SERIES = ["cvmatch.Match (cgo)", "cvmatch.Match pure-Go (NEON)",
-              "cvmatch.MatchGray (cgo)", "cvmatch.MatchGray pure-Go (NEON)"]
-ARM_REFS = [None, 0, None, 2]
+ARM_SERIES = SERIES[1:]
+ARM_KEYS = ("asmA4", "goA4", "agrayA4", "grayA4")
+# no native baseline on the arm runner: annotate each asm bar with its
+# speedup over the matching default-build bar instead
+ARM_REFS = [1, None, 3, None]
 
 THEMES = {
-    "light": dict(series=["#008300", "#2a78d6", "#1baf7a", "#eda100"], ink="#24292f",
-                  sec="#57606a", muted="#6e7781", grid="#d0d7de", axis="#afb8c1"),
-    "dark": dict(series=["#008300", "#3987e5", "#199e70", "#c98500"], ink="#e6edf3",
-                 sec="#9198a1", muted="#8b949e", grid="#30363d", axis="#484f58"),
+    "light": dict(series=dict(native="#008300",
+                              match="#2a78d6", matchgo="#8ab8ec",
+                              gray="#eda100", graygo="#f3cd77",
+                              baseline="#8c959f"),
+                  ink="#24292f", sec="#57606a", muted="#6e7781",
+                  grid="#d0d7de", axis="#afb8c1"),
+    "dark": dict(series=dict(native="#008300",
+                             match="#3987e5", matchgo="#79a8dd",
+                             gray="#c98500", graygo="#c2a05c",
+                             baseline="#6e7681"),
+                 ink="#e6edf3", sec="#9198a1", muted="#8b949e",
+                 grid="#30363d", axis="#484f58"),
 }
 
 FONT = 'font-family="system-ui,-apple-system,Segoe UI,sans-serif"'
 LEFT, RIGHT, W = 260, 128, 980
 PLOT_W = W - LEFT - RIGHT
 BAR, PITCH, GROUP_GAP = 14, 16, 18
-NSER = len(SERIES)
 
 
-def rows_for(panel_key, keys=("native", "go4", "cgo4", "gray4")):
+def rows_for(panel_key, keys):
     """(label, *values) rows for one chart panel, in `keys` order."""
     rows = []
     for key, label, panel in LAYOUT:
@@ -95,14 +113,14 @@ def bar_path(x, y, w, h, r=4):
             f'a{r},{r} 0 0 1 -{r},{r} h-{w - r:.1f} z')
 
 
-def panel(out, t, rows, y, vmax, ticks, title, refs=REFS, note=None):
+def panel(out, t, rows, y, vmax, ticks, title, series, refs, note):
+    nser = len(series)
     out.append(f'<text x="{LEFT}" y="{y}" font-size="12" font-weight="600" '
                f'fill="{t["sec"]}" {FONT}>{title}</text>')
-    note = note or 'ms — lower is better · ×  = speedup vs native C++ (&lt;1 = slower)'
     out.append(f'<text x="{W - 4}" y="{y}" font-size="11" text-anchor="end" '
                f'fill="{t["muted"]}" {FONT}>{note}</text>')
     y += 10
-    h = len(rows) * (NSER * PITCH + GROUP_GAP) - GROUP_GAP + 8
+    h = len(rows) * (nser * PITCH + GROUP_GAP) - GROUP_GAP + 8
     for tick in ticks:
         x = LEFT + PLOT_W * tick / vmax
         out.append(f'<line x1="{x:.1f}" y1="{y}" x2="{x:.1f}" y2="{y + h}" '
@@ -112,11 +130,12 @@ def panel(out, t, rows, y, vmax, ticks, title, refs=REFS, note=None):
     out.append(f'<line x1="{LEFT}" y1="{y}" x2="{LEFT}" y2="{y + h}" stroke="{t["axis"]}" stroke-width="1"/>')
     yy = y + 4
     for label, *vals in rows:
-        out.append(f'<text x="{LEFT - 10}" y="{yy + NSER * PITCH / 2 + 4}" font-size="12" '
+        out.append(f'<text x="{LEFT - 10}" y="{yy + nser * PITCH / 2 + 4}" font-size="12" '
                    f'text-anchor="end" fill="{t["sec"]}" {FONT}>{label}</text>')
         for i, v in enumerate(vals):
             wpx = PLOT_W * min(v, vmax) / vmax
-            out.append(f'<path d="{bar_path(LEFT + 0.5, yy, wpx, BAR)}" fill="{t["series"][i]}"/>')
+            color = t["series"][series[i][1]]
+            out.append(f'<path d="{bar_path(LEFT + 0.5, yy, wpx, BAR)}" fill="{color}"/>')
             lab = f'{v:,.0f} ms' if v >= 100 else f'{v:,.1f} ms'
             if refs[i] is not None:
                 lab += f' · {vals[refs[i]] / v:.2f}×'
@@ -127,13 +146,17 @@ def panel(out, t, rows, y, vmax, ticks, title, refs=REFS, note=None):
     return y + h + 34
 
 
-def legend(out, t, y, series=SERIES):
+def legend(out, t, y, series):
     x = 20
-    for i, name in enumerate(series):
-        out.append(f'<rect x="{x}" y="{y - 9}" width="10" height="10" rx="2" fill="{t["series"][i]}"/>')
+    for name, slot in series:
+        out.append(f'<rect x="{x}" y="{y - 9}" width="10" height="10" rx="2" fill="{t["series"][slot]}"/>')
         out.append(f'<text x="{x + 15}" y="{y}" font-size="12" fill="{t["ink"]}" {FONT}>{name}</text>')
         x += 15 + 7 * len(name) + 26
     return y + 20
+
+
+PANELS = (("hd", "HD desktop + noise scenes"), ("4k", "4K scenes"),
+          ("photo", "Real photographs (OpenCV samples/data)"))
 
 
 def speed_chart(mode):
@@ -142,50 +165,46 @@ def speed_chart(mode):
     out.append(f'<text x="20" y="20" font-size="15" font-weight="600" fill="{t["ink"]}" {FONT}>'
                'Template matching speed — TM_CCOEFF_NORMED, end-to-end call, identical output</text>')
     out.append(f'<text x="20" y="38" font-size="12" fill="{t["muted"]}" {FONT}>'
-               f'{HOST}, one session · Go rows use default internal threading '
-               '· OpenCV matchTemplate does not use extra cores</text>')
-    y = legend(out, t, 60)
-    for panel_key, title in (("hd", "HD desktop + noise scenes"), ("4k", "4K scenes"),
-                             ("photo", "Real photographs (OpenCV samples/data)")):
-        rows = rows_for(panel_key)
+               f'{HOST}, one session · asm = -tags cvmatch_asm build, pure Go = default build '
+               '· OpenCV matchTemplate is single-threaded by design</text>')
+    y = legend(out, t, 60, SERIES)
+    note = 'ms — lower is better · ×  = speedup vs native C++ (&lt;1 = slower)'
+    for panel_key, title in PANELS:
+        rows = rows_for(panel_key, KEYS)
         if not rows:
             continue
         vmax, ticks = axis_scale(rows)
-        y = panel(out, t, rows, y + 8, vmax, ticks, title)
+        y = panel(out, t, rows, y + 8, vmax, ticks, title, SERIES, REFS, note)
     return svg(out, y)
 
 
-ARM_KEYS = ("cgoA4", "goA4", "grayA4", "pgrayA4")
-
-
 def arm_speed_chart(mode):
-    """arm64 twin of the speed chart: the two cvmatch cores head to head
-    (no native OpenCV baseline is built on the arm runner)."""
+    """arm64 twin of the speed chart (no native OpenCV baseline is built on
+    the arm runner, so the asm bars annotate vs the default build)."""
     t = THEMES[mode]
     out = []
     out.append(f'<text x="20" y="20" font-size="15" font-weight="600" fill="{t["ink"]}" {FONT}>'
-               'arm64 — cgo core vs pure-Go NEON core, identical output</text>')
+               'arm64 — the same pipeline, NEON kernels vs default build, identical output bits</text>')
     out.append(f'<text x="20" y="38" font-size="12" fill="{t["muted"]}" {FONT}>'
                f'{DATA.get("hostArm64", "arm64 CI runner")}, one session · '
-               'default internal threading (4 workers)</text>')
+               'asm = -tags cvmatch_asm build, pure Go = default build</text>')
     y = legend(out, t, 60, ARM_SERIES)
-    note = 'ms — lower is better · ×  = pure-Go speedup vs the cgo core (&lt;1 = slower)'
-    for panel_key, title in (("hd", "HD desktop + noise scenes"), ("4k", "4K scenes"),
-                             ("photo", "Real photographs (OpenCV samples/data)")):
+    note = 'ms — lower is better · ×  = asm speedup vs the default build'
+    for panel_key, title in PANELS:
         rows = rows_for(panel_key, ARM_KEYS)
         if not rows:
             continue
         vmax, ticks = axis_scale(rows)
-        y = panel(out, t, rows, y + 8, vmax, ticks, title, ARM_REFS, note)
+        y = panel(out, t, rows, y + 8, vmax, ticks, title, ARM_SERIES, ARM_REFS, note)
     return svg(out, y)
 
 
 def mem_chart(mode):
     t = THEMES[mode]
-    rows = [("OpenCV C++ (native)", MEM.get("native"), 0),
-            ("cvmatch.Match (cgo)", MEM.get("cgo"), 2),
-            ("cvmatch.MatchGray (cgo)", MEM.get("gray"), 3),
-            ("idle Go process (baseline)", MEM.get("baseline"), 1)]
+    rows = [("OpenCV C++ (native)", MEM.get("native"), "native"),
+            ("cvmatch.Match", MEM.get("match"), "match"),
+            ("cvmatch.MatchGray", MEM.get("gray"), "gray"),
+            ("idle Go process (baseline)", MEM.get("baseline"), "baseline")]
     rows = [r for r in rows if r[1]]
     out = []
     out.append(f'<text x="{LEFT}" y="20" font-size="15" font-weight="600" fill="{t["ink"]}" {FONT}>'
@@ -224,61 +243,62 @@ def svg(body, height):
             f'viewBox="0 0 {W} {height}" role="img">\n' + "\n".join(body) + "\n</svg>\n")
 
 
+def match_table(lines, keys, header):
+    """One Match matrix table; bold = best cvmatch cell per scene."""
+    lines += [header, "|" + "---|" * (header.count("|") - 1)]
+    for key, label, _ in LAYOUT:
+        s = SC.get(key)
+        if not s or not all(k in s for k in keys):
+            continue
+        cells = [s[k] for k in keys]
+        go_cells = cells[1:] if keys[0] == "native" else cells
+        best = min(go_cells)
+        fmt = [f"{cells[0]:.1f}"] if keys[0] == "native" else []
+        fmt += [f"**{v:.1f}**" if v == best else f"{v:.1f}" for v in go_cells]
+        lines.append(f"| {label} | " + " | ".join(fmt) + " |")
+
+
 def matrix_markdown():
     """The README 'full matrix' table between the benchmatrix markers."""
     lines = [
         "`Match`, milliseconds, measured on " + (HOST or "the CI runner") + ".",
         "Native C++ is the best of 7 end-to-end runs, single-threaded because",
-        "that is how OpenCV's `matchTemplate` runs; the Go columns are",
-        "`go test -benchtime 5x` averages from `-cpu 1,4`:",
+        "that is how OpenCV's `matchTemplate` runs; the cvmatch columns are",
+        "`go test -benchtime 5x` averages from `-cpu 1,4` — the asm columns",
+        "are the `-tags cvmatch_asm` build, the pure-Go columns the default",
+        "build:",
         "",
-        "| scene | native C++ | cgo 1T | cgo 4T | pure-Go 1T | pure-Go 4T |",
-        "|---|---|---|---|---|---|",
     ]
-    for key, label, _ in LAYOUT:
-        s = SC.get(key)
-        if not s or not all(k in s for k in ("native", "cgo1", "cgo4", "go1", "go4")):
-            continue
-        cells = [s["native"], s["cgo1"], s["cgo4"], s["go1"], s["go4"]]
-        best = min(cells[1:])
-        fmt = [f"{cells[0]:.1f}"] + [
-            f"**{v:.1f}**" if v == best else f"{v:.1f}" for v in cells[1:]]
-        lines.append(f"| {label.replace('·', '·')} | " + " | ".join(fmt) + " |")
+    match_table(lines, ("native", "asm1", "asm4", "go1", "go4"),
+                "| scene | native C++ | asm 1T | asm 4T | pure-Go 1T | pure-Go 4T |")
     g = SC.get("noise1080p_sub128", {})
-    if all(k in g for k in ("gray1", "gray4", "pgray1", "pgray4")):
+    if all(k in g for k in ("agray1", "agray4", "gray1", "gray4")):
         lines += [
             "",
-            f"`MatchGray` at 1080p/128 for scale: cgo {g['gray1']:.1f} / {g['gray4']:.1f} ms, "
-            f"pure-Go {g['pgray1']:.1f} / {g['pgray4']:.1f} ms (1T / 4T). Native C++ has no gray",
+            f"`MatchGray` at 1080p/128 for scale: asm {g['agray1']:.1f} / {g['agray4']:.1f} ms,",
+            f"pure Go {g['gray1']:.1f} / {g['gray4']:.1f} ms (1T / 4T). Native C++ has no gray",
             "row in this suite — a fair baseline would need cvtColor + 1-channel",
             "matchTemplate timed end-to-end, which was not measured; treat MatchGray",
             "numbers as cvmatch-internal.",
         ]
-    if any("cgoA1" in s for s in SC.values()):
+    if any("asmA1" in s for s in SC.values()):
         lines += [
             "",
             "**arm64** — the same `Match` matrix from the arm64 CI leg (" +
-            (DATA.get("hostArm64") or "ubuntu-24.04-arm") + "). No native",
-            "OpenCV baseline is built there, so the columns compare the two",
-            "cvmatch cores — NEON pure-Go vs the C core:",
+            (DATA.get("hostArm64") or "ubuntu-24.04-arm") + "),",
+            "NEON kernels vs the default build, bit-identical output to the",
+            "amd64 rows above:",
             "",
-            "| scene | cgo 1T | cgo 4T | pure-Go 1T | pure-Go 4T |",
-            "|---|---|---|---|---|",
         ]
-        for key, label, _ in LAYOUT:
-            s = SC.get(key)
-            if not s or not all(k in s for k in ("cgoA1", "cgoA4", "goA1", "goA4")):
-                continue
-            cells = [s["cgoA1"], s["cgoA4"], s["goA1"], s["goA4"]]
-            best = min(cells)
-            fmt = [f"**{v:.1f}**" if v == best else f"{v:.1f}" for v in cells]
-            lines.append(f"| {label} | " + " | ".join(fmt) + " |")
+        match_table(lines, ("asmA1", "asmA4", "goA1", "goA4"),
+                    "| scene | asm 1T | asm 4T | pure-Go 1T | pure-Go 4T |")
         ga = SC.get("noise1080p_sub128", {})
-        if all(k in ga for k in ("grayA1", "grayA4", "pgrayA1", "pgrayA4")):
+        if all(k in ga for k in ("agrayA1", "agrayA4", "grayA1", "grayA4")):
             lines += [
                 "",
-                f"`MatchGray` at 1080p/128 on arm64: cgo {ga['grayA1']:.1f} / {ga['grayA4']:.1f} ms, "
-                f"pure-Go {ga['pgrayA1']:.1f} / {ga['pgrayA4']:.1f} ms (1T / 4T).",
+                f"`MatchGray` at 1080p/128 on arm64: asm {ga['agrayA1']:.1f} / "
+                f"{ga['agrayA4']:.1f} ms, pure Go {ga['grayA1']:.1f} / "
+                f"{ga['grayA4']:.1f} ms (1T / 4T).",
             ]
     return "\n".join(lines)
 

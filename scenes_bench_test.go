@@ -9,11 +9,9 @@ import (
 )
 
 // Benchmarks over the shared scene set (byte-identical to what the native
-// C++ benchmark consumes). Run twice to compare the two cores on equal
-// footing:
+// OpenCV C++ benchmark in bench/ consumes):
 //
-//	go test -bench . -benchtime 5x               # cgo (C core)
-//	CGO_ENABLED=0 go test -bench . -benchtime 5x # pure Go core
+//	go test -bench . -benchtime 5x
 //
 // The photo scenes require bench/testdata/fetch.sh to have run.
 func benchScenes(b *testing.B, fn func(parent, sub image.Image) (float32, int, int, float32, int, int)) {

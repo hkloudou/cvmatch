@@ -1,6 +1,6 @@
 // Package scenes builds the deterministic benchmark/parity scenes shared by
-// the native-C++ comparison module (bench/) and the main module's pure-Go vs
-// cgo benchmarks: synthetic desktop screenshots, dense noise, and real
+// the native-C++ comparison module (bench/) and the main module's
+// benchmarks: synthetic desktop screenshots, dense noise, and real
 // photographs from OpenCV samples/data when present.
 package scenes
 

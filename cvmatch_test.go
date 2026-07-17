@@ -228,34 +228,16 @@ func TestConstantAlphaSkip(t *testing.T) {
 		for i := 3; i < len(tpl); i += 4 {
 			tpl[i] = pair[1]
 		}
-		// eachCore runs the active build core AND the always-compiled
-		// pure-Go core, so a cgo build proves the cn=3/cn=4 equivalence
-		// for both cores in one binary.
-		for _, c := range eachCore() {
-			got3 := make([]float32, rw*rh)
-			got4 := make([]float32, rw*rh)
-			c.fn(img, iw*4, iw, ih, tpl, tw*4, tw, th, 3, 4, 4, got3)
-			c.fn(img, iw*4, iw, ih, tpl, tw*4, tw, th, 4, 4, 4, got4)
-			for i := range got3 {
-				if d := math.Abs(float64(got3[i]) - float64(got4[i])); d > 1e-5 {
-					t.Fatalf("%s alpha=%v: cn=3 vs cn=4 mismatch at %d: %v vs %v", c.name, pair, i, got3[i], got4[i])
-				}
+		got3 := make([]float32, rw*rh)
+		got4 := make([]float32, rw*rh)
+		matchU8(img, iw*4, iw, ih, tpl, tw*4, tw, th, 3, 4, 4, got3)
+		matchU8(img, iw*4, iw, ih, tpl, tw*4, tw, th, 4, 4, 4, got4)
+		for i := range got3 {
+			if d := math.Abs(float64(got3[i]) - float64(got4[i])); d > 1e-5 {
+				t.Fatalf("alpha=%v: cn=3 vs cn=4 mismatch at %d: %v vs %v", pair, i, got3[i], got4[i])
 			}
 		}
 	}
-}
-
-// eachCore lists the cores testable in this build: the core matchU8 resolves
-// to (C under cgo, pure Go otherwise) and the pure-Go core, which is always
-// compiled. Under cgo both really are exercised; under CGO_ENABLED=0 the two
-// entries are the same function, which is harmless.
-type coreCase struct {
-	name string
-	fn   func(img []uint8, istride, iw, ih int, tpl []uint8, tstride, tw, th, cn, step, nthreads int, res []float32) (float32, int, int, float32, int, int)
-}
-
-func eachCore() []coreCase {
-	return []coreCase{{"buildcore(" + Impl + ")", matchU8}, {"purego", matchU8Go}}
 }
 
 // TestVaryingAlpha makes sure Match falls back to the full 4-channel path
@@ -292,20 +274,18 @@ func TestAlphaMatters(t *testing.T) {
 	iw, ih, tw, th := 160, 120, 32, 24
 	img, tpl := randPix(iw*ih*4, rng), randPix(tw*th*4, rng)
 	rw, rh := iw-tw+1, ih-th+1
-	for _, c := range eachCore() {
-		got3 := make([]float32, rw*rh)
-		got4 := make([]float32, rw*rh)
-		c.fn(img, iw*4, iw, ih, tpl, tw*4, tw, th, 3, 4, 2, got3)
-		c.fn(img, iw*4, iw, ih, tpl, tw*4, tw, th, 4, 4, 2, got4)
-		worst := 0.0
-		for i := range got3 {
-			if d := math.Abs(float64(got3[i]) - float64(got4[i])); d > worst {
-				worst = d
-			}
+	got3 := make([]float32, rw*rh)
+	got4 := make([]float32, rw*rh)
+	matchU8(img, iw*4, iw, ih, tpl, tw*4, tw, th, 3, 4, 2, got3)
+	matchU8(img, iw*4, iw, ih, tpl, tw*4, tw, th, 4, 4, 2, got4)
+	worst := 0.0
+	for i := range got3 {
+		if d := math.Abs(float64(got3[i]) - float64(got4[i])); d > worst {
+			worst = d
 		}
-		if worst < 1e-3 {
-			t.Fatalf("%s: varying alpha should change the map; cn=3 vs cn=4 worst diff only %g", c.name, worst)
-		}
+	}
+	if worst < 1e-3 {
+		t.Fatalf("varying alpha should change the map; cn=3 vs cn=4 worst diff only %g", worst)
 	}
 }
 

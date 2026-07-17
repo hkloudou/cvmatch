@@ -4,11 +4,14 @@
 Inputs (any subset; missing values are carried over from the existing
 benchdata.json so partial re-measurements stay coherent per field):
 
-  --cgo FILE      `go test -bench . -benchtime 5x -cpu 1,4` output (cgo core)
-  --purego FILE   same with CGO_ENABLED=0
-  --cgo-arm64 FILE / --purego-arm64 FILE
+  --asm FILE      `go test -tags cvmatch_asm -bench . -benchtime 5x -cpu 1,4`
+                  output (SIMD build; keys asm1/asm4 for Match,
+                  agray1/agray4 for MatchGray)
+  --go FILE       the same run of the default build — pure Go, no
+                  assembly (keys go1/go4, gray1/gray4)
+  --asm-arm64 / --go-arm64 FILE
                   the same two runs from an arm64 machine (keys gain an
-                  'A' suffix: cgoA1, goA4, grayA1, pgrayA4, ...)
+                  'A' suffix: asmA1, goA4, grayA4, ...)
   --native FILE   `bench/cpp/native_bench cpp/scenes N` output
   --mem FILE      concatenated `memprobe -impl {baseline,cvmatch,gray}` lines
   --native-mem KB peak RSS (VmHWM kB) of native_bench on the 1080p/128 scene
@@ -24,6 +27,14 @@ import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+# Everything genchart.py reads; carried-over keys outside this vocabulary
+# (e.g. from retired implementations) are pruned on every run.
+SCENE_KEYS = {"native",
+              "asm1", "asm4", "go1", "go4", "agray1", "agray4", "gray1", "gray4",
+              "asmA1", "asmA4", "goA1", "goA4",
+              "agrayA1", "agrayA4", "grayA1", "grayA4"}
+MEM_KEYS = {"native", "match", "gray", "baseline"}
 
 
 def parse_go_bench(path):
@@ -64,10 +75,10 @@ def parse_mem(path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--cgo")
-    ap.add_argument("--purego")
-    ap.add_argument("--cgo-arm64")
-    ap.add_argument("--purego-arm64")
+    ap.add_argument("--asm")
+    ap.add_argument("--go")
+    ap.add_argument("--asm-arm64")
+    ap.add_argument("--go-arm64")
     ap.add_argument("--native")
     ap.add_argument("--mem")
     ap.add_argument("--native-mem", type=float, help="VmHWM kB")
@@ -86,36 +97,37 @@ def main():
         data["hostArm64"] = args.host_arm64
     scenes = data.setdefault("scenes", {})
 
-    def put(scene, key, val):
-        scenes.setdefault(scene, {})[key] = round(val, 1)
-
-    def put_go(path, suffix):
+    def put_go(path, match_key, gray_key, suffix):
         for (kind, scene, cpus), ms in parse_go_bench(path).items():
-            put(scene, ("gray" if kind == "MatchGray" else "cgo") + suffix + str(cpus), ms)
-
-    def put_purego(path, suffix):
-        for (kind, scene, cpus), ms in parse_go_bench(path).items():
-            key = "go" if kind == "Match" else "pgray"
-            put(scene, key + suffix + str(cpus), ms)
+            key = (match_key if kind == "Match" else gray_key) + suffix + str(cpus)
+            scenes.setdefault(scene, {})[key] = round(ms, 1)
 
     if args.native:
         for scene, ms in parse_native(args.native).items():
-            put(scene, "native", ms)
-    if args.cgo:
-        put_go(args.cgo, "")
-    if args.purego:
-        put_purego(args.purego, "")
-    if args.cgo_arm64:
-        put_go(args.cgo_arm64, "A")
-    if args.purego_arm64:
-        put_purego(args.purego_arm64, "A")
+            scenes.setdefault(scene, {})["native"] = round(ms, 1)
+    if args.asm:
+        put_go(args.asm, "asm", "agray", "")
+    if args.go:
+        put_go(args.go, "go", "gray", "")
+    if args.asm_arm64:
+        put_go(args.asm_arm64, "asm", "agray", "A")
+    if args.go_arm64:
+        put_go(args.go_arm64, "go", "gray", "A")
     if args.mem:
         mem = parse_mem(args.mem)
-        for k_src, k_dst in (("baseline", "baseline"), ("cvmatch", "cgo"), ("gray", "gray")):
+        for k_src, k_dst in (("baseline", "baseline"), ("cvmatch", "match"), ("gray", "gray")):
             if k_src in mem:
                 data.setdefault("mem", {})[k_dst] = round(mem[k_src], 1)
     if args.native_mem:
         data.setdefault("mem", {})["native"] = round(args.native_mem / 1024.0, 1)
+
+    for s in scenes.values():
+        for k in list(s):
+            if k not in SCENE_KEYS:
+                del s[k]
+    for k in list(data.get("mem", {})):
+        if k not in MEM_KEYS:
+            del data["mem"][k]
 
     json.dump(data, open(args.out, "w"), indent=1, sort_keys=True)
     print(f"wrote {args.out}", file=sys.stderr)

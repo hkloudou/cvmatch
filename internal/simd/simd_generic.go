@@ -1,14 +1,15 @@
-//go:build (!amd64 && !arm64) || !gc
+//go:build !cvmatch_asm || (!amd64 && !arm64) || !gc
 
 package simd
 
-// Builds without assembly kernels (neither amd64 nor arm64, or a non-gc
-// toolchain) run the generic Go loops.
+// Builds without assembly kernels — the default. The kernels compile in
+// only with `-tags cvmatch_asm` on amd64/arm64 under the gc toolchain;
+// everything else (including every default build) runs the scalar Go
+// loops, which produce bit-identical output.
 
-// Enabled is false where no assembly kernels exist (a var so tests can
-// exercise the SIMD/scalar toggle uniformly across platforms; it must
-// never be set true here).
-var Enabled = false
+// Enabled is a constant false here, so kernel call sites dead-code
+// eliminate out of default builds entirely.
+const Enabled = false
 
 func FFTStages(a []complex64, tw []complex64, inverse bool) {
 	panic("cvmatch: SIMD kernel on unsupported platform")

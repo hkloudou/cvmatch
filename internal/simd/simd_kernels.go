@@ -1,4 +1,4 @@
-//go:build (amd64 || arm64) && gc
+//go:build (amd64 || arm64) && gc && cvmatch_asm
 
 package simd
 

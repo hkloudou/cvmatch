@@ -1,6 +1,6 @@
 // Package bench compares cvmatch directly against native OpenCV C++
 // (bench/cpp/native_bench, linked against prebuilt static OpenCV 4.12
-// archives): element-wise response-map parity and three-way maxVal checks.
+// archives): element-wise response-map parity and per-scene maxVal checks.
 package bench
 
 import (
@@ -57,13 +57,11 @@ func TestFullMapParityWithNativeCpp(t *testing.T) {
 	}
 }
 
-// TestThreeWayValues prints and cross-checks the maxVal that native OpenCV
-// C++ and the active cvmatch core (cvmatch.Impl: "cgo" under the default
-// build, "purego" under CGO_ENABLED=0 — run both to see all three) produce
-// on every scene, including the low-score degraded/absent ones where the
-// peak is far from 1.0. Values must agree within the float32 rounding
-// envelope.
-func TestThreeWayValues(t *testing.T) {
+// TestNativeValues prints and cross-checks the maxVal that native OpenCV
+// C++ and cvmatch produce on every scene, including the low-score
+// degraded/absent ones where the peak is far from 1.0. Values must agree
+// within the float32 rounding envelope.
+func TestNativeValues(t *testing.T) {
 	checked := 0
 	for _, s := range scenes.All("testdata") {
 		data, err := os.ReadFile(filepath.Join("cpp", "scenes", s.Name+".result.raw"))
