@@ -1,10 +1,13 @@
-//go:build cvmatch_asm
+//go:build cvmatch_asm && (amd64 || arm64) && gc
 
 package cvmatch
 
-// Kernel-only tests: they exercise the assembly directly (and toggle
-// simd.Enabled, which is a constant in default builds), so the whole file
-// rides the cvmatch_asm tag.
+// Kernel-only tests: they exercise the assembly directly and toggle
+// simd.Enabled, which is a constant everywhere the kernels don't exist —
+// so the constraint mirrors simd_kernels.go exactly. On kernel-less
+// targets the cvmatch_asm tag stays a true no-op, test files included
+// (codex caught the tag-only constraint breaking GOARCH=386 test
+// compiles).
 
 import (
 	"math"
