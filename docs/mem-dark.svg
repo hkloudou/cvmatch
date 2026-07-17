@@ -14,15 +14,15 @@
 <text x="852.0" y="144" font-size="11" text-anchor="middle" fill="#8b949e" font-family="system-ui,-apple-system,Segoe UI,sans-serif" style="font-variant-numeric:tabular-nums">200</text>
 <line x1="260" y1="56" x2="260" y2="128" stroke="#484f58" stroke-width="1"/>
 <text x="250" y="71" font-size="12" text-anchor="end" fill="#9198a1" font-family="system-ui,-apple-system,Segoe UI,sans-serif">OpenCV C++ (native)</text>
-<path d="M260.5,60 h454.8 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-454.8 z" fill="#008300"/>
-<text x="725.8" y="71" font-size="11" fill="#9198a1" font-family="system-ui,-apple-system,Segoe UI,sans-serif" style="font-variant-numeric:tabular-nums">155.0 MB</text>
+<path d="M260.5,60 h453.9 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-453.9 z" fill="#008300"/>
+<text x="724.9" y="71" font-size="11" fill="#9198a1" font-family="system-ui,-apple-system,Segoe UI,sans-serif" style="font-variant-numeric:tabular-nums">154.7 MB</text>
 <text x="250" y="87" font-size="12" text-anchor="end" fill="#9198a1" font-family="system-ui,-apple-system,Segoe UI,sans-serif">cvmatch.Match (cgo)</text>
-<path d="M260.5,76 h134.5 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-134.5 z" fill="#199e70"/>
-<text x="405.5" y="87" font-size="11" fill="#9198a1" font-family="system-ui,-apple-system,Segoe UI,sans-serif" style="font-variant-numeric:tabular-nums">46.8 MB · 3.3× less</text>
+<path d="M260.5,76 h139.6 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-139.6 z" fill="#199e70"/>
+<text x="410.6" y="87" font-size="11" fill="#9198a1" font-family="system-ui,-apple-system,Segoe UI,sans-serif" style="font-variant-numeric:tabular-nums">48.5 MB · 3.2× less</text>
 <text x="250" y="103" font-size="12" text-anchor="end" fill="#9198a1" font-family="system-ui,-apple-system,Segoe UI,sans-serif">cvmatch.MatchGray (cgo)</text>
-<path d="M260.5,92 h117.4 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-117.4 z" fill="#c98500"/>
-<text x="388.4" y="103" font-size="11" fill="#9198a1" font-family="system-ui,-apple-system,Segoe UI,sans-serif" style="font-variant-numeric:tabular-nums">41.0 MB · 3.8× less</text>
+<path d="M260.5,92 h121.5 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-121.5 z" fill="#c98500"/>
+<text x="392.5" y="103" font-size="11" fill="#9198a1" font-family="system-ui,-apple-system,Segoe UI,sans-serif" style="font-variant-numeric:tabular-nums">42.4 MB · 3.6× less</text>
 <text x="250" y="119" font-size="12" text-anchor="end" fill="#9198a1" font-family="system-ui,-apple-system,Segoe UI,sans-serif">idle Go process (baseline)</text>
-<path d="M260.5,108 h33.3 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-33.3 z" fill="#3987e5"/>
-<text x="304.3" y="119" font-size="11" fill="#9198a1" font-family="system-ui,-apple-system,Segoe UI,sans-serif" style="font-variant-numeric:tabular-nums">12.6 MB</text>
+<path d="M260.5,108 h37.4 a4,4 0 0 1 4,4 v6 a4,4 0 0 1 -4,4 h-37.4 z" fill="#3987e5"/>
+<text x="308.4" y="119" font-size="11" fill="#9198a1" font-family="system-ui,-apple-system,Segoe UI,sans-serif" style="font-variant-numeric:tabular-nums">14.0 MB</text>
 </svg>
