@@ -670,6 +670,8 @@ TEXT ·Untangle(SB), NOSPLIT, $0-96
 	WORD $0x4e080d3a // dup v26.2d, x9
 	WORD $0x4f03f41b // fmov v27.4s, #0.50000000
 	WORD $0xcb0400a6 // sub x6, x5, x4
+	WORD $0x927ef4cd // and x13, x6, #0xfffffffffffffffc
+	WORD $0x8b0401ad // add x13, x13, x4
 	WORD $0x927ff8c6 // and x6, x6, #0xfffffffffffffffe
 	WORD $0x8b0400c6 // add x6, x6, x4
 	WORD $0x8b040c07 // add x7, x0, x4, lsl #3
@@ -679,8 +681,35 @@ TEXT ·Untangle(SB), NOSPLIT, $0-96
 	WORD $0xd100056b // sub x11, x11, #0x1
 	WORD $0x8b0b0c4b // add x11, x2, x11, lsl #3
 	WORD $0xaa0403ec // mov x12, x4
+	WORD $0xeb0d019f // cmp x12, x13
+	WORD $0x5400034a // b.ge 0x9ac <Untangle+0xa8>
+	WORD $0xacc12941 // ldp q1, q10, [x10], #0x20
+	WORD $0xad7f896c // ldp q12, q2, [x11, #-0x10]
+	WORD $0xd100816b // sub x11, x11, #0x20
+	WORD $0x6e024042 // ext v2.16b, v2.16b, v2.16b, #0x8
+	WORD $0x6e0c418c // ext v12.16b, v12.16b, v12.16b, #0x8
+	WORD $0x6e3a1c43 // eor v3.16b, v2.16b, v26.16b
+	WORD $0x4e23d423 // fadd v3.4s, v1.4s, v3.4s
+	WORD $0x6e3bdc63 // fmul v3.4s, v3.4s, v27.4s
+	WORD $0x6e3a1d8d // eor v13.16b, v12.16b, v26.16b
+	WORD $0x4e2dd54d // fadd v13.4s, v10.4s, v13.4s
+	WORD $0x6e3bddad // fmul v13.4s, v13.4s, v27.4s
+	WORD $0xac8134e3 // stp q3, q13, [x7], #0x20
+	WORD $0x4ea00824 // rev64 v4.4s, v1.4s
+	WORD $0x6e3a1c84 // eor v4.16b, v4.16b, v26.16b
+	WORD $0x4ea00845 // rev64 v5.4s, v2.4s
+	WORD $0x4e25d484 // fadd v4.4s, v4.4s, v5.4s
+	WORD $0x6e3bdc84 // fmul v4.4s, v4.4s, v27.4s
+	WORD $0x4ea0094e // rev64 v14.4s, v10.4s
+	WORD $0x6e3a1dce // eor v14.16b, v14.16b, v26.16b
+	WORD $0x4ea0098f // rev64 v15.4s, v12.4s
+	WORD $0x4e2fd5ce // fadd v14.4s, v14.4s, v15.4s
+	WORD $0x6e3bddce // fmul v14.4s, v14.4s, v27.4s
+	WORD $0xac813904 // stp q4, q14, [x8], #0x20
+	WORD $0x9100118c // add x12, x12, #0x4
+	WORD $0x17ffffe6 // b 0x940 <Untangle+0x3c>
 	WORD $0xeb06019f // cmp x12, x6
-	WORD $0x5400020a // b.ge 0x97c <Untangle+0x78>
+	WORD $0x5400020a // b.ge 0x9f0 <Untangle+0xec>
 	WORD $0x3cc10541 // ldr q1, [x10], #0x10
 	WORD $0x3cdf0562 // ldr q2, [x11], #-0x10
 	WORD $0x6e024042 // ext v2.16b, v2.16b, v2.16b, #0x8
@@ -695,9 +724,9 @@ TEXT ·Untangle(SB), NOSPLIT, $0-96
 	WORD $0x6e3bdc84 // fmul v4.4s, v4.4s, v27.4s
 	WORD $0x3c810504 // str q4, [x8], #0x10
 	WORD $0x9100098c // add x12, x12, #0x2
-	WORD $0x17fffff0 // b 0x938 <Untangle+0x34>
+	WORD $0x17fffff0 // b 0x9ac <Untangle+0xa8>
 	WORD $0xeb05019f // cmp x12, x5
-	WORD $0x5400020a // b.ge 0x9c0 <Untangle+0xbc>
+	WORD $0x5400020a // b.ge 0xa34 <Untangle+0x130>
 	WORD $0xfc408541 // ldr d1, [x10], #0x8
 	WORD $0xcb0c006d // sub x13, x3, x12
 	WORD $0xfc6d7842 // ldr d2, [x2, x13, lsl #3]
@@ -712,7 +741,7 @@ TEXT ·Untangle(SB), NOSPLIT, $0-96
 	WORD $0x2e3bdc84 // fmul v4.2s, v4.2s, v27.2s
 	WORD $0xfc008504 // str d4, [x8], #0x8
 	WORD $0x9100058c // add x12, x12, #0x1
-	WORD $0x17fffff0 // b 0x97c <Untangle+0x78>
+	WORD $0x17fffff0 // b 0x9f0 <Untangle+0xec>
 	RET
 
 // func CombineLow(z, sa, sb []complex64)
@@ -723,27 +752,40 @@ TEXT ·CombineLow(SB), NOSPLIT, $0-72
 	MOVD sb_base+48(FP), R3
 	WORD $0x52b00009 // mov w9, #-0x80000000
 	WORD $0x4e080d3a // dup v26.2d, x9
+	WORD $0x927ef427 // and x7, x1, #0xfffffffffffffffc
+	WORD $0x8b070c08 // add x8, x0, x7, lsl #3
 	WORD $0x927ff824 // and x4, x1, #0xfffffffffffffffe
 	WORD $0x8b040c05 // add x5, x0, x4, lsl #3
 	WORD $0x8b010c06 // add x6, x0, x1, lsl #3
+	WORD $0xeb08001f // cmp x0, x8
+	WORD $0x5400016a // b.ge 0xa84 <CombineLow+0x4c>
+	WORD $0xacc12841 // ldp q1, q10, [x2], #0x20
+	WORD $0xacc12c62 // ldp q2, q11, [x3], #0x20
+	WORD $0x4ea00842 // rev64 v2.4s, v2.4s
+	WORD $0x6e3a1c42 // eor v2.16b, v2.16b, v26.16b
+	WORD $0x4e22d421 // fadd v1.4s, v1.4s, v2.4s
+	WORD $0x4ea0096b // rev64 v11.4s, v11.4s
+	WORD $0x6e3a1d6b // eor v11.16b, v11.16b, v26.16b
+	WORD $0x4e2bd54a // fadd v10.4s, v10.4s, v11.4s
+	WORD $0xac812801 // stp q1, q10, [x0], #0x20
+	WORD $0x17fffff5 // b 0xa54 <CombineLow+0x1c>
 	WORD $0xeb05001f // cmp x0, x5
-	WORD $0x5400010a // b.ge 0x9fc <CombineLow+0x38>
+	WORD $0x540000ea // b.ge 0xaa4 <CombineLow+0x6c>
 	WORD $0x3cc10441 // ldr q1, [x2], #0x10
 	WORD $0x3cc10462 // ldr q2, [x3], #0x10
 	WORD $0x4ea00842 // rev64 v2.4s, v2.4s
 	WORD $0x6e3a1c42 // eor v2.16b, v2.16b, v26.16b
 	WORD $0x4e22d421 // fadd v1.4s, v1.4s, v2.4s
 	WORD $0x3c810401 // str q1, [x0], #0x10
-	WORD $0x17fffff8 // b 0x9d8 <CombineLow+0x14>
 	WORD $0xeb06001f // cmp x0, x6
-	WORD $0x5400010a // b.ge 0xa20 <CombineLow+0x5c>
+	WORD $0x5400010a // b.ge 0xac8 <CombineLow+0x90>
 	WORD $0xfc408441 // ldr d1, [x2], #0x8
 	WORD $0xfc408462 // ldr d2, [x3], #0x8
 	WORD $0x0ea00842 // rev64 v2.2s, v2.2s
 	WORD $0x2e3a1c42 // eor v2.8b, v2.8b, v26.8b
 	WORD $0x0e22d421 // fadd v1.2s, v1.2s, v2.2s
 	WORD $0xfc008401 // str d1, [x0], #0x8
-	WORD $0x17fffff8 // b 0x9fc <CombineLow+0x38>
+	WORD $0x17fffff8 // b 0xaa4 <CombineLow+0x6c>
 	RET
 
 // func CombineHigh(z, sa, sb []complex64, n, hw int)
@@ -756,6 +798,9 @@ TEXT ·CombineHigh(SB), NOSPLIT, $0-88
 	WORD $0xd2f00009 // mov x9, #-0x8000000000000000
 	WORD $0x4e080d3a // dup v26.2d, x9
 	WORD $0xcb040065 // sub x5, x3, x4
+	WORD $0x927ef4ad // and x13, x5, #0xfffffffffffffffc
+	WORD $0x8b040c0e // add x14, x0, x4, lsl #3
+	WORD $0x8b0d0dce // add x14, x14, x13, lsl #3
 	WORD $0x927ff8a6 // and x6, x5, #0xfffffffffffffffe
 	WORD $0x8b040c07 // add x7, x0, x4, lsl #3
 	WORD $0x8b060ce8 // add x8, x7, x6, lsl #3
@@ -764,8 +809,26 @@ TEXT ·CombineHigh(SB), NOSPLIT, $0-88
 	WORD $0xd100054a // sub x10, x10, #0x1
 	WORD $0x8b0a0c2b // add x11, x1, x10, lsl #3
 	WORD $0x8b0a0c4c // add x12, x2, x10, lsl #3
+	WORD $0xeb0e00ff // cmp x7, x14
+	WORD $0x5400022a // b.ge 0xb4c <CombineHigh+0x80>
+	WORD $0xad7f856a // ldp q10, q1, [x11, #-0x10]
+	WORD $0xd100816b // sub x11, x11, #0x20
+	WORD $0xad7f898b // ldp q11, q2, [x12, #-0x10]
+	WORD $0xd100818c // sub x12, x12, #0x20
+	WORD $0x6e014021 // ext v1.16b, v1.16b, v1.16b, #0x8
+	WORD $0x6e024042 // ext v2.16b, v2.16b, v2.16b, #0x8
+	WORD $0x4ea00842 // rev64 v2.4s, v2.4s
+	WORD $0x6e3a1c21 // eor v1.16b, v1.16b, v26.16b
+	WORD $0x4e21d441 // fadd v1.4s, v2.4s, v1.4s
+	WORD $0x6e0a414a // ext v10.16b, v10.16b, v10.16b, #0x8
+	WORD $0x6e0b416b // ext v11.16b, v11.16b, v11.16b, #0x8
+	WORD $0x4ea0096b // rev64 v11.4s, v11.4s
+	WORD $0x6e3a1d4a // eor v10.16b, v10.16b, v26.16b
+	WORD $0x4e2ad56a // fadd v10.4s, v11.4s, v10.4s
+	WORD $0xac8128e1 // stp q1, q10, [x7], #0x20
+	WORD $0x17ffffef // b 0xb04 <CombineHigh+0x38>
 	WORD $0xeb0800ff // cmp x7, x8
-	WORD $0x5400014a // b.ge 0xa7c <CombineHigh+0x58>
+	WORD $0x5400014a // b.ge 0xb78 <CombineHigh+0xac>
 	WORD $0x3cdf0561 // ldr q1, [x11], #-0x10
 	WORD $0x3cdf0582 // ldr q2, [x12], #-0x10
 	WORD $0x6e014021 // ext v1.16b, v1.16b, v1.16b, #0x8
@@ -774,9 +837,9 @@ TEXT ·CombineHigh(SB), NOSPLIT, $0-88
 	WORD $0x6e3a1c21 // eor v1.16b, v1.16b, v26.16b
 	WORD $0x4e21d441 // fadd v1.4s, v2.4s, v1.4s
 	WORD $0x3c8104e1 // str q1, [x7], #0x10
-	WORD $0x17fffff6 // b 0xa50 <CombineHigh+0x2c>
+	WORD $0x17fffff6 // b 0xb4c <CombineHigh+0x80>
 	WORD $0xeb0900ff // cmp x7, x9
-	WORD $0x5400014a // b.ge 0xaa8 <CombineHigh+0x84>
+	WORD $0x5400014a // b.ge 0xba4 <CombineHigh+0xd8>
 	WORD $0xcb07012a // sub x10, x9, x7
 	WORD $0xd343fd4a // lsr x10, x10, #3
 	WORD $0xfc6a7821 // ldr d1, [x1, x10, lsl #3]
@@ -785,7 +848,7 @@ TEXT ·CombineHigh(SB), NOSPLIT, $0-88
 	WORD $0x2e3a1c21 // eor v1.8b, v1.8b, v26.8b
 	WORD $0x0e21d441 // fadd v1.2s, v2.2s, v1.2s
 	WORD $0xfc0084e1 // str d1, [x7], #0x8
-	WORD $0x17fffff6 // b 0xa7c <CombineHigh+0x58>
+	WORD $0x17fffff6 // b 0xb78 <CombineHigh+0xac>
 	RET
 
 // func EmitRe(dst []float32, z []complex64, add bool)
@@ -794,26 +857,39 @@ TEXT ·EmitRe(SB), NOSPLIT, $0-49
 	MOVD  dst_len+8(FP), R1
 	MOVD  z_base+24(FP), R2
 	MOVBU add+48(FP), R3
+	WORD $0x927df027 // and x7, x1, #0xfffffffffffffff8
+	WORD $0x8b070808 // add x8, x0, x7, lsl #2
 	WORD $0x927ef424 // and x4, x1, #0xfffffffffffffffc
 	WORD $0x8b040805 // add x5, x0, x4, lsl #2
 	WORD $0x8b010806 // add x6, x0, x1, lsl #2
+	WORD $0xeb08001f // cmp x0, x8
+	WORD $0x5400016a // b.ge 0xbec <EmitRe+0x44>
+	WORD $0xacc10841 // ldp q1, q2, [x2], #0x20
+	WORD $0xacc12c4a // ldp q10, q11, [x2], #0x20
+	WORD $0x4e821823 // uzp1 v3.4s, v1.4s, v2.4s
+	WORD $0x4e8b194c // uzp1 v12.4s, v10.4s, v11.4s
+	WORD $0xb4000083 // cbz x3, 0xbe4 <EmitRe+0x3c>
+	WORD $0xad402400 // ldp q0, q9, [x0]
+	WORD $0x4e23d403 // fadd v3.4s, v0.4s, v3.4s
+	WORD $0x4e2cd52c // fadd v12.4s, v9.4s, v12.4s
+	WORD $0xac813003 // stp q3, q12, [x0], #0x20
+	WORD $0x17fffff5 // b 0xbbc <EmitRe+0x14>
 	WORD $0xeb05001f // cmp x0, x5
-	WORD $0x5400010a // b.ge 0xadc <EmitRe+0x30>
+	WORD $0x540000ea // b.ge 0xc0c <EmitRe+0x64>
 	WORD $0xacc10841 // ldp q1, q2, [x2], #0x20
 	WORD $0x4e821823 // uzp1 v3.4s, v1.4s, v2.4s
-	WORD $0xb4000063 // cbz x3, 0xad4 <EmitRe+0x28>
+	WORD $0xb4000063 // cbz x3, 0xc08 <EmitRe+0x60>
 	WORD $0x3dc00000 // ldr q0, [x0]
 	WORD $0x4e23d403 // fadd v3.4s, v0.4s, v3.4s
 	WORD $0x3c810403 // str q3, [x0], #0x10
-	WORD $0x17fffff8 // b 0xab8 <EmitRe+0xc>
 	WORD $0xeb06001f // cmp x0, x6
-	WORD $0x540000ea // b.ge 0xafc <EmitRe+0x50>
+	WORD $0x540000ea // b.ge 0xc2c <EmitRe+0x84>
 	WORD $0xbc408441 // ldr s1, [x2], #0x8
-	WORD $0xb4000063 // cbz x3, 0xaf4 <EmitRe+0x48>
+	WORD $0xb4000063 // cbz x3, 0xc24 <EmitRe+0x7c>
 	WORD $0xbd400000 // ldr s0, [x0]
 	WORD $0x1e212801 // fadd s1, s0, s1
 	WORD $0xbc004401 // str s1, [x0], #0x4
-	WORD $0x17fffff9 // b 0xadc <EmitRe+0x30>
+	WORD $0x17fffff9 // b 0xc0c <EmitRe+0x64>
 	RET
 
 // func EmitIm(dst []float32, z []complex64, add bool)
@@ -822,27 +898,40 @@ TEXT ·EmitIm(SB), NOSPLIT, $0-49
 	MOVD  dst_len+8(FP), R1
 	MOVD  z_base+24(FP), R2
 	MOVBU add+48(FP), R3
+	WORD $0x927df027 // and x7, x1, #0xfffffffffffffff8
+	WORD $0x8b070808 // add x8, x0, x7, lsl #2
 	WORD $0x927ef424 // and x4, x1, #0xfffffffffffffffc
 	WORD $0x8b040805 // add x5, x0, x4, lsl #2
 	WORD $0x8b010806 // add x6, x0, x1, lsl #2
+	WORD $0xeb08001f // cmp x0, x8
+	WORD $0x5400016a // b.ge 0xc74 <EmitIm+0x44>
+	WORD $0xacc10841 // ldp q1, q2, [x2], #0x20
+	WORD $0xacc12c4a // ldp q10, q11, [x2], #0x20
+	WORD $0x4e825823 // uzp2 v3.4s, v1.4s, v2.4s
+	WORD $0x4e8b594c // uzp2 v12.4s, v10.4s, v11.4s
+	WORD $0xb4000083 // cbz x3, 0xc6c <EmitIm+0x3c>
+	WORD $0xad402400 // ldp q0, q9, [x0]
+	WORD $0x4e23d403 // fadd v3.4s, v0.4s, v3.4s
+	WORD $0x4e2cd52c // fadd v12.4s, v9.4s, v12.4s
+	WORD $0xac813003 // stp q3, q12, [x0], #0x20
+	WORD $0x17fffff5 // b 0xc44 <EmitIm+0x14>
 	WORD $0xeb05001f // cmp x0, x5
-	WORD $0x5400010a // b.ge 0xb30 <EmitIm+0x30>
+	WORD $0x540000ea // b.ge 0xc94 <EmitIm+0x64>
 	WORD $0xacc10841 // ldp q1, q2, [x2], #0x20
 	WORD $0x4e825823 // uzp2 v3.4s, v1.4s, v2.4s
-	WORD $0xb4000063 // cbz x3, 0xb28 <EmitIm+0x28>
+	WORD $0xb4000063 // cbz x3, 0xc90 <EmitIm+0x60>
 	WORD $0x3dc00000 // ldr q0, [x0]
 	WORD $0x4e23d403 // fadd v3.4s, v0.4s, v3.4s
 	WORD $0x3c810403 // str q3, [x0], #0x10
-	WORD $0x17fffff8 // b 0xb0c <EmitIm+0xc>
 	WORD $0xeb06001f // cmp x0, x6
-	WORD $0x5400010a // b.ge 0xb54 <EmitIm+0x54>
+	WORD $0x5400010a // b.ge 0xcb8 <EmitIm+0x88>
 	WORD $0xbd400441 // ldr s1, [x2, #0x4]
 	WORD $0x91002042 // add x2, x2, #0x8
-	WORD $0xb4000063 // cbz x3, 0xb4c <EmitIm+0x4c>
+	WORD $0xb4000063 // cbz x3, 0xcb0 <EmitIm+0x80>
 	WORD $0xbd400000 // ldr s0, [x0]
 	WORD $0x1e212801 // fadd s1, s0, s1
 	WORD $0xbc004401 // str s1, [x0], #0x4
-	WORD $0x17fffff8 // b 0xb30 <EmitIm+0x30>
+	WORD $0x17fffff8 // b 0xc94 <EmitIm+0x64>
 	RET
 
 // func MinMaxRow(row []float32) (minV, maxV float32, minI, maxI int)
@@ -867,7 +956,7 @@ TEXT ·MinMaxRow(SB), NOSPLIT, $0-48
 	WORD $0x9100800a // add x10, x0, #0x20
 	WORD $0x8b01080b // add x11, x0, x1, lsl #2
 	WORD $0xeb0b015f // cmp x10, x11
-	WORD $0x5400022a // b.ge 0xbe4 <MinMaxRow+0x8c>
+	WORD $0x5400022a // b.ge 0xd48 <MinMaxRow+0x8c>
 	WORD $0xacc15546 // ldp q6, q21, [x10], #0x20
 	WORD $0x4ea58484 // add v4.4s, v4.4s, v5.4s
 	WORD $0x4ea58694 // add v20.4s, v20.4s, v5.4s
@@ -883,7 +972,7 @@ TEXT ·MinMaxRow(SB), NOSPLIT, $0-48
 	WORD $0x6eb1e6b6 // fcmgt v22.4s, v21.4s, v17.4s
 	WORD $0x6eb61eb1 // bit v17.16b, v21.16b, v22.16b
 	WORD $0x6eb61e93 // bit v19.16b, v20.16b, v22.16b
-	WORD $0x17ffffef // b 0xb9c <MinMaxRow+0x44>
+	WORD $0x17ffffef // b 0xd00 <MinMaxRow+0x44>
 	WORD $0x6eb0e408 // fcmgt v8.4s, v0.4s, v16.4s
 	WORD $0x4e20e609 // fcmeq v9.4s, v16.4s, v0.4s
 	WORD $0x4eb2344a // cmgt v10.4s, v2.4s, v18.4s
@@ -955,7 +1044,7 @@ TEXT ·RGBAToGray(SB), NOSPLIT, $0-48
 	WORD $0xd2800009 // mov x9, #0x0
 	WORD $0x927cec2a // and x10, x1, #0xfffffffffffffff0
 	WORD $0xeb0a013f // cmp x9, x10
-	WORD $0x5400074a // b.ge 0xdb8 <RGBAToGray+0x108>
+	WORD $0x5400074a // b.ge 0xf1c <RGBAToGray+0x108>
 	WORD $0xacc10841 // ldp q1, q2, [x2], #0x20
 	WORD $0xacc16057 // ldp q23, q24, [x2], #0x20
 	WORD $0x2f08a423 // ushll v3.8h, v1.8b, #0x0
@@ -1012,9 +1101,9 @@ TEXT ·RGBAToGray(SB), NOSPLIT, $0-48
 	WORD $0x3ca96813 // str q19, [x0, x9]
 	WORD $0x91004129 // add x9, x9, #0x10
 	WORD $0xeb0a013f // cmp x9, x10
-	WORD $0x54fff90b // b.lt 0xcd4 <RGBAToGray+0x24>
+	WORD $0x54fff90b // b.lt 0xe38 <RGBAToGray+0x24>
 	WORD $0xeb01013f // cmp x9, x1
-	WORD $0x5400038a // b.ge 0xe2c <RGBAToGray+0x17c>
+	WORD $0x5400038a // b.ge 0xf90 <RGBAToGray+0x17c>
 	WORD $0xacc10841 // ldp q1, q2, [x2], #0x20
 	WORD $0x2f08a423 // ushll v3.8h, v1.8b, #0x0
 	WORD $0x6f08a424 // ushll2 v4.8h, v1.16b, #0x0
@@ -1052,7 +1141,64 @@ TEXT ·SlideCols1(SB), NOSPLIT, $0-96
 	MOVD rsub_base+48(FP), R3
 	MOVD radd_base+72(FP), R4
 	WORD $0xd2800009 // mov x9, #0x0
-	WORD $0xb40003c1 // cbz x1, 0xeac <SlideCols1+0x7c>
+	WORD $0x927cec2a // and x10, x1, #0xfffffffffffffff0
+	WORD $0xeb0a013f // cmp x9, x10
+	WORD $0x540006ca // b.ge 0x1078 <SlideCols1+0xe4>
+	WORD $0x3ce96880 // ldr q0, [x4, x9]
+	WORD $0x3ce96879 // ldr q25, [x3, x9]
+	WORD $0x2f08a401 // ushll v1.8h, v0.8b, #0x0
+	WORD $0x2f08a722 // ushll v2.8h, v25.8b, #0x0
+	WORD $0x6f08a41a // ushll2 v26.8h, v0.16b, #0x0
+	WORD $0x6f08a73b // ushll2 v27.8h, v25.16b, #0x0
+	WORD $0x6e628423 // sub v3.8h, v1.8h, v2.8h
+	WORD $0x4e628424 // add v4.8h, v1.8h, v2.8h
+	WORD $0x6e7b875c // sub v28.8h, v26.8h, v27.8h
+	WORD $0x4e7b875d // add v29.8h, v26.8h, v27.8h
+	WORD $0x0f10a465 // sshll v5.4s, v3.4h, #0x0
+	WORD $0x4f10a466 // sshll2 v6.4s, v3.8h, #0x0
+	WORD $0x0f10a79e // sshll v30.4s, v28.4h, #0x0
+	WORD $0x4f10a79f // sshll2 v31.4s, v28.8h, #0x0
+	WORD $0xad404410 // ldp q16, q17, [x0]
+	WORD $0x4ea58610 // add v16.4s, v16.4s, v5.4s
+	WORD $0x4ea68631 // add v17.4s, v17.4s, v6.4s
+	WORD $0xac814410 // stp q16, q17, [x0], #0x20
+	WORD $0xad404410 // ldp q16, q17, [x0]
+	WORD $0x4ebe8610 // add v16.4s, v16.4s, v30.4s
+	WORD $0x4ebf8631 // add v17.4s, v17.4s, v31.4s
+	WORD $0xac814410 // stp q16, q17, [x0], #0x20
+	WORD $0x0e64c067 // smull v7.4s, v3.4h, v4.4h
+	WORD $0x4e64c072 // smull2 v18.4s, v3.8h, v4.8h
+	WORD $0x0e7dc385 // smull v5.4s, v28.4h, v29.4h
+	WORD $0x4e7dc386 // smull2 v6.4s, v28.8h, v29.8h
+	WORD $0x0f20a4f3 // sshll v19.2d, v7.2s, #0x0
+	WORD $0x4f20a4f4 // sshll2 v20.2d, v7.4s, #0x0
+	WORD $0x0f20a655 // sshll v21.2d, v18.2s, #0x0
+	WORD $0x4f20a656 // sshll2 v22.2d, v18.4s, #0x0
+	WORD $0x0f20a4ba // sshll v26.2d, v5.2s, #0x0
+	WORD $0x4f20a4bb // sshll2 v27.2d, v5.4s, #0x0
+	WORD $0x0f20a4de // sshll v30.2d, v6.2s, #0x0
+	WORD $0x4f20a4df // sshll2 v31.2d, v6.4s, #0x0
+	WORD $0xad406057 // ldp q23, q24, [x2]
+	WORD $0x4ef386f7 // add v23.2d, v23.2d, v19.2d
+	WORD $0x4ef48718 // add v24.2d, v24.2d, v20.2d
+	WORD $0xac816057 // stp q23, q24, [x2], #0x20
+	WORD $0xad406057 // ldp q23, q24, [x2]
+	WORD $0x4ef586f7 // add v23.2d, v23.2d, v21.2d
+	WORD $0x4ef68718 // add v24.2d, v24.2d, v22.2d
+	WORD $0xac816057 // stp q23, q24, [x2], #0x20
+	WORD $0xad406057 // ldp q23, q24, [x2]
+	WORD $0x4efa86f7 // add v23.2d, v23.2d, v26.2d
+	WORD $0x4efb8718 // add v24.2d, v24.2d, v27.2d
+	WORD $0xac816057 // stp q23, q24, [x2], #0x20
+	WORD $0xad406057 // ldp q23, q24, [x2]
+	WORD $0x4efe86f7 // add v23.2d, v23.2d, v30.2d
+	WORD $0x4eff8718 // add v24.2d, v24.2d, v31.2d
+	WORD $0xac816057 // stp q23, q24, [x2], #0x20
+	WORD $0x91004129 // add x9, x9, #0x10
+	WORD $0xeb0a013f // cmp x9, x10
+	WORD $0x54fff98b // b.lt 0xfa4 <SlideCols1+0x10>
+	WORD $0xeb01013f // cmp x9, x1
+	WORD $0x5400036a // b.ge 0x10e8 <SlideCols1+0x154>
 	WORD $0xfc696881 // ldr d1, [x4, x9]
 	WORD $0xfc696862 // ldr d2, [x3, x9]
 	WORD $0x2f08a421 // ushll v1.8h, v1.8b, #0x0
@@ -1079,9 +1225,6 @@ TEXT ·SlideCols1(SB), NOSPLIT, $0-96
 	WORD $0x4ef586f7 // add v23.2d, v23.2d, v21.2d
 	WORD $0x4ef68718 // add v24.2d, v24.2d, v22.2d
 	WORD $0xac816057 // stp q23, q24, [x2], #0x20
-	WORD $0x91002129 // add x9, x9, #0x8
-	WORD $0xeb01013f // cmp x9, x1
-	WORD $0x54fffc8b // b.lt 0xe38 <SlideCols1+0x8>
 	RET
 
 // func SlideCols4(colSum []int32, colSum2 []int64, rsub, radd []uint8, cn int)
@@ -1094,10 +1237,10 @@ TEXT ·SlideCols4(SB), NOSPLIT, $0-104
 	MOVD cn+96(FP), R5
 	WORD $0x6f07e7fe // movi v30.2d, #0xffffffffffffffff
 	WORD $0xf1000cbf // cmp x5, #0x3
-	WORD $0x54000061 // b.ne 0xec4 <SlideCols4+0x14>
+	WORD $0x54000061 // b.ne 0x1100 <SlideCols4+0x14>
 	WORD $0x92ffffe9 // mov x9, #0xffffffffffff
 	WORD $0x4e080d3e // dup v30.2d, x9
-	WORD $0xb4000b22 // cbz x2, 0x1028 <SlideCols4+0x178>
+	WORD $0xb4000b22 // cbz x2, 0x1264 <SlideCols4+0x178>
 	WORD $0xd2800009 // mov x9, #0x0
 	WORD $0xacc10881 // ldp q1, q2, [x4], #0x20
 	WORD $0xacc11063 // ldp q3, q4, [x3], #0x20
@@ -1185,5 +1328,5 @@ TEXT ·SlideCols4(SB), NOSPLIT, $0-104
 	WORD $0xac814430 // stp q16, q17, [x1], #0x20
 	WORD $0x91002129 // add x9, x9, #0x8
 	WORD $0xeb02013f // cmp x9, x2
-	WORD $0x54fff54b // b.lt 0xecc <SlideCols4+0x1c>
+	WORD $0x54fff54b // b.lt 0x1108 <SlideCols4+0x1c>
 	RET

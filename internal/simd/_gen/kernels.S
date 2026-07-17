@@ -717,8 +717,10 @@ Untangle:
 	dup	v26.2d, x9              // oddsign
 	fmov	v27.4s, #0.5
 	sub	x6, x5, x4
+	and	x13, x6, #-4
+	add	x13, x13, x4            // end of 4-complex blocks
 	and	x6, x6, #-2
-	add	x6, x6, x4              // vector end
+	add	x6, x6, x4              // end of 2-complex blocks
 	add	x7, x0, x4, lsl #3      // sa ptr
 	add	x8, x1, x4, lsl #3      // sb ptr
 	add	x10, x2, x4, lsl #3     // zk ptr
@@ -726,6 +728,34 @@ Untangle:
 	sub	x11, x11, #1            // n-k0-1
 	add	x11, x2, x11, lsl #3    // zn load ptr (descending pairs)
 	mov	x12, x4                 // k
+.Lut_loop4:
+	cmp	x12, x13
+	b.ge	.Lut_loop
+	ldp	q1, q10, [x10], #32     // zk pairs
+	ldp	q12, q2, [x11, #-16]    // zn pairs, descending
+	sub	x11, x11, #32
+	ext	v2.16b, v2.16b, v2.16b, #8 // zn for k, k+1
+	ext	v12.16b, v12.16b, v12.16b, #8 // zn for k+2, k+3
+	eor	v3.16b, v2.16b, v26.16b
+	fadd	v3.4s, v1.4s, v3.4s
+	fmul	v3.4s, v3.4s, v27.4s
+	eor	v13.16b, v12.16b, v26.16b
+	fadd	v13.4s, v10.4s, v13.4s
+	fmul	v13.4s, v13.4s, v27.4s
+	stp	q3, q13, [x7], #32      // sa
+	rev64	v4.4s, v1.4s
+	eor	v4.16b, v4.16b, v26.16b
+	rev64	v5.4s, v2.4s
+	fadd	v4.4s, v4.4s, v5.4s
+	fmul	v4.4s, v4.4s, v27.4s
+	rev64	v14.4s, v10.4s
+	eor	v14.16b, v14.16b, v26.16b
+	rev64	v15.4s, v12.4s
+	fadd	v14.4s, v14.4s, v15.4s
+	fmul	v14.4s, v14.4s, v27.4s
+	stp	q4, q14, [x8], #32      // sb
+	add	x12, x12, #4
+	b	.Lut_loop4
 .Lut_loop:
 	cmp	x12, x6
 	b.ge	.Lut_tail
@@ -772,9 +802,24 @@ Untangle:
 CombineLow:
 	mov	w9, #0x80000000
 	dup	v26.2d, x9              // evensign
+	and	x7, x1, #-4
+	add	x8, x0, x7, lsl #3      // end of 4-complex blocks
 	and	x4, x1, #-2
 	add	x5, x0, x4, lsl #3
 	add	x6, x0, x1, lsl #3
+.Lcl_main4:
+	cmp	x0, x8
+	b.ge	.Lcl_main
+	ldp	q1, q10, [x2], #32
+	ldp	q2, q11, [x3], #32
+	rev64	v2.4s, v2.4s
+	eor	v2.16b, v2.16b, v26.16b
+	fadd	v1.4s, v1.4s, v2.4s
+	rev64	v11.4s, v11.4s
+	eor	v11.16b, v11.16b, v26.16b
+	fadd	v10.4s, v10.4s, v11.4s
+	stp	q1, q10, [x0], #32
+	b	.Lcl_main4
 .Lcl_main:
 	cmp	x0, x5
 	b.ge	.Lcl_tail
@@ -784,7 +829,6 @@ CombineLow:
 	eor	v2.16b, v2.16b, v26.16b
 	fadd	v1.4s, v1.4s, v2.4s
 	str	q1, [x0], #16
-	b	.Lcl_main
 .Lcl_tail:
 	cmp	x0, x6
 	b.ge	.Lcl_done
@@ -807,14 +851,36 @@ CombineHigh:
 	mov	x9, #0x8000000000000000
 	dup	v26.2d, x9              // oddsign
 	sub	x5, x3, x4              // count = n-hw
+	and	x13, x5, #-4
+	add	x14, x0, x4, lsl #3
+	add	x14, x14, x13, lsl #3   // z end of 4-complex blocks
 	and	x6, x5, #-2
 	add	x7, x0, x4, lsl #3      // z ptr at k=hw
-	add	x8, x7, x6, lsl #3      // z vector end
+	add	x8, x7, x6, lsl #3      // z end of 2-complex blocks
 	add	x9, x0, x3, lsl #3      // z true end
 	sub	x10, x3, x4             // m = n-hw
 	sub	x10, x10, #1            // m-1
 	add	x11, x1, x10, lsl #3    // sa load ptr (descending pairs)
 	add	x12, x2, x10, lsl #3    // sb load ptr
+.Lch_main4:
+	cmp	x7, x14
+	b.ge	.Lch_main
+	ldp	q10, q1, [x11, #-16]    // sa[m-3..m-2], sa[m-1..m]
+	sub	x11, x11, #32
+	ldp	q11, q2, [x12, #-16]
+	sub	x12, x12, #32
+	ext	v1.16b, v1.16b, v1.16b, #8 // sa[m], sa[m-1] for k, k+1
+	ext	v2.16b, v2.16b, v2.16b, #8
+	rev64	v2.4s, v2.4s
+	eor	v1.16b, v1.16b, v26.16b
+	fadd	v1.4s, v2.4s, v1.4s
+	ext	v10.16b, v10.16b, v10.16b, #8 // sa[m-2], sa[m-3] for k+2, k+3
+	ext	v11.16b, v11.16b, v11.16b, #8
+	rev64	v11.4s, v11.4s
+	eor	v10.16b, v10.16b, v26.16b
+	fadd	v10.4s, v11.4s, v10.4s
+	stp	q1, q10, [x7], #32
+	b	.Lch_main4
 .Lch_main:
 	cmp	x7, x8
 	b.ge	.Lch_tail
@@ -848,9 +914,25 @@ CombineHigh:
 // accumulating (addition commutes bitwise).
 .global EmitRe
 EmitRe:
+	and	x7, x1, #-8
+	add	x8, x0, x7, lsl #2      // dst end of 8-element blocks
 	and	x4, x1, #-4
-	add	x5, x0, x4, lsl #2      // dst vector end
+	add	x5, x0, x4, lsl #2      // dst end of 4-element blocks
 	add	x6, x0, x1, lsl #2      // dst true end
+.Ler_main8:
+	cmp	x0, x8
+	b.ge	.Ler_main
+	ldp	q1, q2, [x2], #32
+	ldp	q10, q11, [x2], #32
+	uzp1	v3.4s, v1.4s, v2.4s     // re lanes
+	uzp1	v12.4s, v10.4s, v11.4s
+	cbz	x3, .Ler_store8
+	ldp	q0, q9, [x0]
+	fadd	v3.4s, v0.4s, v3.4s
+	fadd	v12.4s, v9.4s, v12.4s
+.Ler_store8:
+	stp	q3, q12, [x0], #32
+	b	.Ler_main8
 .Ler_main:
 	cmp	x0, x5
 	b.ge	.Ler_tail
@@ -861,7 +943,6 @@ EmitRe:
 	fadd	v3.4s, v0.4s, v3.4s
 .Ler_store:
 	str	q3, [x0], #16
-	b	.Ler_main
 .Ler_tail:
 	cmp	x0, x6
 	b.ge	.Ler_done
@@ -879,9 +960,25 @@ EmitRe:
 // EmitIm: x0=dst, x1=len, x2=z, x3=add flag. Imaginary-part variant.
 .global EmitIm
 EmitIm:
+	and	x7, x1, #-8
+	add	x8, x0, x7, lsl #2
 	and	x4, x1, #-4
 	add	x5, x0, x4, lsl #2
 	add	x6, x0, x1, lsl #2
+.Lei_main8:
+	cmp	x0, x8
+	b.ge	.Lei_main
+	ldp	q1, q2, [x2], #32
+	ldp	q10, q11, [x2], #32
+	uzp2	v3.4s, v1.4s, v2.4s     // im lanes
+	uzp2	v12.4s, v10.4s, v11.4s
+	cbz	x3, .Lei_store8
+	ldp	q0, q9, [x0]
+	fadd	v3.4s, v0.4s, v3.4s
+	fadd	v12.4s, v9.4s, v12.4s
+.Lei_store8:
+	stp	q3, q12, [x0], #32
+	b	.Lei_main8
 .Lei_main:
 	cmp	x0, x5
 	b.ge	.Lei_tail
@@ -892,7 +989,6 @@ EmitIm:
 	fadd	v3.4s, v0.4s, v3.4s
 .Lei_store:
 	str	q3, [x0], #16
-	b	.Lei_main
 .Lei_tail:
 	cmp	x0, x6
 	b.ge	.Lei_done
@@ -1121,21 +1217,79 @@ RGBAToGray:
 .global SlideCols1
 SlideCols1:
 	mov	x9, #0
-	cbz	x1, .Ls1_done
+	and	x10, x1, #-16           // end of 16-pixel blocks
+	cmp	x9, x10
+	b.ge	.Ls1_mid
 .Ls1_loop:
-	ldr	d1, [x4, x9]            // a bytes
-	ldr	d2, [x3, x9]            // b bytes
-	uxtl	v1.8h, v1.8b
-	uxtl	v2.8h, v2.8b
+	ldr	q0, [x4, x9]            // a bytes x16
+	ldr	q25, [x3, x9]           // b bytes x16
+	uxtl	v1.8h, v0.8b
+	uxtl	v2.8h, v25.8b
+	uxtl2	v26.8h, v0.16b
+	uxtl2	v27.8h, v25.16b
 	sub	v3.8h, v1.8h, v2.8h     // d in [-255, 255]
 	add	v4.8h, v1.8h, v2.8h     // s in [0, 510]
+	sub	v28.8h, v26.8h, v27.8h
+	add	v29.8h, v26.8h, v27.8h
+	sshll	v5.4s, v3.4h, #0
+	sshll2	v6.4s, v3.8h, #0
+	sshll	v30.4s, v28.4h, #0
+	sshll2	v31.4s, v28.8h, #0
+	ldp	q16, q17, [x0]
+	add	v16.4s, v16.4s, v5.4s
+	add	v17.4s, v17.4s, v6.4s
+	stp	q16, q17, [x0], #32
+	ldp	q16, q17, [x0]
+	add	v16.4s, v16.4s, v30.4s
+	add	v17.4s, v17.4s, v31.4s
+	stp	q16, q17, [x0], #32
+	smull	v7.4s, v3.4h, v4.4h     // a²-b² per px (|.| <= 65025)
+	smull2	v18.4s, v3.8h, v4.8h
+	smull	v5.4s, v28.4h, v29.4h
+	smull2	v6.4s, v28.8h, v29.8h
+	sshll	v19.2d, v7.2s, #0
+	sshll2	v20.2d, v7.4s, #0
+	sshll	v21.2d, v18.2s, #0
+	sshll2	v22.2d, v18.4s, #0
+	sshll	v26.2d, v5.2s, #0
+	sshll2	v27.2d, v5.4s, #0
+	sshll	v30.2d, v6.2s, #0
+	sshll2	v31.2d, v6.4s, #0
+	ldp	q23, q24, [x2]
+	add	v23.2d, v23.2d, v19.2d
+	add	v24.2d, v24.2d, v20.2d
+	stp	q23, q24, [x2], #32
+	ldp	q23, q24, [x2]
+	add	v23.2d, v23.2d, v21.2d
+	add	v24.2d, v24.2d, v22.2d
+	stp	q23, q24, [x2], #32
+	ldp	q23, q24, [x2]
+	add	v23.2d, v23.2d, v26.2d
+	add	v24.2d, v24.2d, v27.2d
+	stp	q23, q24, [x2], #32
+	ldp	q23, q24, [x2]
+	add	v23.2d, v23.2d, v30.2d
+	add	v24.2d, v24.2d, v31.2d
+	stp	q23, q24, [x2], #32
+	add	x9, x9, #16
+	cmp	x9, x10
+	b.lt	.Ls1_loop
+.Ls1_mid:
+	cmp	x9, x1
+	b.ge	.Ls1_done
+	ldr	d1, [x4, x9]            // final 8 pixels
+	ldr	d2, [x3, x9]
+	uxtl	v1.8h, v1.8b
+	uxtl	v2.8h, v2.8b
+	sub	v3.8h, v1.8h, v2.8h
+	add	v4.8h, v1.8h, v2.8h
 	sshll	v5.4s, v3.4h, #0
 	sshll2	v6.4s, v3.8h, #0
 	ldp	q16, q17, [x0]
 	add	v16.4s, v16.4s, v5.4s
 	add	v17.4s, v17.4s, v6.4s
 	stp	q16, q17, [x0], #32
-	smull	v7.4s, v3.4h, v4.4h     // a²-b² per px (|.| <= 65025)
+	smull	v7.4s, v3.4h, v4.4h
 	smull2	v18.4s, v3.8h, v4.8h
 	sshll	v19.2d, v7.2s, #0
 	sshll2	v20.2d, v7.4s, #0
@@ -1149,9 +1303,6 @@ SlideCols1:
 	add	v23.2d, v23.2d, v21.2d
 	add	v24.2d, v24.2d, v22.2d
 	stp	q23, q24, [x2], #32
-	add	x9, x9, #8
-	cmp	x9, x1
-	b.lt	.Ls1_loop
 .Ls1_done:
 	ret
 
