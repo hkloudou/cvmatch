@@ -1,15 +1,20 @@
 name: Bench charts
 
-# Re-measures native OpenCV C++ and cvmatch — both build modes (default
-# pure Go and -tags cvmatch_asm) on both architectures — in one session on
-# every push to main, regenerates docs/benchdata.json + the README SVG
-# charts + the measured-matrix table (docs/collect.py -> docs/genchart.py),
-# and commits the refresh with [skip ci] so no workflows re-trigger.
+# The canonical benchmark pipeline: re-measures native OpenCV C++ and
+# cvmatch — both build modes (default pure Go and -tags cvmatch_asm) on
+# both architectures — in one session, regenerates docs/benchdata.json +
+# the README SVG charts + the measured-matrix table (docs/collect.py ->
+# docs/genchart.py), and commits the refresh with [skip ci].
+#
+# Runs weekly and on demand (dispatch it after perf-relevant merges, on
+# main or on a branch) — deliberately NOT on every push, so main history
+# is not churned by a bot commit per merge and chart numbers only move
+# when someone actually asks for a re-measurement.
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
+  schedule:
+    - cron: "17 3 * * 1"
 
 permissions:
   contents: write
@@ -32,9 +37,17 @@ jobs:
           cache: false
       - name: Fetch real sample images (OpenCV samples/data)
         run: bench/testdata/fetch.sh
-      - name: Measure cvmatch on arm64 (-cpu 1,4, both builds)
+      - name: Build native OpenCV benchmark (prebuilt static OpenCV 4.12, arm64)
+        working-directory: bench
+        run: |
+          go run ./cmd/dumpscenes -out cpp/scenes
+          cpp/build.sh
+      - name: Measure native OpenCV C++ on arm64
         run: |
           mkdir -p /tmp/arm64
+          (cd bench && cpp/native_bench cpp/scenes 7) | tee /tmp/arm64/native.txt
+      - name: Measure cvmatch on arm64 (-cpu 1,4, both builds)
+        run: |
           go test -tags cvmatch_asm -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m | tee /tmp/arm64/asm.txt
           go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m | tee /tmp/arm64/go.txt
           CPU=$(lscpu | awk -F': +' '/Model name/{print $2; exit}')
@@ -100,7 +113,8 @@ jobs:
           python3 docs/collect.py \
             --asm /tmp/gobench-asm.txt --go /tmp/gobench.txt \
             --asm-arm64 /tmp/arm64/asm.txt --go-arm64 /tmp/arm64/go.txt \
-            --native /tmp/native.txt --mem /tmp/memprobe.txt \
+            --native /tmp/native.txt --native-arm64 /tmp/arm64/native.txt \
+            --mem /tmp/memprobe.txt \
             ${NATMEM:+--native-mem "$NATMEM"} \
             --host "$HOST" --host-arm64 "$(cat /tmp/arm64/host.txt)"
           python3 docs/genchart.py
@@ -115,7 +129,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/benchdata.json docs/bench-light.svg docs/bench-dark.svg docs/bench-arm64-light.svg docs/bench-arm64-dark.svg docs/mem-light.svg docs/mem-dark.svg README.md
+          git add docs/benchdata.json docs/bench-light.svg docs/bench-dark.svg docs/mem-light.svg docs/mem-dark.svg README.md
           if git diff --cached --quiet; then
             echo "charts unchanged"
           else
