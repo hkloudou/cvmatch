@@ -1227,6 +1227,68 @@ TEXT ·SlideCols1(SB), NOSPLIT, $0-96
 	WORD $0xac816057 // stp q23, q24, [x2], #0x20
 	RET
 
+// func SlideSpill1(wt, q2 []float64, lo, hi []int32, lo2, hi2 []int64,
+//	s0, s2 int64) (ns0, ns2 int64)
+TEXT ·SlideSpill1(SB), NOSPLIT, $0-176
+	MOVD wt_base+0(FP), R0
+	MOVD wt_len+8(FP), R1
+	MOVD q2_base+24(FP), R2
+	MOVD lo_base+48(FP), R3
+	MOVD hi_base+72(FP), R4
+	MOVD lo2_base+96(FP), R5
+	MOVD hi2_base+120(FP), R6
+	MOVD s0+144(FP), R7
+	MOVD s2+152(FP), R8
+	WORD $0x927ff82c // and x12, x1, #0xfffffffffffffffe
+	WORD $0xd280000d // mov x13, #0x0
+	WORD $0xeb0c01bf // cmp x13, x12
+	WORD $0x5400036a // b.ge 0x1164 <SlideSpill1+0x78>
+	WORD $0xb8804489 // ldrsw x9, [x4], #0x4
+	WORD $0xb880446a // ldrsw x10, [x3], #0x4
+	WORD $0xcb0a0129 // sub x9, x9, x10
+	WORD $0x8b0900e9 // add x9, x7, x9
+	WORD $0x9e6700e0 // fmov d0, x7
+	WORD $0x4e181d20 // mov v0.d[1], x9
+	WORD $0x4e61d800 // scvtf v0.2d, v0.2d
+	WORD $0x3c810400 // str q0, [x0], #0x10
+	WORD $0xb880448a // ldrsw x10, [x4], #0x4
+	WORD $0xb880446b // ldrsw x11, [x3], #0x4
+	WORD $0xcb0b014a // sub x10, x10, x11
+	WORD $0x8b0a0127 // add x7, x9, x10
+	WORD $0xf84084c9 // ldr x9, [x6], #0x8
+	WORD $0xf84084aa // ldr x10, [x5], #0x8
+	WORD $0xcb0a0129 // sub x9, x9, x10
+	WORD $0x8b090109 // add x9, x8, x9
+	WORD $0x9e670101 // fmov d1, x8
+	WORD $0x4e181d21 // mov v1.d[1], x9
+	WORD $0x4e61d821 // scvtf v1.2d, v1.2d
+	WORD $0x3c810441 // str q1, [x2], #0x10
+	WORD $0xf84084ca // ldr x10, [x6], #0x8
+	WORD $0xf84084ab // ldr x11, [x5], #0x8
+	WORD $0xcb0b014a // sub x10, x10, x11
+	WORD $0x8b0a0128 // add x8, x9, x10
+	WORD $0x910009ad // add x13, x13, #0x2
+	WORD $0x17ffffe5 // b 0x10f4 <SlideSpill1+0x8>
+	WORD $0xeb0101bf // cmp x13, x1
+	WORD $0x540001ea // b.ge 0x11a4 <SlideSpill1+0xb8>
+	WORD $0x9e6200e0 // scvtf d0, x7
+	WORD $0xfc008400 // str d0, [x0], #0x8
+	WORD $0x9e620101 // scvtf d1, x8
+	WORD $0xfc008441 // str d1, [x2], #0x8
+	WORD $0xb8804489 // ldrsw x9, [x4], #0x4
+	WORD $0xb880446a // ldrsw x10, [x3], #0x4
+	WORD $0xcb0a0129 // sub x9, x9, x10
+	WORD $0x8b0900e7 // add x7, x7, x9
+	WORD $0xf84084c9 // ldr x9, [x6], #0x8
+	WORD $0xf84084aa // ldr x10, [x5], #0x8
+	WORD $0xcb0a0129 // sub x9, x9, x10
+	WORD $0x8b090108 // add x8, x8, x9
+	WORD $0x910005ad // add x13, x13, #0x1
+	WORD $0x17fffff1 // b 0x1164 <SlideSpill1+0x78>
+	MOVD R7, ns0+160(FP)
+	MOVD R8, ns2+168(FP)
+	RET
+
 // func SlideCols4(colSum []int32, colSum2 []int64, rsub, radd []uint8, cn int)
 TEXT ·SlideCols4(SB), NOSPLIT, $0-104
 	MOVD colSum_base+0(FP), R0
@@ -1237,10 +1299,10 @@ TEXT ·SlideCols4(SB), NOSPLIT, $0-104
 	MOVD cn+96(FP), R5
 	WORD $0x6f07e7fe // movi v30.2d, #0xffffffffffffffff
 	WORD $0xf1000cbf // cmp x5, #0x3
-	WORD $0x54000061 // b.ne 0x1100 <SlideCols4+0x14>
+	WORD $0x54000061 // b.ne 0x11bc <SlideCols4+0x14>
 	WORD $0x92ffffe9 // mov x9, #0xffffffffffff
 	WORD $0x4e080d3e // dup v30.2d, x9
-	WORD $0xb4000b22 // cbz x2, 0x1264 <SlideCols4+0x178>
+	WORD $0xb4000b22 // cbz x2, 0x1320 <SlideCols4+0x178>
 	WORD $0xd2800009 // mov x9, #0x0
 	WORD $0xacc10881 // ldp q1, q2, [x4], #0x20
 	WORD $0xacc11063 // ldp q3, q4, [x3], #0x20
@@ -1328,5 +1390,5 @@ TEXT ·SlideCols4(SB), NOSPLIT, $0-104
 	WORD $0xac814430 // stp q16, q17, [x1], #0x20
 	WORD $0x91002129 // add x9, x9, #0x8
 	WORD $0xeb02013f // cmp x9, x2
-	WORD $0x54fff54b // b.lt 0x1108 <SlideCols4+0x1c>
+	WORD $0x54fff54b // b.lt 0x11c4 <SlideCols4+0x1c>
 	RET

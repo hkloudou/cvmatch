@@ -9,3 +9,4 @@ bench/cpp/headers/
 bench/cpp/scenes/
 bench/testdata/*.jpg
 bench/testdata/*.png
+cvmatch.test

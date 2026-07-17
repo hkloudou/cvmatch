@@ -1307,6 +1307,65 @@ SlideCols1:
 	ret
 
 // ---------------------------------------------------------------------------
+// SlideSpill1: x0=wt, x1=n, x2=q2, x3=lo, x4=hi, x5=lo2, x6=hi2,
+// x7=s0, x8=s2. Leaves the advanced sums in x7/x8 for the template to
+// store. wt[i]=float64(s0), q2[i]=float64(s2), then s0 += hi[i]-lo[i],
+// s2 += hi2[i]-lo2[i]. scvtf on integers < 2^52 is exact, and the sum
+// chains run scalar in registers — identical values to the Go loop.
+.global SlideSpill1
+SlideSpill1:
+	and	x12, x1, #-2
+	mov	x13, #0
+.Lss_loop:
+	cmp	x13, x12
+	b.ge	.Lss_tail
+	ldrsw	x9, [x4], #4            // hi[i]
+	ldrsw	x10, [x3], #4           // lo[i]
+	sub	x9, x9, x10
+	add	x9, x7, x9              // s1 = s0 + d0
+	fmov	d0, x7
+	mov	v0.d[1], x9
+	scvtf	v0.2d, v0.2d            // exact
+	str	q0, [x0], #16
+	ldrsw	x10, [x4], #4
+	ldrsw	x11, [x3], #4
+	sub	x10, x10, x11
+	add	x7, x9, x10             // s0 advanced past both
+	ldr	x9, [x6], #8            // hi2[i]
+	ldr	x10, [x5], #8           // lo2[i]
+	sub	x9, x9, x10
+	add	x9, x8, x9              // t1 = s2 + e0
+	fmov	d1, x8
+	mov	v1.d[1], x9
+	scvtf	v1.2d, v1.2d
+	str	q1, [x2], #16
+	ldr	x10, [x6], #8
+	ldr	x11, [x5], #8
+	sub	x10, x10, x11
+	add	x8, x9, x10             // s2 advanced
+	add	x13, x13, #2
+	b	.Lss_loop
+.Lss_tail:
+	cmp	x13, x1
+	b.ge	.Lss_done
+	scvtf	d0, x7
+	str	d0, [x0], #8
+	scvtf	d1, x8
+	str	d1, [x2], #8
+	ldrsw	x9, [x4], #4
+	ldrsw	x10, [x3], #4
+	sub	x9, x9, x10
+	add	x7, x7, x9
+	ldr	x9, [x6], #8
+	ldr	x10, [x5], #8
+	sub	x9, x9, x10
+	add	x8, x8, x9
+	add	x13, x13, #1
+	b	.Lss_tail
+.Lss_done:
+	ret
+
+// ---------------------------------------------------------------------------
 // SlideCols4: x0=colSum, x1=colSum2, x2=pixels (multiple of 8), x3=rsub,
 // x4=radd, x5=cn. All four colSum lanes slide per pixel; colSum2 gets the
 // summed squared channel deltas with alpha masked out when cn == 3.

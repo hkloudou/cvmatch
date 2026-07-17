@@ -718,14 +718,18 @@ func normalizeBandGo(img []uint8, istride, iw int, cn, step, tw, th, rw, y0, y1 
 			case 1:
 				lo, hi := colSum[x0:], colSum[x0+tw:]
 				lo2, hi2 := colSum2[x0:], colSum2[x0+tw:]
-				s0, t2 := s[0], s2
-				for i := 0; i < ns; i++ {
-					wt[i] = float64(s0)
-					q2[i] = float64(t2)
-					s0 += int64(hi[i] - lo[i])
-					t2 += hi2[i] - lo2[i]
+				if useKernel && ns > 0 {
+					s[0], s2 = simd.SlideSpill1(wt[:ns], q2[:ns], lo, hi, lo2, hi2, s[0], s2)
+				} else {
+					s0, t2 := s[0], s2
+					for i := 0; i < ns; i++ {
+						wt[i] = float64(s0)
+						q2[i] = float64(t2)
+						s0 += int64(hi[i] - lo[i])
+						t2 += hi2[i] - lo2[i]
+					}
+					s[0], s2 = s0, t2
 				}
-				s[0], s2 = s0, t2
 			case 3:
 				lo, hi := colSum[x0*cs:], colSum[(x0+tw)*cs:]
 				lo2, hi2 := colSum2[x0:], colSum2[x0+tw:]

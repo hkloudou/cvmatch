@@ -128,3 +128,14 @@ func SlideCols1(colSum []int32, colSum2 []int64, rsub, radd []uint8)
 //
 //go:noescape
 func SlideCols4(colSum []int32, colSum2 []int64, rsub, radd []uint8, cn int)
+
+// SlideSpill1 runs the single-channel normalize spill: for each i,
+// wt[i] = float64(s0), q2[i] = float64(s2), then the window slides by
+// s0 += hi[i]-lo[i], s2 += hi2[i]-lo2[i]; the advanced sums are
+// returned. All inputs are exact nonnegative integers below 2^52, so
+// the int64->float64 conversions are exact and the additions are
+// order-fixed scalar chains — identical to the Go loop. lo/hi/lo2/hi2
+// hold at least len(wt) elements; len(q2) >= len(wt).
+//
+//go:noescape
+func SlideSpill1(wt, q2 []float64, lo, hi []int32, lo2, hi2 []int64, s0, s2 int64) (ns0, ns2 int64)

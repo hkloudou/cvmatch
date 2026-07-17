@@ -171,6 +171,23 @@ TEXT ·SlideCols1(SB), NOSPLIT, $0-96
 	// GENBODY: SlideCols1
 	RET
 
+// func SlideSpill1(wt, q2 []float64, lo, hi []int32, lo2, hi2 []int64,
+//	s0, s2 int64) (ns0, ns2 int64)
+TEXT ·SlideSpill1(SB), NOSPLIT, $0-176
+	MOVD wt_base+0(FP), R0
+	MOVD wt_len+8(FP), R1
+	MOVD q2_base+24(FP), R2
+	MOVD lo_base+48(FP), R3
+	MOVD hi_base+72(FP), R4
+	MOVD lo2_base+96(FP), R5
+	MOVD hi2_base+120(FP), R6
+	MOVD s0+144(FP), R7
+	MOVD s2+152(FP), R8
+	// GENBODY: SlideSpill1
+	MOVD R7, ns0+160(FP)
+	MOVD R8, ns2+168(FP)
+	RET
+
 // func SlideCols4(colSum []int32, colSum2 []int64, rsub, radd []uint8, cn int)
 TEXT ·SlideCols4(SB), NOSPLIT, $0-104
 	MOVD colSum_base+0(FP), R0

@@ -6,10 +6,14 @@ benchdata.json so partial re-measurements stay coherent per field):
 
   --cgo FILE      `go test -bench . -benchtime 5x -cpu 1,4` output (cgo core)
   --purego FILE   same with CGO_ENABLED=0
+  --cgo-arm64 FILE / --purego-arm64 FILE
+                  the same two runs from an arm64 machine (keys gain an
+                  'A' suffix: cgoA1, goA4, grayA1, pgrayA4, ...)
   --native FILE   `bench/cpp/native_bench cpp/scenes N` output
   --mem FILE      concatenated `memprobe -impl {baseline,cvmatch,gray}` lines
   --native-mem KB peak RSS (VmHWM kB) of native_bench on the 1080p/128 scene
   --host TEXT     one-line description of the machine
+  --host-arm64 TEXT  same for the arm64 machine
 
 Usage: python3 docs/collect.py [flags] -o docs/benchdata.json
 """
@@ -62,10 +66,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cgo")
     ap.add_argument("--purego")
+    ap.add_argument("--cgo-arm64")
+    ap.add_argument("--purego-arm64")
     ap.add_argument("--native")
     ap.add_argument("--mem")
     ap.add_argument("--native-mem", type=float, help="VmHWM kB")
     ap.add_argument("--host")
+    ap.add_argument("--host-arm64")
     ap.add_argument("-o", "--out", default=os.path.join(HERE, "benchdata.json"))
     args = ap.parse_args()
 
@@ -75,23 +82,33 @@ def main():
 
     if args.host:
         data["host"] = args.host
+    if args.host_arm64:
+        data["hostArm64"] = args.host_arm64
     scenes = data.setdefault("scenes", {})
 
     def put(scene, key, val):
         scenes.setdefault(scene, {})[key] = round(val, 1)
 
+    def put_go(path, suffix):
+        for (kind, scene, cpus), ms in parse_go_bench(path).items():
+            put(scene, ("gray" if kind == "MatchGray" else "cgo") + suffix + str(cpus), ms)
+
+    def put_purego(path, suffix):
+        for (kind, scene, cpus), ms in parse_go_bench(path).items():
+            key = "go" if kind == "Match" else "pgray"
+            put(scene, key + suffix + str(cpus), ms)
+
     if args.native:
         for scene, ms in parse_native(args.native).items():
             put(scene, "native", ms)
     if args.cgo:
-        for (kind, scene, cpus), ms in parse_go_bench(args.cgo).items():
-            put(scene, ("gray" if kind == "MatchGray" else "cgo") + str(cpus), ms)
+        put_go(args.cgo, "")
     if args.purego:
-        for (kind, scene, cpus), ms in parse_go_bench(args.purego).items():
-            if kind == "Match":  # pure-Go gray tracks the same ratios; keep the chart focused
-                put(scene, "go" + str(cpus), ms)
-            else:
-                put(scene, "pgray" + str(cpus), ms)
+        put_purego(args.purego, "")
+    if args.cgo_arm64:
+        put_go(args.cgo_arm64, "A")
+    if args.purego_arm64:
+        put_purego(args.purego_arm64, "A")
     if args.mem:
         mem = parse_mem(args.mem)
         for k_src, k_dst in (("baseline", "baseline"), ("cvmatch", "cgo"), ("gray", "gray")):
