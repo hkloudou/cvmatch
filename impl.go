@@ -285,8 +285,12 @@ func fftGo(a []complex64, tw []complex64, pairs []int32, inverse bool) {
 }
 
 // fftColsGo transforms the columns of a row-major [n x width] array; the
-// butterfly inner loop runs across contiguous row elements.
-func fftColsGo(d []complex64, n, width int, tw []complex64, pairs []int32, inverse bool, tmp []complex64) {
+// butterfly inner loop runs across contiguous row elements. With team > 1
+// each stage pass splits the width across workers — butterflies mix rows,
+// never columns, so width chunks are fully independent within a pass and
+// the per-element arithmetic is unchanged (runParallel is the barrier
+// between passes).
+func fftColsGo(d []complex64, n, width int, tw []complex64, pairs []int32, inverse bool, tmp []complex64, team int) {
 	for k := 0; k+1 < len(pairs); k += 2 {
 		i, j := int(pairs[k]), int(pairs[k+1])
 		ri := d[i*width : i*width+width]
@@ -302,44 +306,72 @@ func fftColsGo(d []complex64, n, width int, tw []complex64, pairs []int32, inver
 	// register-chained scalar loop alike.
 	half := 1
 	for ; half*2 < n; half *= 4 {
-		for i := 0; i < n; i += half * 4 {
-			for j := 0; j < half; j++ {
-				w1r, w1i := twdir(tw[half+j], inverse)
-				w2ar, w2ai := twdir(tw[2*half+j], inverse)
-				w2br, w2bi := twdir(tw[3*half+j], inverse)
-				r := i + j
-				p0 := d[r*width : r*width+width]
-				p1 := d[(r+half)*width : (r+half)*width+width]
-				p2 := d[(r+half*2)*width : (r+half*2)*width+width]
-				p3 := d[(r+half*3)*width : (r+half*3)*width+width]
-				if simd.Enabled {
-					simd.FFTCols4(p0, p1, p2, p3,
-						complex(w1r, w1i), complex(w2ar, w2ai), complex(w2br, w2bi))
-					continue
-				}
-				for c := range p0 {
-					x0, x1 := bflyV(p0[c], p1[c], w1r, w1i)
-					x2, x3 := bflyV(p2[c], p3[c], w1r, w1i)
-					x0, x2 = bflyV(x0, x2, w2ar, w2ai)
-					x1, x3 = bflyV(x1, x3, w2br, w2bi)
-					p0[c], p1[c], p2[c], p3[c] = x0, x1, x2, x3
-				}
+		h := half
+		colRange(team, width, func(c0, c1 int) { fftColsPass4(d, n, width, tw, inverse, h, c0, c1) })
+	}
+	for ; half < n; half <<= 1 {
+		h := half
+		colRange(team, width, func(c0, c1 int) { fftColsPass2(d, n, width, tw, inverse, h, c0, c1) })
+	}
+}
+
+// colRange runs fn over the whole width, or splits it across a worker team
+// (runParallel doubles as the barrier between column-FFT passes).
+func colRange(team, width int, fn func(c0, c1 int)) {
+	if team <= 1 {
+		fn(0, width)
+		return
+	}
+	runParallel(team, func(u int) {
+		c0, c1 := u*width/team, (u+1)*width/team
+		if c0 < c1 {
+			fn(c0, c1)
+		}
+	})
+}
+
+// fftColsPass4 applies the fused stage pair (half, 2*half) to columns
+// [c0, c1) of every affected row group.
+func fftColsPass4(d []complex64, n, width int, tw []complex64, inverse bool, half, c0, c1 int) {
+	for i := 0; i < n; i += half * 4 {
+		for j := 0; j < half; j++ {
+			w1r, w1i := twdir(tw[half+j], inverse)
+			w2ar, w2ai := twdir(tw[2*half+j], inverse)
+			w2br, w2bi := twdir(tw[3*half+j], inverse)
+			r := i + j
+			p0 := d[r*width+c0 : r*width+c1]
+			p1 := d[(r+half)*width+c0 : (r+half)*width+c1]
+			p2 := d[(r+half*2)*width+c0 : (r+half*2)*width+c1]
+			p3 := d[(r+half*3)*width+c0 : (r+half*3)*width+c1]
+			if simd.Enabled {
+				simd.FFTCols4(p0, p1, p2, p3,
+					complex(w1r, w1i), complex(w2ar, w2ai), complex(w2br, w2bi))
+				continue
+			}
+			for c := range p0 {
+				x0, x1 := bflyV(p0[c], p1[c], w1r, w1i)
+				x2, x3 := bflyV(p2[c], p3[c], w1r, w1i)
+				x0, x2 = bflyV(x0, x2, w2ar, w2ai)
+				x1, x3 = bflyV(x1, x3, w2br, w2bi)
+				p0[c], p1[c], p2[c], p3[c] = x0, x1, x2, x3
 			}
 		}
 	}
-	for ; half < n; half <<= 1 {
-		for i := 0; i < n; i += half << 1 {
-			for j := 0; j < half; j++ {
-				wr, wi := twdir(tw[half+j], inverse)
-				p := d[(i+j)*width : (i+j)*width+width]
-				q := d[(i+j+half)*width : (i+j+half)*width+width]
-				if simd.Enabled {
-					simd.FFTColsBfly(p, q, complex(wr, wi))
-					continue
-				}
-				for c := range p {
-					bfly(&p[c], &q[c], wr, wi)
-				}
+}
+
+// fftColsPass2 applies one single stage to columns [c0, c1).
+func fftColsPass2(d []complex64, n, width int, tw []complex64, inverse bool, half, c0, c1 int) {
+	for i := 0; i < n; i += half << 1 {
+		for j := 0; j < half; j++ {
+			wr, wi := twdir(tw[half+j], inverse)
+			p := d[(i+j)*width+c0 : (i+j)*width+c1]
+			q := d[(i+j+half)*width+c0 : (i+j+half)*width+c1]
+			if simd.Enabled {
+				simd.FFTColsBfly(p, q, complex(wr, wi))
+				continue
+			}
+			for c := range p {
+				bfly(&p[c], &q[c], wr, wi)
 			}
 		}
 	}
@@ -407,55 +439,77 @@ func newGoPlan(tw, th, rw, rh int) *goPlan {
 	return p
 }
 
-// blockForwardGo: real 2D forward DFT of one channel of a uint8 block, two
-// real rows packed per complex FFT.
-func blockForwardGo(chanBase []uint8, stride, step, x0, y0, loadW, loadH int, p *goPlan, spec, z []complex64) {
+// forwardRowPair packs image rows r,r+1 into one complex row FFT and
+// untangles the two spectra into spec rows r,r+1. Row pairs touch disjoint
+// spec rows and share no state beyond the per-worker scratch z, so they
+// may run in any order or concurrently with bit-identical results.
+func forwardRowPair(chanBase []uint8, stride, step, x0, y0, loadW, loadH int, p *goPlan, spec, z []complex64, r int) {
 	n, hw, mask := p.dftW, p.hw, p.dftW-1
 	// The pack kernels implement the strides the public API produces (1 and
 	// 4); other layouts (e.g. packed RGB, step 3) take the scalar loops.
 	usePack := simd.Enabled && (step == 1 || step == 4)
-	for r := 0; r < p.dftH; r += 2 {
-		sa := spec[r*hw : r*hw+hw]
-		sb := spec[(r+1)*hw : (r+1)*hw+hw]
-		if r >= loadH {
-			clear(spec[r*hw : p.dftH*hw])
-			break
-		}
-		ra := chanBase[(y0+r)*stride+x0*step:]
-		if r+1 < loadH {
-			rb := chanBase[(y0+r+1)*stride+x0*step:]
-			if usePack {
-				simd.PackRows2(z[:loadW], ra, rb, step)
-			} else {
-				for x := 0; x < loadW; x++ {
-					z[x] = complex(float32(ra[x*step]), float32(rb[x*step]))
-				}
-			}
-		} else if usePack {
-			simd.PackRows1(z[:loadW], ra, step)
+	sa := spec[r*hw : r*hw+hw]
+	sb := spec[(r+1)*hw : (r+1)*hw+hw]
+	ra := chanBase[(y0+r)*stride+x0*step:]
+	if r+1 < loadH {
+		rb := chanBase[(y0+r+1)*stride+x0*step:]
+		if usePack {
+			simd.PackRows2(z[:loadW], ra, rb, step)
 		} else {
 			for x := 0; x < loadW; x++ {
-				z[x] = complex(float32(ra[x*step]), 0)
+				z[x] = complex(float32(ra[x*step]), float32(rb[x*step]))
 			}
 		}
-		clear(z[loadW:n])
-		fftGo(z, p.twW, p.prW, false)
-		if simd.Enabled {
-			// k = 0 wraps to itself ((n-0)&mask == 0); the kernel covers
-			// the wrap-free k >= 1 range with the same op sequence.
-			zk := z[0]
-			sa[0] = complex(0.5*(real(zk)+real(zk)), 0.5*(imag(zk)-imag(zk)))
-			sb[0] = complex(0.5*(imag(zk)+imag(zk)), 0.5*(real(zk)-real(zk)))
-			simd.Untangle(sa, sb, z, n, 1, hw)
-		} else {
-			for k := 0; k < hw; k++ {
-				zk, zn := z[k], z[(n-k)&mask]
-				sa[k] = complex(0.5*(real(zk)+real(zn)), 0.5*(imag(zk)-imag(zn)))
-				sb[k] = complex(0.5*(imag(zk)+imag(zn)), 0.5*(real(zn)-real(zk)))
-			}
+	} else if usePack {
+		simd.PackRows1(z[:loadW], ra, step)
+	} else {
+		for x := 0; x < loadW; x++ {
+			z[x] = complex(float32(ra[x*step]), 0)
 		}
 	}
-	fftColsGo(spec, p.dftH, hw, p.twH, p.prH, false, z)
+	clear(z[loadW:n])
+	fftGo(z, p.twW, p.prW, false)
+	if simd.Enabled {
+		// k = 0 wraps to itself ((n-0)&mask == 0); the kernel covers
+		// the wrap-free k >= 1 range with the same op sequence.
+		zk := z[0]
+		sa[0] = complex(0.5*(real(zk)+real(zk)), 0.5*(imag(zk)-imag(zk)))
+		sb[0] = complex(0.5*(imag(zk)+imag(zk)), 0.5*(real(zk)-real(zk)))
+		simd.Untangle(sa, sb, z, n, 1, hw)
+	} else {
+		for k := 0; k < hw; k++ {
+			zk, zn := z[k], z[(n-k)&mask]
+			sa[k] = complex(0.5*(real(zk)+real(zn)), 0.5*(imag(zk)-imag(zn)))
+			sb[k] = complex(0.5*(imag(zk)+imag(zn)), 0.5*(real(zn)-real(zk)))
+		}
+	}
+}
+
+// blockForwardGo: real 2D forward DFT of one channel of a uint8 block, two
+// real rows packed per complex FFT. With team > 1 the independent row
+// pairs stride across a worker team (spare threads on single-tile scenes)
+// — pure scheduling, bit-identical output.
+func blockForwardGo(chanBase []uint8, stride, step, x0, y0, loadW, loadH int, p *goPlan, spec, z []complex64, team int) {
+	hw := p.hw
+	loaded := min(p.dftH, (loadH+1)&^1)
+	clear(spec[loaded*hw : p.dftH*hw])
+	if team <= 1 {
+		for r := 0; r < loadH && r < p.dftH; r += 2 {
+			forwardRowPair(chanBase, stride, step, x0, y0, loadW, loadH, p, spec, z, r)
+		}
+	} else {
+		runParallel(team, func(w int) {
+			zw := z
+			if w > 0 {
+				zw = cplxPool.get(p.dftW)
+				defer cplxPool.put(zw)
+			}
+			for r := 2 * w; r < loadH && r < p.dftH; r += 2 * team {
+				forwardRowPair(chanBase, stride, step, x0, y0, loadW, loadH, p, spec, zw, r)
+			}
+		})
+	}
+	fftColsGo(spec, p.dftH, hw, p.twH, p.prH, false, z, team)
 }
 
 func mulConjGo(spec, tspec []complex64) {
@@ -472,56 +526,77 @@ func mulConjGo(spec, tspec []complex64) {
 	}
 }
 
-func blockInverseEmitGo(p *goPlan, spec, z []complex64, res []float32, rw, x0, y0, bw, bh int, add bool) {
-	fftColsGo(spec, p.dftH, p.hw, p.twH, p.prH, true, z)
+// inverseRowPair combines spec rows r,r+1 into one inverse row FFT and
+// emits result rows y0+r, y0+r+1. Row pairs write disjoint result rows and
+// share nothing beyond the per-worker scratch z — concurrency-safe with
+// bit-identical output, exactly like forwardRowPair.
+func inverseRowPair(p *goPlan, spec, z []complex64, res []float32, rw, x0, y0, bw, bh int, add bool, r int) {
 	n, hw := p.dftW, p.hw
-	for r := 0; r < bh; r += 2 {
-		sa := spec[r*hw : r*hw+hw]
-		sb := spec[(r+1)*hw : (r+1)*hw+hw]
-		if simd.Enabled {
-			simd.CombineLow(z[:hw], sa, sb)
-			simd.CombineHigh(z, sa, sb, n, hw)
-		} else {
-			for k := 0; k < hw; k++ {
-				z[k] = complex(real(sa[k])-imag(sb[k]), imag(sa[k])+real(sb[k]))
-			}
-			for k := hw; k < n; k++ {
-				m := n - k
-				z[k] = complex(real(sa[m])+imag(sb[m]), real(sb[m])-imag(sa[m]))
+	sa := spec[r*hw : r*hw+hw]
+	sb := spec[(r+1)*hw : (r+1)*hw+hw]
+	if simd.Enabled {
+		simd.CombineLow(z[:hw], sa, sb)
+		simd.CombineHigh(z, sa, sb, n, hw)
+	} else {
+		for k := 0; k < hw; k++ {
+			z[k] = complex(real(sa[k])-imag(sb[k]), imag(sa[k])+real(sb[k]))
+		}
+		for k := hw; k < n; k++ {
+			m := n - k
+			z[k] = complex(real(sa[m])+imag(sb[m]), real(sb[m])-imag(sa[m]))
+		}
+	}
+	fftGo(z, p.twW, p.prW, true)
+	o := res[(y0+r)*rw+x0:]
+	var o2 []float32
+	if r+1 < bh {
+		o2 = res[(y0+r+1)*rw+x0:]
+	}
+	switch {
+	case simd.Enabled:
+		simd.EmitRe(o[:bw], z, add)
+		if o2 != nil {
+			simd.EmitIm(o2[:bw], z, add)
+		}
+	case add:
+		for x := 0; x < bw; x++ {
+			o[x] += real(z[x])
+		}
+		if o2 != nil {
+			for x := 0; x < bw; x++ {
+				o2[x] += imag(z[x])
 			}
 		}
-		fftGo(z, p.twW, p.prW, true)
-		o := res[(y0+r)*rw+x0:]
-		var o2 []float32
-		if r+1 < bh {
-			o2 = res[(y0+r+1)*rw+x0:]
+	default:
+		for x := 0; x < bw; x++ {
+			o[x] = real(z[x])
 		}
-		switch {
-		case simd.Enabled:
-			simd.EmitRe(o[:bw], z, add)
-			if o2 != nil {
-				simd.EmitIm(o2[:bw], z, add)
-			}
-		case add:
+		if o2 != nil {
 			for x := 0; x < bw; x++ {
-				o[x] += real(z[x])
-			}
-			if o2 != nil {
-				for x := 0; x < bw; x++ {
-					o2[x] += imag(z[x])
-				}
-			}
-		default:
-			for x := 0; x < bw; x++ {
-				o[x] = real(z[x])
-			}
-			if o2 != nil {
-				for x := 0; x < bw; x++ {
-					o2[x] = imag(z[x])
-				}
+				o2[x] = imag(z[x])
 			}
 		}
 	}
+}
+
+func blockInverseEmitGo(p *goPlan, spec, z []complex64, res []float32, rw, x0, y0, bw, bh int, add bool, team int) {
+	fftColsGo(spec, p.dftH, p.hw, p.twH, p.prH, true, z, team)
+	if team <= 1 {
+		for r := 0; r < bh; r += 2 {
+			inverseRowPair(p, spec, z, res, rw, x0, y0, bw, bh, add, r)
+		}
+		return
+	}
+	runParallel(team, func(w int) {
+		zw := z
+		if w > 0 {
+			zw = cplxPool.get(p.dftW)
+			defer cplxPool.put(zw)
+		}
+		for r := 2 * w; r < bh; r += 2 * team {
+			inverseRowPair(p, spec, zw, res, rw, x0, y0, bw, bh, add, r)
+		}
+	})
 }
 
 // crossCorrGo runs the tile-parallel raw cross-correlation. Each tile owns a
@@ -534,7 +609,7 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 	scale := 1 / (float32(p.dftW) * float32(p.dftH))
 	for k := 0; k < cn; k++ {
 		ts := tspec[k*specN : (k+1)*specN]
-		blockForwardGo(tpl[k:], tstride, step, 0, 0, tw, th, p, ts, z0)
+		blockForwardGo(tpl[k:], tstride, step, 0, 0, tw, th, p, ts, z0, 1)
 		for i := range ts {
 			ts[i] = complex(real(ts[i])*scale, imag(ts[i])*scale)
 		}
@@ -547,6 +622,12 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 	if nw > ntiles {
 		nw = ntiles
 	}
+	// Spare workers (threads beyond the tile count — always the case on
+	// single-tile scenes) form a per-tile team that strides the independent
+	// row-pair and elementwise phases inside each block. Pure scheduling of
+	// disjoint work: per-element arithmetic and channel order are unchanged,
+	// so output stays bit-identical for every (threads, ntiles) combination.
+	team := threads / nw
 	runParallel(nw, func(w int) {
 		spec := cplxPool.get(specN)
 		z := cplxPool.get(p.dftW)
@@ -554,9 +635,18 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 			x0, y0 := (t%ntx)*p.blockW, (t/ntx)*p.blockH
 			bw, bh := min(p.blockW, rw-x0), min(p.blockH, rh-y0)
 			for k := 0; k < cn; k++ {
-				blockForwardGo(img[k:], istride, step, x0, y0, bw+tw-1, bh+th-1, p, spec, z)
-				mulConjGo(spec, tspec[k*specN:(k+1)*specN])
-				blockInverseEmitGo(p, spec, z, result, rw, x0, y0, bw, bh, k > 0)
+				blockForwardGo(img[k:], istride, step, x0, y0, bw+tw-1, bh+th-1, p, spec, z, team)
+				ts := tspec[k*specN : (k+1)*specN]
+				if team <= 1 {
+					mulConjGo(spec, ts)
+				} else {
+					runParallel(team, func(u int) {
+						lo := u * specN / team
+						hi := (u + 1) * specN / team
+						mulConjGo(spec[lo:hi], ts[lo:hi])
+					})
+				}
+				blockInverseEmitGo(p, spec, z, result, rw, x0, y0, bw, bh, k > 0, team)
 			}
 		}
 		cplxPool.put(spec)

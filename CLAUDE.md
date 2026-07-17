@@ -60,8 +60,8 @@ Any transformation is legal only if it provably preserves every output bit:
 - **amd64**: hand-written AVX2 in `simd_amd64.s` (runtime-detected;
   Plan9 syntax, `NOSPLIT`, `VZEROUPPER` on every exit).
 - **arm64**: Go's assembler has no un-fused vector FP ops, so bodies are
-  written as annotated ARM64 assembly in `_gen/kernels.S` and spliced into
-  `simd_arm64.s` as WORD streams by `_gen/gen.py` (clang cross-assembles;
+  written as annotated ARM64 assembly in `_gen/kernels_*.S` and spliced
+  into `simd_arm64.s` as WORD streams by `_gen/gen.py` (clang cross-assembles;
   relocation-free constants only; registers x0-x15/v0-v31, no stack; each
   body ends in a single `ret`). Regenerate with `go generate ./internal/simd`;
   CI diffs the regenerated stream, so never edit `simd_arm64.s` by hand.
@@ -184,3 +184,14 @@ the no-cgo sense.
   when ci.yml is dispatched), the arm64 leg gained the same native
   OpenCV baseline as amd64 (identical comparison dimensions, one unified
   chart), and every measured number in the README is generated.
+- Phase 6 closed the structural optimization space: the scalar fallback
+  adopted the kernels' fused FFT shape; in-tile parallelism (row-pair
+  distribution + width-chunked column-stage passes + chunked conjugate
+  multiply) took single-tile scenes from ~1.0x to 1.2-1.5x at 4T on the
+  reference machines. Remaining known levers and why they stay unpicked:
+  SIMD prefix-sum spill lanes (low single-digit %), output-pruned
+  inverse column FFT (<=15% niche, needs a +-0 laundering proof),
+  further NEON micro-tuning (diminishing); split-radix / mixed-radix /
+  NTT are forbidden by the bit-identity contract (recorded in the README
+  headroom section). Treat new optimization ideas as welcome but hold
+  them to the same measure-on-reference, bit-anchored standard.
