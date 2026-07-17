@@ -4,11 +4,11 @@
 Inputs (any subset; missing values are carried over from the existing
 benchdata.json so partial re-measurements stay coherent per field):
 
-  --asm FILE      `go test -tags cvmatch_asm -bench . -benchtime 5x -cpu 1,4`
-                  output (SIMD build; keys asm1/asm4 for Match,
-                  agray1/agray4 for MatchGray)
-  --go FILE       the same run of the default build — pure Go, no
-                  assembly (keys go1/go4, gray1/gray4)
+  --asm FILE      `go test -bench . -benchtime 5x -cpu 1,4` output
+                  (default build with SIMD kernels; keys asm1/asm4 for
+                  Match, agray1/agray4 for MatchGray)
+  --go FILE       the same run with -tags purego — scalar safe mode
+                  (keys go1/go4, gray1/gray4)
   --asm-arm64 / --go-arm64 FILE
                   the same two runs from an arm64 machine (keys gain an
                   'A' suffix: asmA1, goA4, grayA4, ...)

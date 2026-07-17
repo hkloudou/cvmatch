@@ -13,8 +13,8 @@ README references those stable URLs and is never rewritten.
 
 Series colors are meaning-stable across every chart: green = native
 OpenCV C++, blue family = cvmatch.Match, orange family =
-cvmatch.MatchGray; the solid shade is the asm build (-tags cvmatch_asm),
-the light shade is the default no-asm build. amd64 and arm64 are peer
+cvmatch.MatchGray; the solid shade is the default build (SIMD asm),
+the light shade is the -tags purego no-asm build. amd64 and arm64 are peer
 panels of one chart with identical series and annotations.
 
 Manual run:
@@ -60,9 +60,9 @@ LAYOUT = [
 # assembly — so the builds are labeled asm / no-asm, not "pure Go".
 SERIES = [("OpenCV C++ (native)", "native"),
           ("Match (asm)", "match"),
-          ("Match (no asm, default)", "matchgo"),
+          ("Match (no asm, purego)", "matchgo"),
           ("MatchGray (asm)", "gray"),
-          ("MatchGray (no asm, default)", "graygo")]
+          ("MatchGray (no asm, purego)", "graygo")]
 # Identical comparison dimensions on both architectures: native OpenCV +
 # the four cvmatch series, every cvmatch bar annotated vs its own
 # architecture's native baseline. All bars are SINGLE-THREADED —
@@ -181,7 +181,7 @@ def speed_chart(mode):
                'Template matching speed — TM_CCOEFF_NORMED, end-to-end call, identical output</text>')
     out.append(f'<text x="20" y="38" font-size="12" fill="{t["muted"]}" {FONT}>'
                'every bar single-threaded (like-for-like: OpenCV matchTemplate is 1T by design) · '
-               'asm = -tags cvmatch_asm, no asm = default build · multi-thread numbers in the tables</text>')
+               'asm = default build, no asm = -tags purego · multi-thread numbers in the tables</text>')
     y = legend(out, t, 60, SERIES)
     note = 'ms, 1T — lower is better · ×  = speedup vs native C++ (&lt;1 = slower)'
     for arch, keys, host in (("amd64", KEYS_AMD, HOST),
@@ -274,8 +274,8 @@ def matrix_markdown():
         "`Match`, milliseconds. Native C++ is the best of 7 end-to-end runs,",
         "single-threaded because that is how OpenCV's `matchTemplate` runs;",
         "the cvmatch columns are `go test -benchtime 5x` averages from",
-        "`-cpu 1,4` — asm = the `-tags cvmatch_asm` build, no-asm = the",
-        "default build. Both architectures run the identical comparison.",
+        "`-cpu 1,4` — asm = the default build, no-asm = the",
+        "`-tags purego` build. Both architectures run the identical comparison.",
         "",
         "**amd64** — " + (HOST or "the amd64 CI runner") + ":",
         "",

@@ -1,7 +1,8 @@
 name: Bench charts
 
 # The only benchmark pipeline. Measures native OpenCV C++ and both
-# cvmatch builds (default no-asm and -tags cvmatch_asm) on amd64 and
+# cvmatch builds (default with SIMD
+# kernels, and -tags purego) on amd64 and
 # arm64 IN PARALLEL — one job per architecture, identical steps — then a
 # render job merges the raw outputs and publishes benchdata.json, the
 # SVGs and the full matrix to the `assets` branch. main is never touched:
@@ -63,8 +64,8 @@ jobs:
           (cd bench && cpp/native_bench cpp/scenes 7) | tee /tmp/out/native.txt
       - name: Measure cvmatch (-cpu 1,4, both builds)
         run: |
-          go test -tags cvmatch_asm -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m | tee /tmp/out/asm.txt
-          go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m | tee /tmp/out/go.txt
+          go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m | tee /tmp/out/asm.txt
+          go test -tags purego -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m | tee /tmp/out/go.txt
           CPU=$(lscpu | awk -F': +' '/Model name/{print $2; exit}')
           echo "GitHub Actions ${{ matrix.runner }} ($(nproc)-vCPU ${CPU:-unknown}, linux/${{ matrix.arch }})" > /tmp/out/host.txt
       - name: Measure peak RSS (memprobe + native one-shot probe, amd64 leg)

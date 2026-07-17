@@ -1,4 +1,4 @@
-//go:build gc && cvmatch_asm
+//go:build gc && !purego
 
 #include "textflag.h"
 
