@@ -10,6 +10,7 @@ package cvmatch
 import (
 	"fmt"
 	"math"
+	"math/bits"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -393,39 +394,48 @@ type goPlan struct {
 	prW, prH       []int32
 }
 
-// newGoPlan mirrors plan_init: OpenCV's crossCorr block sizing with
-// power-of-two DFT dims and the same scratch-memory area cap.
+// newGoPlan picks the DFT tile geometry by an integer cost-model argmin
+// over power-of-two (dftW, dftH) pairs — under the Phase 7 contract the
+// geometry only has to be fast, not to reproduce OpenCV's crossCorr
+// block heuristic. Each candidate is scored with a closed-form model of
+// this pipeline's own kernels (validated within ~10% against interleaved
+// A/Bs): packed row FFTs at 5·n·log2 n per pair, two full column passes,
+// and a linear conj-multiply/pack/emit term, summed over the real tile
+// grid including the short edge bands. The search is pure integer
+// arithmetic (bits.Len, int64), so every platform and build picks the
+// identical plan; ties go to the smaller spectrum.
 func newGoPlan(tw, th, rw, rh int) *goPlan {
-	bw := int(float64(tw)*4.5 + 0.5)
-	bh := int(float64(th)*4.5 + 0.5)
-	if bw < 256-tw+1 {
-		bw = 256 - tw + 1
-	}
-	if bh < 256-th+1 {
-		bh = 256 - th + 1
-	}
-	if bw > rw {
-		bw = rw
-	}
-	if bh > rh {
-		bh = rh
-	}
-	dftW, dftH := nextPow2(bw+tw-1), nextPow2(bh+th-1)
-	if dftW < 2 {
-		dftW = 2
-	}
-	if dftH < 2 {
-		dftH = 2
-	}
-	for int64(dftW)*int64(dftH) > 1<<21 {
-		if dftW >= dftH && dftW>>1 >= tw+1 {
-			dftW >>= 1
-		} else if dftH>>1 >= th+1 {
-			dftH >>= 1
-		} else {
-			break
+	const areaCap = 1 << 22 // bounds spec at ~16.8 MB; searched optima stay far below
+	minW, minH := max(2, nextPow2(tw)), max(2, nextPow2(th))
+	maxW, maxH := max(minW, nextPow2(rw+tw-1)), max(minH, nextPow2(rh+th-1))
+	log2 := func(n int) int64 { return int64(bits.Len(uint(n)) - 1) }
+	bestW, bestH := minW, minH
+	var bestCost, bestArea int64 = -1, 0
+	for dftW := minW; dftW <= maxW; dftW <<= 1 {
+		for dftH := minH; dftH <= maxH; dftH <<= 1 {
+			area := int64(dftW) * int64(dftH)
+			if area > areaCap {
+				continue
+			}
+			blockW := min(dftW-tw+1, rw)
+			blockH := min(dftH-th+1, rh)
+			ntx := int64((rw + blockW - 1) / blockW)
+			hw := dftW/2 + 1
+			rowFFT := 5 * int64(dftW) * log2(dftW)
+			colPass := 5 * int64(dftH) * log2(dftH) * int64(hw)
+			specN := int64(dftH) * int64(hw)
+			var cost int64
+			for y0 := 0; y0 < rh; y0 += blockH {
+				bh := min(blockH, rh-y0)
+				loadH := min(bh+th-1, dftH) // zero pad rows are skipped by the forward pass
+				cost += ntx * (int64((loadH+1)/2+(bh+1)/2)*rowFFT + 2*colPass + 16*specN)
+			}
+			if bestCost < 0 || cost < bestCost || (cost == bestCost && area < bestArea) {
+				bestCost, bestArea, bestW, bestH = cost, area, dftW, dftH
+			}
 		}
 	}
+	dftW, dftH := bestW, bestH
 	p := &goPlan{dftW: dftW, dftH: dftH, hw: dftW/2 + 1}
 	p.blockW = dftW - tw + 1
 	if p.blockW > rw {
