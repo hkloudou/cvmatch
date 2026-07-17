@@ -194,9 +194,10 @@ def svg(body, height):
 def matrix_markdown():
     """The README 'full matrix' table between the benchmatrix markers."""
     lines = [
-        "`Match`, milliseconds, measured on " + (HOST or "the CI runner") +
-        " (best of `-benchtime 5x`; native C++ is single-threaded because that",
-        "is how OpenCV's `matchTemplate` runs; the Go columns come from `-cpu 1,4`):",
+        "`Match`, milliseconds, measured on " + (HOST or "the CI runner") + ".",
+        "Native C++ is the best of 7 end-to-end runs, single-threaded because",
+        "that is how OpenCV's `matchTemplate` runs; the Go columns are",
+        "`go test -benchtime 5x` averages from `-cpu 1,4`:",
         "",
         "| scene | native C++ | cgo 1T | cgo 4T | pure-Go 1T | pure-Go 4T |",
         "|---|---|---|---|---|---|",

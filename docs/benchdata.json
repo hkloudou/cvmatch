@@ -4,7 +4,7 @@
   "baseline": 12.6,
   "cgo": 46.8,
   "gray": 41.0,
-  "native": 166.0
+  "native": 155.0
  },
  "scenes": {
   "absent_patch": {

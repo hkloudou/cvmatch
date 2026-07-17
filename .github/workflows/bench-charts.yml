@@ -21,6 +21,11 @@ concurrency:
 jobs:
   charts:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        # bash with -eo pipefail, so a failing benchmark can't hide behind
+        # the tee and get parsed into the committed dataset
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -42,14 +47,11 @@ jobs:
           grep noise1080p_sub128 cpp/scenes/manifest.tsv > /tmp/mem1/manifest.tsv
           cp "cpp/scenes/$(awk '{print $4}' /tmp/mem1/manifest.tsv)" \
              "cpp/scenes/$(awk '{print $5}' /tmp/mem1/manifest.tsv)" /tmp/mem1/
-          cpp/native_bench /tmp/mem1 3 >/dev/null & p=$!
-          hwm=0
-          while kill -0 $p 2>/dev/null; do
-            v=$(awk '/VmHWM/{print $2}' /proc/$p/status 2>/dev/null) && [ -n "$v" ] && hwm=$v
-            sleep 0.05
-          done
-          wait $p
-          echo "$hwm" | tee /tmp/native-hwm.txt
+          # one-shot probe: fresh process, exactly one end-to-end match,
+          # peak RSS read by the process itself (comparable to memprobe)
+          cpp/native_bench /tmp/mem1 1 mem | tee /tmp/native-mem.txt
+          grep -o 'peakHWM=[0-9]*' /tmp/native-mem.txt | grep -o '[0-9]*' > /tmp/native-hwm.txt
+          cat /tmp/native-hwm.txt
       - name: Measure Go cores (-cpu 1,4, both builds)
         run: |
           go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m | tee /tmp/gobench-cgo.txt
