@@ -23,6 +23,7 @@ func TestPureGoMatchesCgo(t *testing.T) {
 		{64, 64, 64, 64, 1, 1},
 		{50, 40, 1, 1, 4, 4},
 		{640, 400, 96, 32, 3, 4}, // exercises multi-block tiling
+		{128, 96, 5, 4, 3, 3},    // packed RGB (step==cn, no SIMD pack)
 	}
 	for ci, c := range cases {
 		img := randPix(c.iw*c.ih*c.step, rng)

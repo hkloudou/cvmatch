@@ -30,16 +30,6 @@ jobs:
           CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build ./...
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ./...
           CGO_ENABLED=0 GOOS=linux GOARCH=riscv64 go build ./...
-      - name: Static library size
-        run: |
-          make lib
-          {
-            echo "### libcvmatch.a"
-            echo '```'
-            ls -l libcvmatch.a
-            size cvmatch.o | tail -1
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
 
   benchmark:
     runs-on: ubuntu-latest

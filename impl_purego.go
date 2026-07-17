@@ -206,6 +206,10 @@ func fftGo(a []complex64, tw []complex64, pairs []int32, inverse bool) {
 		i, j := pairs[k], pairs[k+1]
 		a[i], a[j] = a[j], a[i]
 	}
+	if n >= 8 && simd.Enabled {
+		simd.FFTStages(a, tw, inverse)
+		return
+	}
 	s := float32(1)
 	if inverse {
 		s = -1
@@ -228,10 +232,6 @@ func fftGo(a []complex64, tw []complex64, pairs []int32, inverse bool) {
 			bfly(&p[0], &p[2], w0r, w0i)
 			bfly(&p[1], &p[3], w1r, w1i)
 		}
-	}
-	if n >= 8 && simd.Enabled {
-		simd.FFTStages(a, tw, inverse)
-		return
 	}
 	for half := 4; half < n; half <<= 1 {
 		w := tw[half : half*2]
@@ -260,7 +260,30 @@ func fftColsGo(d []complex64, n, width int, tw []complex64, pairs []int32, inver
 	if inverse {
 		s = -1
 	}
-	for half := 1; half < n; half <<= 1 {
+	half := 1
+	if simd.Enabled {
+		// Fused stage pairs: rows {i+j, +half, +2half, +3half} are closed
+		// under stages half and 2*half, so each pass streams the matrix
+		// once instead of twice. Butterfly order within a quad follows the
+		// stage order, so results are bit-identical.
+		for ; half*2 < n; half *= 4 {
+			for i := 0; i < n; i += half * 4 {
+				for j := 0; j < half; j++ {
+					w1 := complex(real(tw[half+j]), s*imag(tw[half+j]))
+					w2a := complex(real(tw[2*half+j]), s*imag(tw[2*half+j]))
+					w2b := complex(real(tw[3*half+j]), s*imag(tw[3*half+j]))
+					r := i + j
+					simd.FFTCols4(
+						d[r*width:r*width+width],
+						d[(r+half)*width:(r+half)*width+width],
+						d[(r+half*2)*width:(r+half*2)*width+width],
+						d[(r+half*3)*width:(r+half*3)*width+width],
+						w1, w2a, w2b)
+				}
+			}
+		}
+	}
+	for ; half < n; half <<= 1 {
 		for i := 0; i < n; i += half << 1 {
 			for j := 0; j < half; j++ {
 				wr, wi := real(tw[half+j]), s*imag(tw[half+j])
@@ -344,35 +367,48 @@ func newGoPlan(tw, th, rw, rh int) *goPlan {
 // real rows packed per complex FFT.
 func blockForwardGo(chanBase []uint8, stride, step, x0, y0, loadW, loadH int, p *goPlan, spec, z []complex64) {
 	n, hw, mask := p.dftW, p.hw, p.dftW-1
+	// The pack kernels implement the strides the public API produces (1 and
+	// 4); other layouts (e.g. packed RGB, step 3) take the scalar loops.
+	usePack := simd.Enabled && (step == 1 || step == 4)
 	for r := 0; r < p.dftH; r += 2 {
 		sa := spec[r*hw : r*hw+hw]
 		sb := spec[(r+1)*hw : (r+1)*hw+hw]
 		if r >= loadH {
-			tail := spec[r*hw : p.dftH*hw]
-			for i := range tail {
-				tail[i] = 0
-			}
+			clear(spec[r*hw : p.dftH*hw])
 			break
 		}
 		ra := chanBase[(y0+r)*stride+x0*step:]
 		if r+1 < loadH {
 			rb := chanBase[(y0+r+1)*stride+x0*step:]
-			for x := 0; x < loadW; x++ {
-				z[x] = complex(float32(ra[x*step]), float32(rb[x*step]))
+			if usePack {
+				simd.PackRows2(z[:loadW], ra, rb, step)
+			} else {
+				for x := 0; x < loadW; x++ {
+					z[x] = complex(float32(ra[x*step]), float32(rb[x*step]))
+				}
 			}
+		} else if usePack {
+			simd.PackRows1(z[:loadW], ra, step)
 		} else {
 			for x := 0; x < loadW; x++ {
 				z[x] = complex(float32(ra[x*step]), 0)
 			}
 		}
-		for x := loadW; x < n; x++ {
-			z[x] = 0
-		}
+		clear(z[loadW:n])
 		fftGo(z, p.twW, p.prW, false)
-		for k := 0; k < hw; k++ {
-			zk, zn := z[k], z[(n-k)&mask]
-			sa[k] = complex(0.5*(real(zk)+real(zn)), 0.5*(imag(zk)-imag(zn)))
-			sb[k] = complex(0.5*(imag(zk)+imag(zn)), 0.5*(real(zn)-real(zk)))
+		if simd.Enabled {
+			// k = 0 wraps to itself ((n-0)&mask == 0); the kernel covers
+			// the wrap-free k >= 1 range with the same op sequence.
+			zk := z[0]
+			sa[0] = complex(0.5*(real(zk)+real(zk)), 0.5*(imag(zk)-imag(zk)))
+			sb[0] = complex(0.5*(imag(zk)+imag(zk)), 0.5*(real(zk)-real(zk)))
+			simd.Untangle(sa, sb, z, n, 1, hw)
+		} else {
+			for k := 0; k < hw; k++ {
+				zk, zn := z[k], z[(n-k)&mask]
+				sa[k] = complex(0.5*(real(zk)+real(zn)), 0.5*(imag(zk)-imag(zn)))
+				sb[k] = complex(0.5*(imag(zk)+imag(zn)), 0.5*(real(zn)-real(zk)))
+			}
 		}
 	}
 	fftColsGo(spec, p.dftH, hw, p.twH, p.prH, false, z)
@@ -399,31 +435,44 @@ func blockInverseEmitGo(p *goPlan, spec, z []complex64, res []float32, rw, x0, y
 	for r := 0; r < bh; r += 2 {
 		sa := spec[r*hw : r*hw+hw]
 		sb := spec[(r+1)*hw : (r+1)*hw+hw]
-		for k := 0; k < hw; k++ {
-			z[k] = complex(real(sa[k])-imag(sb[k]), imag(sa[k])+real(sb[k]))
-		}
-		for k := hw; k < n; k++ {
-			m := n - k
-			z[k] = complex(real(sa[m])+imag(sb[m]), real(sb[m])-imag(sa[m]))
+		if simd.Enabled {
+			simd.CombineLow(z[:hw], sa, sb)
+			simd.CombineHigh(z, sa, sb, n, hw)
+		} else {
+			for k := 0; k < hw; k++ {
+				z[k] = complex(real(sa[k])-imag(sb[k]), imag(sa[k])+real(sb[k]))
+			}
+			for k := hw; k < n; k++ {
+				m := n - k
+				z[k] = complex(real(sa[m])+imag(sb[m]), real(sb[m])-imag(sa[m]))
+			}
 		}
 		fftGo(z, p.twW, p.prW, true)
 		o := res[(y0+r)*rw+x0:]
-		if add {
+		var o2 []float32
+		if r+1 < bh {
+			o2 = res[(y0+r+1)*rw+x0:]
+		}
+		switch {
+		case simd.Enabled:
+			simd.EmitRe(o[:bw], z, add)
+			if o2 != nil {
+				simd.EmitIm(o2[:bw], z, add)
+			}
+		case add:
 			for x := 0; x < bw; x++ {
 				o[x] += real(z[x])
 			}
-			if r+1 < bh {
-				o2 := res[(y0+r+1)*rw+x0:]
+			if o2 != nil {
 				for x := 0; x < bw; x++ {
 					o2[x] += imag(z[x])
 				}
 			}
-		} else {
+		default:
 			for x := 0; x < bw; x++ {
 				o[x] = real(z[x])
 			}
-			if r+1 < bh {
-				o2 := res[(y0+r+1)*rw+x0:]
+			if o2 != nil {
 				for x := 0; x < bw; x++ {
 					o2[x] = imag(z[x])
 				}
@@ -537,25 +586,35 @@ func colBuildGo(colSum []int32, colSum2 []int64, img []uint8, istride, iw, cn, c
 }
 
 func colSlideGo(colSum []int32, colSum2 []int64, rsub, radd []uint8, iw, cn, cs, step int) {
+	xv := 0
+	if simd.Enabled && iw >= 8 {
+		xv = iw &^ 7
+	}
 	switch {
 	case step == 1 && cn == 1:
-		for x := 0; x < iw; x++ {
+		if xv > 0 {
+			simd.SlideCols1(colSum[:xv], colSum2[:xv], rsub, radd)
+		}
+		for x := xv; x < iw; x++ {
 			a, b := int32(radd[x]), int32(rsub[x])
 			colSum[x] += a - b
 			colSum2[x] += int64(a*a - b*b)
 		}
 	case cs == 4 && step == 4:
-		for i := 0; i < iw*4; i++ {
+		if xv > 0 {
+			simd.SlideCols4(colSum[:xv*4], colSum2[:xv], rsub, radd, cn)
+		}
+		for i := xv * 4; i < iw*4; i++ {
 			colSum[i] += int32(radd[i]) - int32(rsub[i])
 		}
 		if cn == 3 {
-			for x := 0; x < iw; x++ {
+			for x := xv; x < iw; x++ {
 				ar, ag, ab := int32(radd[x*4]), int32(radd[x*4+1]), int32(radd[x*4+2])
 				br, bg, bb := int32(rsub[x*4]), int32(rsub[x*4+1]), int32(rsub[x*4+2])
 				colSum2[x] += int64(ar*ar + ag*ag + ab*ab - br*br - bg*bg - bb*bb)
 			}
 		} else {
-			for x := 0; x < iw; x++ {
+			for x := xv; x < iw; x++ {
 				ar, ag, ab, aa := int32(radd[x*4]), int32(radd[x*4+1]), int32(radd[x*4+2]), int32(radd[x*4+3])
 				br, bg, bb, ba := int32(rsub[x*4]), int32(rsub[x*4+1]), int32(rsub[x*4+2]), int32(rsub[x*4+3])
 				colSum2[x] += int64(ar*ar + ag*ag + ab*ab + aa*aa - br*br - bg*bg - bb*bb - ba*ba)
@@ -651,21 +710,74 @@ func normalizeBandGo(img []uint8, istride, iw int, cn, step, tw, th, rw, y0, y1 
 		// vectorized when the kernel covers this channel count.
 		for x0 := 0; x0 < rw; x0 += normChunkGo {
 			clen := min(normChunkGo, rw-x0)
-			for i := 0; ; i++ {
-				for k := 0; k < cn; k++ {
-					wt[k*normChunkGo+i] = float64(s[k])
+			// Elements slide the window while x+1 < rw; only the row's very
+			// last element doesn't, so the slide count is hoisted out of the
+			// loop and the leftover element (at most one) spills afterwards.
+			ns := min(clen, rw-1-x0)
+			switch cn {
+			case 1:
+				lo, hi := colSum[x0:], colSum[x0+tw:]
+				lo2, hi2 := colSum2[x0:], colSum2[x0+tw:]
+				s0, t2 := s[0], s2
+				for i := 0; i < ns; i++ {
+					wt[i] = float64(s0)
+					q2[i] = float64(t2)
+					s0 += int64(hi[i] - lo[i])
+					t2 += hi2[i] - lo2[i]
 				}
-				q2[i] = float64(s2)
-				x := x0 + i
-				if x+1 < rw { // slide (also carries into the next chunk)
+				s[0], s2 = s0, t2
+			case 3:
+				lo, hi := colSum[x0*cs:], colSum[(x0+tw)*cs:]
+				lo2, hi2 := colSum2[x0:], colSum2[x0+tw:]
+				s0, s1, sq, t2 := s[0], s[1], s[2], s2
+				for i := 0; i < ns; i++ {
+					wt[i] = float64(s0)
+					wt[normChunkGo+i] = float64(s1)
+					wt[2*normChunkGo+i] = float64(sq)
+					q2[i] = float64(t2)
+					j := i * cs
+					s0 += int64(hi[j] - lo[j])
+					s1 += int64(hi[j+1] - lo[j+1])
+					sq += int64(hi[j+2] - lo[j+2])
+					t2 += hi2[i] - lo2[i]
+				}
+				s[0], s[1], s[2], s2 = s0, s1, sq, t2
+			case 4:
+				lo, hi := colSum[x0*cs:], colSum[(x0+tw)*cs:]
+				lo2, hi2 := colSum2[x0:], colSum2[x0+tw:]
+				s0, s1, sq, s3, t2 := s[0], s[1], s[2], s[3], s2
+				for i := 0; i < ns; i++ {
+					wt[i] = float64(s0)
+					wt[normChunkGo+i] = float64(s1)
+					wt[2*normChunkGo+i] = float64(sq)
+					wt[3*normChunkGo+i] = float64(s3)
+					q2[i] = float64(t2)
+					j := i * 4
+					s0 += int64(hi[j] - lo[j])
+					s1 += int64(hi[j+1] - lo[j+1])
+					sq += int64(hi[j+2] - lo[j+2])
+					s3 += int64(hi[j+3] - lo[j+3])
+					t2 += hi2[i] - lo2[i]
+				}
+				s[0], s[1], s[2], s[3], s2 = s0, s1, sq, s3, t2
+			default:
+				for i := 0; i < ns; i++ {
+					for k := 0; k < cn; k++ {
+						wt[k*normChunkGo+i] = float64(s[k])
+					}
+					q2[i] = float64(s2)
+					x := x0 + i
 					for k := 0; k < cn; k++ {
 						s[k] += int64(colSum[(x+tw)*cs+k] - colSum[x*cs+k])
 					}
 					s2 += colSum2[x+tw] - colSum2[x]
 				}
-				if i+1 >= clen {
-					break
+			}
+			for i := ns; i < clen; i++ { // final result column: no slide
+				for k := 0; k < cn; k++ {
+					wt[k*normChunkGo+i] = float64(s[k])
 				}
+				q2[i] = float64(s2)
 			}
 			vlen := 0
 			if useKernel {
@@ -688,7 +800,22 @@ func normalizeBandGo(img []uint8, istride, iw int, cn, step, tw, th, rw, y0, y1 
 		}
 		// Row min/max scan of the stored float32 values: ascending x with
 		// strict compares keeps OpenCV's first-occurrence tie semantics.
-		for x, v := range rrow {
+		// The kernel returns the row prefix's first-occurrence extrema, so
+		// merging with the running extrema by strict compare is identical
+		// to scanning element-wise.
+		xs := 0
+		if simd.Enabled && rw >= 8 {
+			xs = rw &^ 7
+			mnV, mxV, mnI, mxI := simd.MinMaxRow(rrow[:xs])
+			if mnV < ext.minV {
+				ext.minV, ext.minX, ext.minY = mnV, mnI, y
+			}
+			if mxV > ext.maxV {
+				ext.maxV, ext.maxX, ext.maxY = mxV, mxI, y
+			}
+		}
+		for x := xs; x < rw; x++ {
+			v := rrow[x]
 			if v < ext.minV {
 				ext.minV, ext.minX, ext.minY = v, x, y
 			}
