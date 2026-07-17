@@ -120,13 +120,27 @@ func MatchGray(parent, sub image.Image) (float32, int, int, float32, int, int) {
 	return r1, r2, r3, r4, r5, r6
 }
 
-// alphaConst reports whether the alpha plane of interleaved RGBA pixels is a
-// single constant value.
+// alphaConst reports whether the alpha plane of interleaved RGBA pixels is
+// a single constant value. The scan runs the full image on the common
+// constant-alpha case, so it compares two alpha lanes per 8-byte word
+// (an exact integer predicate — no output influence beyond the cn=3/4
+// choice it already gates).
 func alphaConst(pix []uint8, stride, w, h int) bool {
 	a := pix[3]
+	const mask = uint64(0xFF000000FF000000)
+	want := (uint64(a) << 24) | (uint64(a) << 56)
 	for y := 0; y < h; y++ {
 		row := pix[y*stride : y*stride+w*4]
-		for x := 3; x < len(row); x += 4 {
+		x := 0
+		for ; x+8 <= len(row); x += 8 {
+			word := uint64(row[x]) | uint64(row[x+1])<<8 | uint64(row[x+2])<<16 |
+				uint64(row[x+3])<<24 | uint64(row[x+4])<<32 | uint64(row[x+5])<<40 |
+				uint64(row[x+6])<<48 | uint64(row[x+7])<<56
+			if word&mask != want {
+				return false
+			}
+		}
+		for x += 3; x < len(row); x += 4 {
 			if row[x] != a {
 				return false
 			}
