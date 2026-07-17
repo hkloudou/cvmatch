@@ -14,23 +14,23 @@ the cvmatch columns are `go test -benchtime 5x` averages from
 
 | scene | native C++ | asm 1T | asm 4T | no-asm 1T | no-asm 4T |
 |---|---|---|---|---|---|
-| Window 1600×1000 · button 96×32 | 185.7 | 43.3 | **23.5** | 178.1 | 92.4 |
-| Window 1600×1000 · icon 24×24 | 148.4 | 37.9 | **19.1** | 148.5 | 73.6 |
-| Window 1600×1000 · panel 300×200 | 160.7 | 48.8 | **37.1** | 196.8 | 131.6 |
-| Noise 1280×720 · sub 96×96 | 120.0 | 33.7 | **23.1** | 142.2 | 86.4 |
-| Noise 1920×1080 · sub 128×128 | 284.7 | 60.9 | **35.7** | 256.0 | 142.2 |
-| Noise 1920×1080 · sub 32×32 | 192.5 | 50.4 | **26.2** | 197.3 | 97.4 |
-| Noise 640×480 · varying alpha, 4ch | 29.8 | 12.5 | **8.6** | 51.1 | 31.5 |
-| Window 3840×2160 · button 96×32 | 858.6 | 222.7 | **109.9** | 927.8 | 452.8 |
-| Noise 3840×2160 · sub 256×256 | 1216.2 | 296.1 | **168.7** | 1242.5 | 664.9 |
-| fruits 512×480 · sub 80×80 | 51.4 | **6.5** | 7.6 | 23.3 | 18.3 |
-| baboon 512×512 · sub 64×64 | 32.8 | **6.4** | 7.3 | 24.7 | 18.5 |
-| building 868×600 · sub 100×100 | 75.0 | 18.3 | **16.9** | 75.6 | 55.1 |
-| graf1 800×640 · sub 120×120 | 90.5 | 18.4 | **17.3** | 76.2 | 55.2 |
-| starry_night 752×600 · sub 128×128 | 66.4 | 17.5 | **17.4** | 73.1 | 54.9 |
+| Window 1600×1000 · button 96×32 | 185.0 | 43.6 | **22.7** | 178.5 | 93.0 |
+| Window 1600×1000 · icon 24×24 | 148.7 | 37.9 | **19.7** | 148.8 | 73.4 |
+| Window 1600×1000 · panel 300×200 | 160.4 | 49.8 | **38.0** | 197.1 | 129.0 |
+| Noise 1280×720 · sub 96×96 | 120.6 | 34.6 | **23.2** | 142.1 | 87.0 |
+| Noise 1920×1080 · sub 128×128 | 285.6 | 62.1 | **36.8** | 257.8 | 140.0 |
+| Noise 1920×1080 · sub 32×32 | 192.7 | 51.3 | **25.8** | 198.4 | 98.2 |
+| Noise 640×480 · varying alpha, 4ch | 29.9 | 12.7 | **9.2** | 50.8 | 31.4 |
+| Window 3840×2160 · button 96×32 | 861.1 | 224.9 | **108.6** | 927.3 | 453.5 |
+| Noise 3840×2160 · sub 256×256 | 1224.3 | 297.3 | **176.5** | 1252.5 | 665.7 |
+| fruits 512×480 · sub 80×80 | 51.2 | **6.2** | 7.5 | 23.4 | 18.0 |
+| baboon 512×512 · sub 64×64 | 33.4 | **6.4** | 7.1 | 25.0 | 19.0 |
+| building 868×600 · sub 100×100 | 75.7 | 18.7 | **18.4** | 76.2 | 55.3 |
+| graf1 800×640 · sub 120×120 | 90.6 | **19.0** | 19.3 | 76.4 | 56.0 |
+| starry_night 752×600 · sub 128×128 | 66.5 | **17.7** | 19.4 | 73.7 | 55.2 |
 
-`MatchGray` at 1080p/128 for scale: asm 20.6 / 12.2 ms,
-no-asm 98.3 / 54.1 ms (1T / 4T). Native C++ has no gray
+`MatchGray` at 1080p/128 for scale: asm 21.0 / 13.3 ms,
+no-asm 97.9 / 58.5 ms (1T / 4T). Native C++ has no gray
 row in this suite — a fair baseline would need cvtColor + 1-channel
 matchTemplate timed end-to-end, which was not measured; treat MatchGray
 numbers as cvmatch-internal.
@@ -41,34 +41,34 @@ amd64 rows above:
 
 | scene | native C++ | asm 1T | asm 4T | no-asm 1T | no-asm 4T |
 |---|---|---|---|---|---|
-| Window 1600×1000 · button 96×32 | 231.9 | 92.4 | **28.5** | 194.6 | 59.4 |
-| Window 1600×1000 · icon 24×24 | 185.5 | 77.4 | **23.2** | 161.5 | 43.7 |
-| Window 1600×1000 · panel 300×200 | 221.1 | 105.9 | **56.3** | 223.1 | 102.6 |
-| Noise 1280×720 · sub 96×96 | 141.7 | 75.7 | **32.9** | 161.6 | 63.3 |
-| Noise 1920×1080 · sub 128×128 | 364.9 | 136.4 | **57.5** | 290.9 | 107.7 |
-| Noise 1920×1080 · sub 32×32 | 241.4 | 102.9 | **29.3** | 215.7 | 60.5 |
-| Noise 640×480 · varying alpha, 4ch | 35.1 | 26.6 | **13.0** | 56.7 | 25.2 |
-| Window 3840×2160 · button 96×32 | 1117.4 | 470.2 | **132.1** | 1002.1 | 270.8 |
-| Noise 3840×2160 · sub 256×256 | 1633.8 | 662.0 | **235.8** | 1428.8 | 499.0 |
-| fruits 512×480 · sub 80×80 | 59.5 | 12.3 | **8.0** | 25.8 | 14.1 |
-| baboon 512×512 · sub 64×64 | 38.9 | 12.9 | **8.2** | 26.8 | 14.2 |
-| building 868×600 · sub 100×100 | 89.3 | 40.8 | **25.6** | 87.9 | 44.5 |
-| graf1 800×640 · sub 120×120 | 111.3 | 40.6 | **26.0** | 88.1 | 45.6 |
-| starry_night 752×600 · sub 128×128 | 79.7 | 39.2 | **25.5** | 84.5 | 45.3 |
+| Window 1600×1000 · button 96×32 | 227.3 | 90.2 | **28.3** | 192.7 | 58.7 |
+| Window 1600×1000 · icon 24×24 | 180.8 | 76.0 | **22.3** | 160.8 | 43.9 |
+| Window 1600×1000 · panel 300×200 | 215.3 | 102.9 | **50.8** | 219.6 | 97.9 |
+| Noise 1280×720 · sub 96×96 | 140.0 | 72.9 | **33.0** | 159.9 | 62.1 |
+| Noise 1920×1080 · sub 128×128 | 360.4 | 130.4 | **51.2** | 288.3 | 107.0 |
+| Noise 1920×1080 · sub 32×32 | 238.2 | 100.8 | **29.3** | 214.4 | 59.3 |
+| Noise 640×480 · varying alpha, 4ch | 34.2 | 26.1 | **12.7** | 56.6 | 24.9 |
+| Window 3840×2160 · button 96×32 | 1099.8 | 461.1 | **131.3** | 992.7 | 268.9 |
+| Noise 3840×2160 · sub 256×256 | 1595.1 | 632.1 | **230.6** | 1409.9 | 493.2 |
+| fruits 512×480 · sub 80×80 | 58.4 | 11.9 | **8.6** | 25.8 | 14.0 |
+| baboon 512×512 · sub 64×64 | 37.4 | 12.5 | **8.2** | 26.7 | 14.3 |
+| building 868×600 · sub 100×100 | 87.1 | 39.6 | **25.2** | 86.6 | 44.2 |
+| graf1 800×640 · sub 120×120 | 108.9 | 39.6 | **25.0** | 87.1 | 45.0 |
+| starry_night 752×600 · sub 128×128 | 78.0 | 37.7 | **25.6** | 83.9 | 45.1 |
 
-`MatchGray` at 1080p/128 on arm64: asm 48.3 / 18.5 ms, no-asm 108.2 / 40.6 ms (1T / 4T).
+`MatchGray` at 1080p/128 on arm64: asm 47.5 / 18.1 ms, no-asm 107.6 / 40.3 ms (1T / 4T).
 
-**Measured summary (single-threaded, like-for-like):** the asm build runs
-3.6–4.2x faster than the default no-asm build on amd64
+**Measured summary (single-threaded, like-for-like):** the default asm build
+runs 3.8–4.2x faster than the -tags purego build on amd64
 (2.1–2.2x on arm64), and beats native OpenCV C++ by
-2.4–7.9x on amd64 and 1.3–4.8x on arm64.
+2.4–8.3x on amd64 and 1.3–4.9x on arm64.
 
 Internal multi-threading (4 workers, bit-identical output at any worker
-count) further improves cvmatch by up to 2.0x on the multi-tile
+count) further improves cvmatch by up to 2.1x on the multi-tile
 scenes — the 4T columns above. It is a product feature, not part of the
 vs-native comparison: OpenCV's matchTemplate does not thread, so the
 headline numbers are 1T vs 1T.
 
 Peak process memory for one 1080p/128 match (VmHWM, fresh process,
 default build): native OpenCV 155 MB, `Match` 48 MB,
-`MatchGray` 38 MB, idle Go baseline 12 MB.
+`MatchGray` 34 MB, idle Go baseline 12 MB.
