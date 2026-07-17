@@ -1,0 +1,92 @@
+name: Bench charts
+
+# Re-measures all three implementations (native OpenCV C++, cgo core,
+# pure-Go core) in one session on every push to main, regenerates
+# docs/benchdata.json + the README SVG charts + the measured-matrix table
+# (docs/collect.py -> docs/genchart.py), and commits the refresh with
+# [skip ci] so no workflows re-trigger.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bench-charts
+  cancel-in-progress: false
+
+jobs:
+  charts:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # bash with -eo pipefail, so a failing benchmark can't hide behind
+        # the tee and get parsed into the committed dataset
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
+      - name: Fetch real sample images (OpenCV samples/data)
+        run: bench/testdata/fetch.sh
+      - name: Build native OpenCV benchmark (prebuilt static OpenCV 4.12)
+        working-directory: bench
+        run: |
+          go run ./cmd/dumpscenes -out cpp/scenes
+          cpp/build.sh
+      - name: Measure native OpenCV C++ (speed, then 1080p peak RSS)
+        working-directory: bench
+        run: |
+          cpp/native_bench cpp/scenes 7 | tee /tmp/native.txt
+          mkdir -p /tmp/mem1
+          grep noise1080p_sub128 cpp/scenes/manifest.tsv > /tmp/mem1/manifest.tsv
+          cp "cpp/scenes/$(awk '{print $4}' /tmp/mem1/manifest.tsv)" \
+             "cpp/scenes/$(awk '{print $5}' /tmp/mem1/manifest.tsv)" /tmp/mem1/
+          # one-shot probe: fresh process, exactly one end-to-end match,
+          # peak RSS read by the process itself (comparable to memprobe)
+          cpp/native_bench /tmp/mem1 1 mem | tee /tmp/native-mem.txt
+          grep -o 'peakHWM=[0-9]*' /tmp/native-mem.txt | grep -o '[0-9]*' > /tmp/native-hwm.txt
+          cat /tmp/native-hwm.txt
+      - name: Measure Go cores (-cpu 1,4, both builds)
+        run: |
+          go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m | tee /tmp/gobench-cgo.txt
+          CGO_ENABLED=0 go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m | tee /tmp/gobench-purego.txt
+      - name: Measure peak RSS (memprobe, fresh process per implementation)
+        working-directory: bench
+        run: |
+          go build -o /tmp/memprobe ./cmd/memprobe
+          for impl in baseline cvmatch gray; do /tmp/memprobe -impl "$impl"; done | tee /tmp/memprobe.txt
+      - name: Regenerate benchdata, charts and README matrix
+        run: |
+          CPU=$(lscpu | awk -F': +' '/Model name/{print $2; exit}')
+          HOST="GitHub Actions ubuntu-latest ($(nproc)-vCPU ${CPU}, linux/amd64)"
+          NATMEM=$(cat /tmp/native-hwm.txt)
+          python3 docs/collect.py \
+            --cgo /tmp/gobench-cgo.txt --purego /tmp/gobench-purego.txt \
+            --native /tmp/native.txt --mem /tmp/memprobe.txt \
+            ${NATMEM:+--native-mem "$NATMEM"} \
+            --host "$HOST"
+          python3 docs/genchart.py
+          {
+            echo "### Refreshed benchmark data (docs/benchdata.json)"
+            echo '```json'
+            cat docs/benchdata.json
+            echo ""
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Commit the refresh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/benchdata.json docs/bench-light.svg docs/bench-dark.svg docs/mem-light.svg docs/mem-dark.svg README.md
+          if git diff --cached --quiet; then
+            echo "charts unchanged"
+          else
+            git commit -m "docs: refresh benchmark charts and matrix [skip ci]"
+            git push
+          fi

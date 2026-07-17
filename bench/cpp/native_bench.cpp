@@ -52,15 +52,49 @@ static void dumpResult(const std::string &path, const cv::Mat &m) {
     f.write(reinterpret_cast<const char *>(m.ptr<float>(y)), size_t(m.cols) * 4);
 }
 
+// vmhwm_kb reads the process peak RSS (Linux); 0 elsewhere.
+static long vmhwm_kb() {
+  std::ifstream f("/proc/self/status");
+  std::string line;
+  while (std::getline(f, line))
+    if (line.rfind("VmHWM:", 0) == 0) return atol(line.c_str() + 6);
+  return 0;
+}
+
 int main(int argc, char **argv) {
   std::string dir = argc > 1 ? argv[1] : "scenes";
   int iters = argc > 2 ? atoi(argv[2]) : 5;
   bool dump = argc > 3 && std::string(argv[3]) == "dump";
+  bool memOnly = argc > 3 && std::string(argv[3]) == "mem";
   std::ifstream mf(dir + "/manifest.tsv");
   if (!mf) {
     fprintf(stderr, "cannot open %s/manifest.tsv (run dumpscenes first)\n", dir.c_str());
     return 1;
   }
+  if (memOnly) {
+    // One-shot memory probe: exactly one end-to-end match on the first
+    // manifest scene, then this process's own peak RSS — comparable to the
+    // Go side's memprobe (fresh process, single match).
+    std::string name, pf, sf;
+    int px, py;
+    if (!(mf >> name >> px >> py >> pf >> sf)) return 1;
+    RawImg pi, si;
+    if (!loadRaw(dir + "/" + pf, pi) || !loadRaw(dir + "/" + sf, si)) {
+      fprintf(stderr, "%s: failed to load raw images\n", name.c_str());
+      return 1;
+    }
+    cv::Mat parent = cv::Mat(pi.h, pi.w, CV_8UC4, pi.pix.data()).clone();
+    cv::Mat sub = cv::Mat(si.h, si.w, CV_8UC4, si.pix.data()).clone();
+    cv::Mat result;
+    cv::matchTemplate(parent, sub, result, cv::TM_CCOEFF_NORMED);
+    double mn, mx;
+    cv::Point mnl, mxl;
+    cv::minMaxLoc(result, &mn, &mx, &mnl, &mxl);
+    printf("scene=%s match=(%d,%d val=%.4f) peakHWM=%ld kB\n", name.c_str(),
+           mxl.x, mxl.y, mx, vmhwm_kb());
+    return 0;
+  }
+
   printf("threads=%d  iters=%d  (times are best-of runs, ms)\n", cv::getNumThreads(), iters);
   printf("%-28s %12s %12s   %s\n", "scene", "end-to-end", "core-only", "check");
 

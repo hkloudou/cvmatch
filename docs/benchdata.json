@@ -1,0 +1,174 @@
+{
+ "host": "4-vCPU Intel Xeon @ 2.80 GHz (linux/amd64, cloud VM)",
+ "mem": {
+  "baseline": 12.6,
+  "cgo": 46.8,
+  "gray": 41.0,
+  "native": 155.0
+ },
+ "scenes": {
+  "absent_patch": {
+   "native": 402.8
+  },
+  "degraded_button": {
+   "native": 344.5
+  },
+  "half_degraded_noise": {
+   "native": 189.1
+  },
+  "noise1080p_sub128": {
+   "cgo1": 144.7,
+   "cgo4": 62.4,
+   "go1": 216.1,
+   "go4": 92.6,
+   "gray1": 59.6,
+   "gray4": 28.7,
+   "native": 525.6,
+   "pgray1": 77.2,
+   "pgray4": 47.9
+  },
+  "noise1080p_sub32": {
+   "cgo1": 105.8,
+   "cgo4": 33.0,
+   "go1": 176.4,
+   "go4": 79.6,
+   "gray1": 47.6,
+   "gray4": 21.0,
+   "native": 403.3,
+   "pgray1": 68.9,
+   "pgray4": 27.3
+  },
+  "noise4k_sub256": {
+   "cgo1": 706.9,
+   "cgo4": 322.9,
+   "go1": 1073.4,
+   "go4": 393.6,
+   "gray1": 294.7,
+   "gray4": 133.5,
+   "native": 2385.3,
+   "pgray1": 362.8,
+   "pgray4": 150.8
+  },
+  "noise640_alpha": {
+   "cgo1": 25.6,
+   "cgo4": 15.3,
+   "go1": 40.2,
+   "go4": 21.7,
+   "gray1": 9.6,
+   "gray4": 5.8,
+   "native": 48.4,
+   "pgray1": 12.6,
+   "pgray4": 7.2
+  },
+  "noise720p_sub96": {
+   "cgo1": 83.1,
+   "cgo4": 45.2,
+   "go1": 112.1,
+   "go4": 63.3,
+   "gray1": 35.0,
+   "gray4": 18.8,
+   "native": 188.7,
+   "pgray1": 42.0,
+   "pgray4": 23.2
+  },
+  "photo_baboon": {
+   "cgo1": 12.2,
+   "cgo4": 11.0,
+   "go1": 21.1,
+   "go4": 19.5,
+   "gray1": 5.8,
+   "gray4": 5.1,
+   "native": 52.8,
+   "pgray1": 8.4,
+   "pgray4": 6.3
+  },
+  "photo_building": {
+   "cgo1": 46.5,
+   "cgo4": 42.9,
+   "go1": 67.6,
+   "go4": 59.1,
+   "gray1": 17.1,
+   "gray4": 17.1,
+   "native": 112.8,
+   "pgray1": 23.1,
+   "pgray4": 19.8
+  },
+  "photo_fruits": {
+   "cgo1": 12.1,
+   "cgo4": 10.4,
+   "go1": 20.1,
+   "go4": 16.9,
+   "gray1": 5.5,
+   "gray4": 4.8,
+   "native": 79.1,
+   "pgray1": 8.2,
+   "pgray4": 6.5
+  },
+  "photo_graf1": {
+   "cgo1": 48.2,
+   "cgo4": 44.8,
+   "go1": 62.5,
+   "go4": 54.8,
+   "gray1": 19.7,
+   "gray4": 16.1,
+   "native": 141.7,
+   "pgray1": 22.6,
+   "pgray4": 19.1
+  },
+  "photo_starry_night": {
+   "cgo1": 53.3,
+   "cgo4": 45.6,
+   "go1": 63.5,
+   "go4": 57.3,
+   "gray1": 17.6,
+   "gray4": 16.1,
+   "native": 103.6,
+   "pgray1": 22.3,
+   "pgray4": 19.9
+  },
+  "window1600_button96x32": {
+   "cgo1": 90.9,
+   "cgo4": 39.7,
+   "go1": 148.7,
+   "go4": 71.4,
+   "gray1": 46.7,
+   "gray4": 17.1,
+   "native": 326.8,
+   "pgray1": 57.3,
+   "pgray4": 22.3
+  },
+  "window1600_icon24x24": {
+   "cgo1": 78.4,
+   "cgo4": 24.4,
+   "go1": 130.9,
+   "go4": 38.3,
+   "gray1": 34.9,
+   "gray4": 15.5,
+   "native": 289.8,
+   "pgray1": 54.1,
+   "pgray4": 19.4
+  },
+  "window1600_panel300x200": {
+   "cgo1": 128.3,
+   "cgo4": 112.6,
+   "go1": 179.7,
+   "go4": 137.9,
+   "gray1": 51.0,
+   "gray4": 45.4,
+   "native": 321.3,
+   "pgray1": 63.9,
+   "pgray4": 55.6
+  },
+  "window4k_button96x32": {
+   "cgo1": 497.7,
+   "cgo4": 165.2,
+   "go1": 750.5,
+   "go4": 228.1,
+   "gray1": 237.1,
+   "gray4": 85.1,
+   "native": 1642.8,
+   "pgray1": 316.5,
+   "pgray4": 101.4
+  }
+ }
+}
