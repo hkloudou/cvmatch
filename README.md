@@ -10,9 +10,10 @@ cores ship in the package:
   code including threading, AVX2 kernels and multi-versioning; compiles
   in ~1 s during `go build`.
 - **pure-Go core** (`CGO_ENABLED=0`, or no C toolchain): a port of the same
-  algorithm with its own hand-written AVX2 kernels (Go assembly, no cgo),
-  selected automatically, so plain cross-compilation works. On amd64 it now
-  measures *faster* than the cgo core across the benchmark matrix.
+  algorithm with its own hand-written SIMD kernels — AVX2 on amd64, NEON
+  on arm64 (Go assembly, no cgo) — selected automatically, so plain
+  cross-compilation works. On amd64 it now measures *faster* than the cgo
+  core across the benchmark matrix.
 
 `cvmatch.Impl` reports which core is active (`"cgo"` / `"purego"`). The two
 cores produce **bit-identical output** — same response map bytes, same
@@ -324,14 +325,15 @@ numbers as cvmatch-internal.
   section.
 - The **pure-Go core now also beats native OpenCV single-threaded on
   every scene** (from ~1.7x on varying-alpha to ~4x on fruits) — its
-  amd64 assembly kernels execute the same op sequence the C core does; on
-  architectures without kernels (arm64 etc., until their NEON twins land)
-  it falls back to scalar Go and loses its SIMD edge. With the full amd64
-  kernel set (FFT stages and fused column-stage pairs, pack/untangle/
-  combine/emit, sliding column sums, the normalize tail, the min/max scan
-  and RGBA→gray) it measures **ahead of the cgo core** on this matrix —
-  cgo is no longer the fast path on amd64, it is the reference
-  implementation.
+  assembly kernels execute the same op sequence the C core does, with two
+  full backends: AVX2 on amd64 and NEON on arm64 (bit-identical to each
+  other, asserted by hashing whole response maps across architectures).
+  Architectures without kernels fall back to scalar Go and lose the SIMD
+  edge. With the full kernel set (FFT stages and fused column-stage
+  pairs, pack/untangle/combine/emit, sliding column sums, the normalize
+  tail, the min/max scan and RGBA→gray) it measures **ahead of the cgo
+  core** on the amd64 matrix — cgo is no longer the fast path there, it
+  is the reference implementation.
 - The Go rows allocate almost nothing in cgo mode (32 B/op for `Match`);
   the pure-Go core recycles its scratch through pools, so steady-state
   matching allocates ~0 too (a few MB/op appear on the largest scenes
@@ -722,14 +724,18 @@ Same math, different engineering:
 - `cvmatch.c` / `cvmatch.h` — the native C core (C99, no deps).
 - `impl_purego.go` — the pure-Go port of the same core; `impl_cgo.go` /
   `impl_nocgo.go` select between them by build tag.
-- `internal/simd/` — the pure-Go core's amd64 assembly kernels (AVX2,
-  runtime-detected; FFT stage cascades and fused column-stage quads,
-  byte→complex packing, spectrum untangle/combine, result emit, sliding
-  column sums, the normalize tail, first-occurrence min/max scan and
-  RGBA→gray) with the generic fallback declarations. Every kernel
-  executes the scalar loop's exact op sequence — asserted bit-for-bit by
-  `TestSIMDMatchesScalar` and the kernel unit tests. arm64 NEON twins are
-  the next planned step.
+- `internal/simd/` — the pure-Go core's assembly kernels (AVX2 on amd64,
+  runtime-detected; NEON on arm64): FFT stage cascades and fused
+  column-stage quads, byte→complex packing, spectrum untangle/combine,
+  result emit, sliding column sums, the normalize tail, first-occurrence
+  min/max scan and RGBA→gray, plus the generic fallback declarations.
+  Every kernel executes the scalar loop's exact op sequence — asserted
+  bit-for-bit by `TestSIMDMatchesScalar` and the kernel unit tests, and
+  across architectures by whole-map hashes. The NEON bodies live in
+  `internal/simd/_gen/kernels.S` (annotated ARM64 assembly) and are
+  spliced into `simd_arm64.s` as WORD streams by `_gen/gen.py` (Go's
+  assembler has no un-fused vector FP arithmetic); CI regenerates and
+  diffs the stream to keep them in lockstep.
 - `cvmatch.go` — public API and zero-copy image conversion.
 - `scenes/` — deterministic benchmark/parity scenes shared by the main
   module's benchmarks and the native comparison in `bench/`.
@@ -754,9 +760,10 @@ None beyond Go. With cgo enabled (default) any C99 compiler gives the C
 core — Linux, macOS, Windows (mingw); AVX2 multi-versioning engages
 automatically on x86-64 glibc and falls back to portable code elsewhere.
 With `CGO_ENABLED=0` (or no C toolchain at all, e.g. cross-compiling) the
-pure-Go core is selected automatically — same results, zero setup, and on
-amd64 its assembly kernels make it the faster of the two cores (see the
-matrix).
+pure-Go core is selected automatically — same results, zero setup, SIMD
+kernels on both amd64 (AVX2) and arm64 (NEON), and on amd64 it is the
+faster of the two cores (see the matrix). CI runs the full suite on both
+architectures.
 
 Versions are tagged from `main` via the *Tag release* workflow
 (`.github/workflows/tag.yml`); CI runs the full test + parity + benchmark
