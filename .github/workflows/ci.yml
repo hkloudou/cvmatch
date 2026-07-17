@@ -56,7 +56,7 @@ jobs:
             echo '```'
             CGO_ENABLED=0 go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m
             echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: cvmatch matrix — arm64 cgo core, 1 and 4 threads
         run: |
           {
@@ -64,7 +64,7 @@ jobs:
             echo '```'
             go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m
             echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
   benchmark:
     runs-on: ubuntu-latest
