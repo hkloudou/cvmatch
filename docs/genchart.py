@@ -43,6 +43,13 @@ LAYOUT = [
 
 SERIES = ["OpenCV C++ (native, 1 thread)", "cvmatch pure-Go (CGO_ENABLED=0)",
           "cvmatch.Match (cgo)", "cvmatch.MatchGray (cgo)"]
+# amd64 chart: every Go bar is annotated with its speedup vs native (bar 0)
+REFS = [None, 0, 0, 0]
+
+# arm64 chart: no native baseline — pure-Go bars annotate vs their cgo twin
+ARM_SERIES = ["cvmatch.Match (cgo)", "cvmatch.Match pure-Go (NEON)",
+              "cvmatch.MatchGray (cgo)", "cvmatch.MatchGray pure-Go (NEON)"]
+ARM_REFS = [None, 0, None, 2]
 
 THEMES = {
     "light": dict(series=["#008300", "#2a78d6", "#1baf7a", "#eda100"], ink="#24292f",
@@ -58,16 +65,16 @@ BAR, PITCH, GROUP_GAP = 14, 16, 18
 NSER = len(SERIES)
 
 
-def rows_for(panel_key):
-    """(label, native, go4, cgo4, gray4) rows for one chart panel."""
+def rows_for(panel_key, keys=("native", "go4", "cgo4", "gray4")):
+    """(label, *values) rows for one chart panel, in `keys` order."""
     rows = []
     for key, label, panel in LAYOUT:
         if panel != panel_key or key not in SC:
             continue
         s = SC[key]
-        if not all(k in s for k in ("native", "go4", "cgo4", "gray4")):
+        if not all(k in s for k in keys):
             continue
-        rows.append((label, s["native"], s["go4"], s["cgo4"], s["gray4"]))
+        rows.append((label, *(s[k] for k in keys)))
     return rows
 
 
@@ -88,11 +95,12 @@ def bar_path(x, y, w, h, r=4):
             f'a{r},{r} 0 0 1 -{r},{r} h-{w - r:.1f} z')
 
 
-def panel(out, t, rows, y, vmax, ticks, title):
+def panel(out, t, rows, y, vmax, ticks, title, refs=REFS, note=None):
     out.append(f'<text x="{LEFT}" y="{y}" font-size="12" font-weight="600" '
                f'fill="{t["sec"]}" {FONT}>{title}</text>')
+    note = note or 'ms — lower is better · ×  = speedup vs native C++ (&lt;1 = slower)'
     out.append(f'<text x="{W - 4}" y="{y}" font-size="11" text-anchor="end" '
-               f'fill="{t["muted"]}" {FONT}>ms — lower is better · ×  = speedup vs native C++ (&lt;1 = slower)</text>')
+               f'fill="{t["muted"]}" {FONT}>{note}</text>')
     y += 10
     h = len(rows) * (NSER * PITCH + GROUP_GAP) - GROUP_GAP + 8
     for tick in ticks:
@@ -109,9 +117,9 @@ def panel(out, t, rows, y, vmax, ticks, title):
         for i, v in enumerate(vals):
             wpx = PLOT_W * min(v, vmax) / vmax
             out.append(f'<path d="{bar_path(LEFT + 0.5, yy, wpx, BAR)}" fill="{t["series"][i]}"/>')
-            lab = f'{v:,.0f} ms'
-            if i >= 1:
-                lab += f' · {vals[0] / v:.1f}×'
+            lab = f'{v:,.0f} ms' if v >= 100 else f'{v:,.1f} ms'
+            if refs[i] is not None:
+                lab += f' · {vals[refs[i]] / v:.2f}×'
             out.append(f'<text x="{LEFT + wpx + 7:.1f}" y="{yy + BAR - 3}" font-size="11" '
                        f'fill="{t["sec"]}" {FONT} style="font-variant-numeric:tabular-nums">{lab}</text>')
             yy += PITCH
@@ -119,9 +127,9 @@ def panel(out, t, rows, y, vmax, ticks, title):
     return y + h + 34
 
 
-def legend(out, t, y):
+def legend(out, t, y, series=SERIES):
     x = 20
-    for i, name in enumerate(SERIES):
+    for i, name in enumerate(series):
         out.append(f'<rect x="{x}" y="{y - 9}" width="10" height="10" rx="2" fill="{t["series"][i]}"/>')
         out.append(f'<text x="{x + 15}" y="{y}" font-size="12" fill="{t["ink"]}" {FONT}>{name}</text>')
         x += 15 + 7 * len(name) + 26
@@ -144,6 +152,31 @@ def speed_chart(mode):
             continue
         vmax, ticks = axis_scale(rows)
         y = panel(out, t, rows, y + 8, vmax, ticks, title)
+    return svg(out, y)
+
+
+ARM_KEYS = ("cgoA4", "goA4", "grayA4", "pgrayA4")
+
+
+def arm_speed_chart(mode):
+    """arm64 twin of the speed chart: the two cvmatch cores head to head
+    (no native OpenCV baseline is built on the arm runner)."""
+    t = THEMES[mode]
+    out = []
+    out.append(f'<text x="20" y="20" font-size="15" font-weight="600" fill="{t["ink"]}" {FONT}>'
+               'arm64 — cgo core vs pure-Go NEON core, identical output</text>')
+    out.append(f'<text x="20" y="38" font-size="12" fill="{t["muted"]}" {FONT}>'
+               f'{DATA.get("hostArm64", "arm64 CI runner")}, one session · '
+               'default internal threading (4 workers)</text>')
+    y = legend(out, t, 60, ARM_SERIES)
+    note = 'ms — lower is better · ×  = pure-Go speedup vs the cgo core (&lt;1 = slower)'
+    for panel_key, title in (("hd", "HD desktop + noise scenes"), ("4k", "4K scenes"),
+                             ("photo", "Real photographs (OpenCV samples/data)")):
+        rows = rows_for(panel_key, ARM_KEYS)
+        if not rows:
+            continue
+        vmax, ticks = axis_scale(rows)
+        y = panel(out, t, rows, y + 8, vmax, ticks, title, ARM_REFS, note)
     return svg(out, y)
 
 
@@ -264,8 +297,11 @@ def rewrite_readme():
     return False
 
 
+HAVE_ARM = any(all(k in s for k in ARM_KEYS) for s in SC.values())
 for mode in ("light", "dark"):
     open(os.path.join(HERE, f"bench-{mode}.svg"), "w").write(speed_chart(mode))
     open(os.path.join(HERE, f"mem-{mode}.svg"), "w").write(mem_chart(mode))
+    if HAVE_ARM:
+        open(os.path.join(HERE, f"bench-arm64-{mode}.svg"), "w").write(arm_speed_chart(mode))
 changed = rewrite_readme()
 print("charts written; README table " + ("updated" if changed else "unchanged"))
