@@ -831,27 +831,35 @@ func colSlideGo(colSum []int32, colSum2 []int64, rsub, radd []uint8, iw, cn, cs,
 // are spilled per chunk so the buffer stays L1-resident.
 const normChunkGo = 256
 
-// normOne evaluates the TM_CCOEFF_NORMED tail for one element. The float64
-// conversions around products pin each op to one rounding (Go may
-// otherwise fuse mul-adds on some architectures).
-func normOne(num, wndMean2, s2d, invArea, eps, templNorm float64) float32 {
-	wndMean2 = float64(wndMean2 * invArea)
-	diff2 := s2d - wndMean2
-	if diff2 < 0 {
-		diff2 = 0
-	}
-	lim := eps * s2d
+// abs32 clears the sign bit — exact, and cheaper than a float64 round trip.
+func abs32(x float32) float32 {
+	return math.Float32frombits(math.Float32bits(x) &^ (1 << 31))
+}
+
+// normOne evaluates the TM_CCOEFF_NORMED tail for one element from the
+// three spilled lanes. cross and idiff are exact integers converted once
+// to float32 (correctly rounded), so the variance term diff2 =
+// idiff·invArea carries no cancellation at all — the exact-integer feed
+// is what makes the float32 tail safe (and better conditioned than the
+// former float64 replay of OpenCV's sequence). Every op is one correctly
+// rounded float32 instruction on both ISAs; the float32 conversions pin
+// the sequence (no contraction), and sqrt via float64 math.Sqrt rounds
+// identically to the hardware float32 sqrt for float32 inputs.
+func normOne(num, lane0, idiff, s2, numScale, varScale, eps, templNorm float32) float32 {
+	num = float32(num - float32(lane0*numScale))
+	diff2 := float32(idiff * varScale)
+	lim := float32(eps * s2)
 	if lim > 0.5 {
 		lim = 0.5
 	}
-	den := 0.0
+	var den float32
 	if diff2 > lim {
-		den = math.Sqrt(diff2) * templNorm
+		den = float32(float32(math.Sqrt(float64(diff2))) * templNorm)
 	}
 	switch {
-	case math.Abs(num) < den:
+	case abs32(num) < den:
 		num /= den
-	case math.Abs(num) < den*1.125:
+	case abs32(num) < float32(den*1.125):
 		if num > 0 {
 			num = 1
 		} else {
@@ -860,14 +868,29 @@ func normOne(num, wndMean2, s2d, invArea, eps, templNorm float64) float32 {
 	default:
 		num = 0
 	}
-	return float32(num)
+	return num
 }
 
 // normalizeBandGo processes result rows [y0, y1). Band-local column-sum
-// rebuilds are bit-exact because all window statistics are exact integers.
+// rebuilds are bit-exact because all window statistics are exact
+// integers; the spill folds the channels into three exact integer values
+// per element — cross = Σ_k wndSum_k·tsum_k, idiff = area·wndSum2 −
+// Σ_k wndSum_k² (the variance numerator, ≥ 0 per channel by
+// Cauchy-Schwarz) and the raw wndSum2 — each converted once to float32
+// (correctly rounded on every target), so chunking, banding and channel
+// count never change a bit and the float32 tail sees no cancellation.
 func normalizeBandGo(img []uint8, istride, iw int, cn, step, tw, th, rw, y0, y1 int,
-	mean *[4]float64, templNorm float64, corr []float32, result []float32) goExtrema {
-	invArea := 1 / (float64(tw) * float64(th))
+	tsum *[4]int64, templNorm float32, corr []float32, result []float32) goExtrema {
+	area := int64(tw) * int64(th)
+	varScale := float32(1 / (float64(tw) * float64(th)))
+	// cn=1 spills the raw window sum as lane0 (single exact conversion —
+	// it stays below 2^52) and folds the template mean into the tail's
+	// num-scale constant; cn>=3 spills the exact integer cross and scales
+	// by 1/area. Either way lane0*numScale reproduces cross*invArea.
+	numScale := varScale
+	if cn == 1 {
+		numScale = float32(float64(tsum[0]) / (float64(tw) * float64(th)))
+	}
 	cs := cn
 	if step == 4 && (cn == 3 || cn == 4) {
 		cs = 4
@@ -878,13 +901,11 @@ func normalizeBandGo(img []uint8, istride, iw int, cn, step, tw, th, rw, y0, y1 
 	defer i64Pool.put(colSum2)
 	colBuildGo(colSum, colSum2, img, istride, iw, cn, cs, step, y0, th)
 
-	wt := f64Pool.get((cn + 1) * normChunkGo)
-	defer f64Pool.put(wt)
-	q2 := wt[cn*normChunkGo:]
-	useKernel := simd.Enabled && cn != 2
+	wt := f32Pool.get(3 * normChunkGo)
+	defer f32Pool.put(wt)
 
 	ext := goExtrema{minV: math.MaxFloat32, maxV: -math.MaxFloat32, minY: y0, maxY: y0}
-	const eps = 10.0 * 0x1p-23 // 10*FLT_EPSILON, exactly as OpenCV
+	const eps = float32(10.0 * 0x1p-23) // 10*FLT_EPSILON, exactly as OpenCV
 
 	for y := y0; ; y++ {
 		var s [4]int64
@@ -898,10 +919,9 @@ func normalizeBandGo(img []uint8, istride, iw int, cn, step, tw, th, rw, y0, y1 
 		rrow := result[y*rw : y*rw+rw]
 		crow := corr[y*rw : y*rw+rw]
 
-		// The row runs in chunks: the (exact integer) window sums are spilled
-		// as float64 lanes — a lossless conversion, so chunking never changes
-		// a value — and each chunk's tail math is evaluated from the lanes,
-		// vectorized when the kernel covers this channel count.
+		// The row runs in chunks: each element spills its three exact
+		// integer statistics as float32 lanes, and the chunk's tail math is
+		// evaluated from the lanes, vectorized when the kernel is on.
 		for x0 := 0; x0 < rw; x0 += normChunkGo {
 			clen := min(normChunkGo, rw-x0)
 			// Elements slide the window while x+1 < rw; only the row's very
@@ -912,58 +932,69 @@ func normalizeBandGo(img []uint8, istride, iw int, cn, step, tw, th, rw, y0, y1 
 			case 1:
 				lo, hi := colSum[x0:], colSum[x0+tw:]
 				lo2, hi2 := colSum2[x0:], colSum2[x0+tw:]
-				if useKernel && ns > 0 {
-					s[0], s2 = simd.SlideSpill1(wt[:ns], q2[:ns], lo, hi, lo2, hi2, s[0], s2)
-				} else {
-					s0, t2 := s[0], s2
-					for i := 0; i < ns; i++ {
-						wt[i] = float64(s0)
-						q2[i] = float64(t2)
-						s0 += int64(hi[i] - lo[i])
-						t2 += hi2[i] - lo2[i]
-					}
-					s[0], s2 = s0, t2
+				i := 0
+				// The kernel's 32-bit product decomposition needs the
+				// row-delta bound |hi2-lo2| < 2^31 (th ≤ 32767) AND window
+				// sums below 2^31 (255·area < 2^31, i.e. area ≤ 8421504 —
+				// the cn=1 stats cap is looser at 11.9M). Shapes beyond
+				// either bound spill scalar, exactly.
+				if vns := ns &^ 3; simd.Enabled && th <= 32767 && area <= 8_421_504 && vns > 0 {
+					s[0], s2 = simd.SpillStats1(wt[:vns], normChunkGo,
+						lo, hi, lo2, hi2, s[0], s2, area)
+					i = vns
 				}
+				s0, t2 := s[0], s2
+				for ; i < ns; i++ {
+					wt[i] = float32(float64(s0))
+					wt[normChunkGo+i] = float32(float64(area*t2 - s0*s0))
+					wt[2*normChunkGo+i] = float32(float64(t2))
+					s0 += int64(hi[i] - lo[i])
+					t2 += hi2[i] - lo2[i]
+				}
+				s[0], s2 = s0, t2
 			case 3:
 				lo, hi := colSum[x0*cs:], colSum[(x0+tw)*cs:]
 				lo2, hi2 := colSum2[x0:], colSum2[x0+tw:]
-				s0, s1, sq, t2 := s[0], s[1], s[2], s2
+				s0, s1, c2, t2 := s[0], s[1], s[2], s2
+				t0, t1, tq := tsum[0], tsum[1], tsum[2]
 				for i := 0; i < ns; i++ {
-					wt[i] = float64(s0)
-					wt[normChunkGo+i] = float64(s1)
-					wt[2*normChunkGo+i] = float64(sq)
-					q2[i] = float64(t2)
+					wt[i] = float32(float64(s0*t0 + s1*t1 + c2*tq))
+					wt[normChunkGo+i] = float32(float64(area*t2 - s0*s0 - s1*s1 - c2*c2))
+					wt[2*normChunkGo+i] = float32(float64(t2))
 					j := i * cs
 					s0 += int64(hi[j] - lo[j])
 					s1 += int64(hi[j+1] - lo[j+1])
-					sq += int64(hi[j+2] - lo[j+2])
+					c2 += int64(hi[j+2] - lo[j+2])
 					t2 += hi2[i] - lo2[i]
 				}
-				s[0], s[1], s[2], s2 = s0, s1, sq, t2
+				s[0], s[1], s[2], s2 = s0, s1, c2, t2
 			case 4:
 				lo, hi := colSum[x0*cs:], colSum[(x0+tw)*cs:]
 				lo2, hi2 := colSum2[x0:], colSum2[x0+tw:]
-				s0, s1, sq, s3, t2 := s[0], s[1], s[2], s[3], s2
+				s0, s1, c2, s3, t2 := s[0], s[1], s[2], s[3], s2
+				t0, t1, tq, t3 := tsum[0], tsum[1], tsum[2], tsum[3]
 				for i := 0; i < ns; i++ {
-					wt[i] = float64(s0)
-					wt[normChunkGo+i] = float64(s1)
-					wt[2*normChunkGo+i] = float64(sq)
-					wt[3*normChunkGo+i] = float64(s3)
-					q2[i] = float64(t2)
+					wt[i] = float32(float64(s0*t0 + s1*t1 + c2*tq + s3*t3))
+					wt[normChunkGo+i] = float32(float64(area*t2 - s0*s0 - s1*s1 - c2*c2 - s3*s3))
+					wt[2*normChunkGo+i] = float32(float64(t2))
 					j := i * 4
 					s0 += int64(hi[j] - lo[j])
 					s1 += int64(hi[j+1] - lo[j+1])
-					sq += int64(hi[j+2] - lo[j+2])
+					c2 += int64(hi[j+2] - lo[j+2])
 					s3 += int64(hi[j+3] - lo[j+3])
 					t2 += hi2[i] - lo2[i]
 				}
-				s[0], s[1], s[2], s[3], s2 = s0, s1, sq, s3, t2
+				s[0], s[1], s[2], s[3], s2 = s0, s1, c2, s3, t2
 			default:
 				for i := 0; i < ns; i++ {
+					var cross, sq int64
 					for k := 0; k < cn; k++ {
-						wt[k*normChunkGo+i] = float64(s[k])
+						cross += s[k] * tsum[k]
+						sq += s[k] * s[k]
 					}
-					q2[i] = float64(s2)
+					wt[i] = float32(float64(cross))
+					wt[normChunkGo+i] = float32(float64(area*s2 - sq))
+					wt[2*normChunkGo+i] = float32(float64(s2))
 					x := x0 + i
 					for k := 0; k < cn; k++ {
 						s[k] += int64(colSum[(x+tw)*cs+k] - colSum[x*cs+k])
@@ -972,28 +1003,29 @@ func normalizeBandGo(img []uint8, istride, iw int, cn, step, tw, th, rw, y0, y1 
 				}
 			}
 			for i := ns; i < clen; i++ { // final result column: no slide
+				var lane0, sq int64
 				for k := 0; k < cn; k++ {
-					wt[k*normChunkGo+i] = float64(s[k])
+					lane0 += s[k] * tsum[k]
+					sq += s[k] * s[k]
 				}
-				q2[i] = float64(s2)
+				if cn == 1 {
+					lane0 = s[0] // lane0 convention: raw window sum
+				}
+				wt[i] = float32(float64(lane0))
+				wt[normChunkGo+i] = float32(float64(area*s2 - sq))
+				wt[2*normChunkGo+i] = float32(float64(s2))
 			}
 			vlen := 0
-			if useKernel {
-				vlen = clen &^ 3
+			if simd.Enabled {
+				vlen = clen &^ 7
 				if vlen > 0 {
 					simd.NormRow(rrow[x0:x0+vlen], crow[x0:x0+vlen], &wt[0],
-						normChunkGo, vlen, cn, mean, invArea, eps, templNorm)
+						normChunkGo, vlen, numScale, varScale, eps, templNorm)
 				}
 			}
 			for i := vlen; i < clen; i++ {
-				num := float64(crow[x0+i])
-				wndMean2 := 0.0
-				for k := 0; k < cn; k++ {
-					t := wt[k*normChunkGo+i]
-					wndMean2 += float64(t * t)
-					num -= float64(t * mean[k])
-				}
-				rrow[x0+i] = normOne(num, wndMean2, q2[i], invArea, eps, templNorm)
+				rrow[x0+i] = normOne(crow[x0+i], wt[i], wt[normChunkGo+i],
+					wt[2*normChunkGo+i], numScale, varScale, eps, templNorm)
 			}
 		}
 		// Row min/max scan of the stored float32 values: ascending x with
@@ -1029,12 +1061,15 @@ func normalizeBandGo(img []uint8, istride, iw int, cn, step, tw, th, rw, y0, y1 
 	return ext
 }
 
-// templStats computes the per-channel template means and the raw (pre-sqrt)
-// variance sum. Integer accumulation is exact; the float sequence is the
-// pinned normalization order. It reads only the template, so matchU8 runs it
-// before the correlation to short-circuit flat templates.
-func templStats(tpl []uint8, tstride, tw, th, cn, step int) (mean [4]float64, templNorm float64) {
-	invArea := 1 / (float64(tw) * float64(th))
+// templStats computes the per-channel template sums and the variance
+// numerator varSum = Σ_k (area·Σt² − (Σt)²) — all exact integers (the
+// matchU8 area bound keeps every product below 2^63), so the flat test is
+// an exact ==0 and no float rounding enters until the single
+// sqrt(varSum/area) that produces templNorm. It reads only the template,
+// so matchU8 runs it before the correlation to short-circuit flat
+// templates.
+func templStats(tpl []uint8, tstride, tw, th, cn, step int) (tsum [4]int64, varSum int64) {
+	area := int64(tw) * int64(th)
 	for k := 0; k < cn; k++ {
 		var s, s2 int64 // template statistics are exact integers
 		for y := 0; y < th; y++ {
@@ -1045,16 +1080,19 @@ func templStats(tpl []uint8, tstride, tw, th, cn, step int) (mean [4]float64, te
 				s2 += v * v
 			}
 		}
-		mean[k] = float64(s) * invArea
-		templNorm += float64(float64(s2)*invArea) - float64(mean[k]*mean[k])
+		tsum[k] = s
+		varSum += area*s2 - s*s
 	}
-	return mean, templNorm
+	return tsum, varSum
 }
 
 func normalizeParallelGo(img []uint8, istride, iw, tw, th, cn, step, rw, rh, threads int,
-	mean *[4]float64, templNorm float64,
+	tsum *[4]int64, varSum int64,
 	corr []float32, result []float32) (float32, int, int, float32, int, int) {
-	templNorm = math.Sqrt(templNorm * (float64(tw) * float64(th)))
+	// templNorm = sqrt(Σ_k templVar_k · area) = sqrt(varSum/area): one f64
+	// sqrt of an exact integer ratio, converted once — a fixed sequence on
+	// every target.
+	templNorm := float32(math.Sqrt(float64(varSum) / (float64(tw) * float64(th))))
 
 	nb := threads
 	if maxb := rh / max(th, 32); maxb >= 1 && nb > maxb {
@@ -1069,7 +1107,7 @@ func normalizeParallelGo(img []uint8, istride, iw, tw, th, cn, step, rw, rh, thr
 	ext := make([]goExtrema, nb)
 	runParallel(nb, func(w int) {
 		ext[w] = normalizeBandGo(img, istride, iw, cn, step, tw, th, rw,
-			bandY[w], bandY[w+1], mean, templNorm, corr, result)
+			bandY[w], bandY[w+1], tsum, templNorm, corr, result)
 	})
 	r := ext[0]
 	for b := 1; b < nb; b++ { // strict compares keep first occurrence
@@ -1085,15 +1123,26 @@ func normalizeParallelGo(img []uint8, istride, iw, tw, th, cn, step, rw, rh, thr
 
 // ----------------------------------------------------------- entrypoint --
 
+// statsCap returns the largest template area whose exact-integer window
+// statistics fit int64: cn·65025·area² < 2^63, i.e. ⌊√(2^63/65025/cn)⌋ —
+// 11.9M pixels single-channel down to 5.95M at cn=4 (a ~2400x2400 RGBA
+// template). Far beyond any real workload, but asserted, not assumed.
+func statsCap(cn int) int64 {
+	return [5]int64{0, 11_909_805, 8_421_504, 6_876_129, 5_954_902}[cn]
+}
+
 func matchU8(img []uint8, istride, iw, ih int, tpl []uint8, tstride, tw, th, cn, step, threads int, result []float32) (float32, int, int, float32, int, int) {
 	if cn < 1 || cn > 4 || step < cn || tw < 1 || th < 1 || tw > iw || th > ih ||
 		istride < iw*step || tstride < tw*step {
 		panic(fmt.Sprintf("cvmatch: bad match arguments (%dx%d in %dx%d, cn=%d step=%d)", tw, th, iw, ih, cn, step))
 	}
+	if int64(tw)*int64(th) > statsCap(cn) {
+		panic(fmt.Sprintf("cvmatch: template area %dx%d exceeds the exact-statistics bound for cn=%d", tw, th, cn))
+	}
 	threads = clampThreads(threads)
 	rw, rh := iw-tw+1, ih-th+1
-	mean, templNorm := templStats(tpl, tstride, tw, th, cn, step)
-	if templNorm < 0x1p-52 { // DBL_EPSILON: flat template scores 1 everywhere
+	tsum, varSum := templStats(tpl, tstride, tw, th, cn, step)
+	if varSum == 0 { // exactly flat template: scores 1 everywhere
 		if result != nil {
 			for i := range result[:rw*rh] {
 				result[i] = 1
@@ -1108,5 +1157,5 @@ func matchU8(img []uint8, istride, iw, ih int, tpl []uint8, tstride, tw, th, cn,
 	}
 	p := newGoPlan(tw, th, rw, rh)
 	crossCorrGo(img, istride, tpl, tstride, step, cn, tw, th, rw, rh, threads, p, res)
-	return normalizeParallelGo(img, istride, iw, tw, th, cn, step, rw, rh, threads, &mean, templNorm, res, res)
+	return normalizeParallelGo(img, istride, iw, tw, th, cn, step, rw, rh, threads, &tsum, varSum, res, res)
 }
