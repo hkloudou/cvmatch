@@ -40,8 +40,9 @@ Any transformation is legal only if it provably preserves every output bit:
 - The kernels are **opt-in**: they compile only under `-tags cvmatch_asm`
   (on amd64/arm64 + gc). The default build is 100% high-level Go — the
   safe mode — with `simd.Enabled` a constant false so every kernel call
-  site dead-code-eliminates. The SIMD build is worth ~3-4x end to end;
-  both modes must stay bit-identical and both run in CI on both arches.
+  site dead-code-eliminates. The SIMD build measures ~4-5x end to end on
+  amd64 and ~2.5x on arm64; both modes must stay bit-identical and both
+  run in CI on both arches.
 - Shared, arch-independent contracts live in `simd_kernels.go`; every
   kernel's doc comment states its exactness argument and bounds contract.
 - **amd64**: hand-written AVX2 in `simd_amd64.s` (runtime-detected;

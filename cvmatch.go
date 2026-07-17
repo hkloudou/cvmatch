@@ -3,8 +3,8 @@
 //
 // The default build is 100% high-level Go on every platform. Building
 // with -tags cvmatch_asm swaps the hot loops for hand-written SIMD
-// kernels (AVX2 on amd64, NEON on arm64) worth roughly 3-4x end to end;
-// on other architectures the tag is a no-op.
+// kernels (AVX2 on amd64, NEON on arm64), measured ~4-5x end to end on
+// amd64 and ~2.5x on arm64; on other architectures the tag is a no-op.
 //
 // Match is numerically aligned with OpenCV's matchTemplate + minMaxLoc on
 // CV_8UC4 input (the classic ImageToMatRGBA-style pipeline), while

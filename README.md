@@ -10,10 +10,10 @@ modes, selected by one global tag:
   choice (nothing hand-written to audit, memory safety is the
   compiler's), and plain cross-compilation just works.
 - **`-tags cvmatch_asm`**: swaps the hot loops for hand-written SIMD
-  kernels — AVX2 on amd64 (runtime-detected), NEON on arm64 — worth
-  roughly **3–4x end to end**. For when performance is the point; output
-  is bit-identical to the default build, asserted by the test suite in
-  both modes.
+  kernels — AVX2 on amd64 (runtime-detected), NEON on arm64 — measured
+  **~4–5x end to end on amd64 and ~2.5x on arm64**. For when performance
+  is the point; output is bit-identical to the default build, asserted
+  by the test suite in both modes.
 
 Output is pinned two ways. Element-wise against **native OpenCV C++** on
 every CI run — see [Accuracy](#accuracy-cvmatch-vs-native-c) for the
@@ -345,12 +345,12 @@ amd64 rows above:
   to ~8x on the smallest photo. Internal threading adds another 2–3.5x on
   multi-tile scenes (the big windows/noise scenes land at ~7–12x total on
   4 cores).
-- The **default build** pays roughly 3–4x versus the SIMD build (scalar
-  complex arithmetic with pinned roundings resists compiler
-  vectorization), so against native OpenCV it wins on some scenes and
-  loses on others single-threaded — read its own columns in the matrix
-  rather than the headline. Internal threading pulls it back ahead of
-  native on the big multi-tile scenes.
+- The **default build** pays ~4–5x on amd64 and ~2.5x on arm64 versus
+  the SIMD build (scalar complex arithmetic with pinned roundings
+  resists compiler vectorization), so against native OpenCV it wins on
+  some scenes (most photos) and loses on others single-threaded — read
+  its own columns in the matrix rather than the headline. Internal
+  threading pulls it back ahead of native on the big multi-tile scenes.
 - Threading helps least on **single-tile scenes** (panel, the photos):
   only the normalization pass parallelizes there, because re-tiling the
   FFT would change the rounding path. Since the normalize scan got its
@@ -374,7 +374,7 @@ amd64 rows above:
 | artifact | size |
 |---|---|
 | static OpenCV archives the C++ baseline links (`libopencv_core.a` + `libopencv_imgproc.a` + zlib) | 16.1 MB |
-| minimal `Match` binary, `-ldflags "-s -w"`, pure Go | **1.53 MB** (a comparable OpenCV-linked Go binary measured 5.82 MB before that comparison was retired) |
+| minimal `Match` binary, `-ldflags "-s -w"` | **1.51 MB** default build, 1.53 MB with `-tags cvmatch_asm` (a comparable OpenCV-linked Go binary measured 5.82 MB before that comparison was retired) |
 
 Peak whole-process memory for one 1920×1080 / 128×128 match (VmHWM, fresh
 process per run, values from `docs/benchdata.json`; the native probe is
@@ -705,7 +705,8 @@ Same math, different engineering:
   a strided walk), the conjugate multiply, the normalize sqrt/divide
   tail, the sliding column sums, the min/max scan and RGBA→gray run
   hand-written `internal/simd` assembly — AVX2 behind a runtime CPU check
-  on amd64, NEON on arm64; worth ~3–4x end to end. Every vector lane
+  on amd64, NEON on arm64; measured ~4–5x end to end on amd64 and ~2.5x
+  on arm64. Every vector lane
   performs exactly the scalar op sequence (individually rounded
   multiplies and adds, never FMA), so the kernels change nothing but
   time. The default build compiles none of it — `simd.Enabled` is a
@@ -782,7 +783,7 @@ The assembly is a global opt-in switch:
 
 ```sh
 go build ./...                    # default: 100% high-level Go, the safe mode
-go build -tags cvmatch_asm ./...  # SIMD kernels (amd64 AVX2 / arm64 NEON), ~3-4x faster
+go build -tags cvmatch_asm ./...  # SIMD kernels: ~4-5x faster on amd64, ~2.5x on arm64
 ```
 
 The default build contains no hand-written assembly at all — memory
