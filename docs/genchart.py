@@ -1,30 +1,38 @@
 #!/usr/bin/env python3
-"""Renders the README benchmark SVGs (light + dark) and rewrites the
-auto-generated README sections from docs/benchdata.json.
+"""Renders the benchmark SVGs (light + dark) and the full measured
+matrix (matrix.md) from benchdata.json.
 
 benchdata.json is produced by docs/collect.py from raw benchmark outputs
-(`go test -bench . -benchtime 5x -cpu 1,4` for both build modes on the
-amd64 and arm64 runners, `bench/cpp/native_bench`, and the memprobe
-peak-RSS runs) — the amd64 numbers are all measured in one session on one
-machine so the comparison against native OpenCV is coherent. The
-bench-charts GitHub workflow re-measures on every push to main and
-commits the refreshed charts, benchdata.json and README table.
+(`go test -bench . -benchtime 5x -cpu 1,4` for both build modes plus
+`bench/cpp/native_bench`, run identically on the amd64 and arm64
+runners, and the memprobe peak-RSS runs) — each architecture's numbers
+come from one session on one machine so its comparison against native
+OpenCV is coherent. The bench-charts workflow re-measures weekly and on
+demand and publishes the rendered outputs to the `assets` branch; the
+README references those stable URLs and is never rewritten.
 
 Series colors are meaning-stable across every chart: green = native
 OpenCV C++, blue family = cvmatch.Match, orange family =
-cvmatch.MatchGray; the solid shade is the SIMD build (-tags cvmatch_asm),
-the light shade is the default pure-Go build.
+cvmatch.MatchGray; the solid shade is the asm build (-tags cvmatch_asm),
+the light shade is the default no-asm build. amd64 and arm64 are peer
+panels of one chart with identical series and annotations.
 
-Manual run: python3 docs/collect.py [flags] && python3 docs/genchart.py
+Manual run:
+  python3 docs/collect.py [flags] -o out/benchdata.json
+  python3 docs/genchart.py --data out/benchdata.json --out out
 """
+import argparse
 import json
 import os
 import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-README = os.path.join(HERE, "..", "README.md")
+ap = argparse.ArgumentParser()
+ap.add_argument("--data", default=os.path.join(HERE, "benchdata.json"))
+ap.add_argument("--out", default=HERE)
+ARGS = ap.parse_args()
 
-DATA = json.load(open(os.path.join(HERE, "benchdata.json")))
+DATA = json.load(open(ARGS.data))
 SC = DATA["scenes"]
 MEM = DATA.get("mem", {})
 HOST = DATA.get("host", "")
@@ -47,20 +55,26 @@ LAYOUT = [
     ("photo_starry_night", "starry_night 752×600 · sub 128×128", "photo"),
 ]
 
-# (legend label, color slot); the row value order everywhere follows these.
+# (legend label, color slot); the row value order everywhere follows
+# these. Both builds are pure Go in the no-cgo sense — the kernels are Go
+# assembly — so the builds are labeled asm / no-asm, not "pure Go".
 SERIES = [("OpenCV C++ (native)", "native"),
           ("Match (asm)", "match"),
-          ("Match (pure Go)", "matchgo"),
+          ("Match (no asm, default)", "matchgo"),
           ("MatchGray (asm)", "gray"),
-          ("MatchGray (pure Go)", "graygo")]
-KEYS = ("native", "asm4", "go4", "agray4", "gray4")
-REFS = [None, 0, 0, 0, 0]  # annotate cvmatch bars with speedup vs native
+          ("MatchGray (no asm, default)", "graygo")]
+# Identical comparison dimensions on both architectures: native OpenCV +
+# the four cvmatch series, every cvmatch bar annotated vs its own
+# architecture's native baseline.
+KEYS_AMD = ("native", "asm4", "go4", "agray4", "gray4")
+KEYS_ARM = ("nativeA", "asmA4", "goA4", "agrayA4", "grayA4")
+REFS = [None, 0, 0, 0, 0]
 
-ARM_SERIES = SERIES[1:]
-ARM_KEYS = ("asmA4", "goA4", "agrayA4", "grayA4")
-# no native baseline on the arm runner: annotate each asm bar with its
-# speedup over the matching default-build bar instead
-ARM_REFS = [1, None, 3, None]
+# The chart shows one representative scene per class (full 14-scene
+# detail lives in the README tables) so both architectures fit one
+# readable page.
+CHART_SCENES = ["window1600_button96x32", "noise1080p_sub128",
+                "noise640_alpha", "photo_building"]
 
 THEMES = {
     "light": dict(series=dict(native="#008300",
@@ -83,11 +97,11 @@ PLOT_W = W - LEFT - RIGHT
 BAR, PITCH, GROUP_GAP = 14, 16, 18
 
 
-def rows_for(panel_key, keys):
-    """(label, *values) rows for one chart panel, in `keys` order."""
+def rows_for(scene_keys, keys):
+    """(label, *values) rows for the named scenes, in `keys` order."""
     rows = []
-    for key, label, panel in LAYOUT:
-        if panel != panel_key or key not in SC:
+    for key, label, _ in LAYOUT:
+        if key not in scene_keys or key not in SC:
             continue
         s = SC[key]
         if not all(k in s for k in keys):
@@ -155,48 +169,34 @@ def legend(out, t, y, series):
     return y + 20
 
 
-PANELS = (("hd", "HD desktop + noise scenes"), ("4k", "4K scenes"),
-          ("photo", "Real photographs (OpenCV samples/data)"))
-
-
 def speed_chart(mode):
+    """One chart, one panel per architecture, identical series and
+    annotations in both — amd64 and arm64 are peer configurations."""
     t = THEMES[mode]
     out = []
     out.append(f'<text x="20" y="20" font-size="15" font-weight="600" fill="{t["ink"]}" {FONT}>'
                'Template matching speed — TM_CCOEFF_NORMED, end-to-end call, identical output</text>')
     out.append(f'<text x="20" y="38" font-size="12" fill="{t["muted"]}" {FONT}>'
-               f'{HOST}, one session · asm = -tags cvmatch_asm build, pure Go = default build '
-               '· OpenCV matchTemplate is single-threaded by design</text>')
+               'asm = -tags cvmatch_asm build, no asm = default build · '
+               'OpenCV matchTemplate is single-threaded by design · full 14-scene tables below</text>')
     y = legend(out, t, 60, SERIES)
     note = 'ms — lower is better · ×  = speedup vs native C++ (&lt;1 = slower)'
-    for panel_key, title in PANELS:
-        rows = rows_for(panel_key, KEYS)
+    for arch, keys, host in (("amd64", KEYS_AMD, HOST),
+                             ("arm64", KEYS_ARM, DATA.get("hostArm64", ""))):
+        rows = rows_for(CHART_SCENES, keys)
         if not rows:
             continue
         vmax, ticks = axis_scale(rows)
-        y = panel(out, t, rows, y + 8, vmax, ticks, title, SERIES, REFS, note)
+        cpu = cpu_of(host)
+        y = panel(out, t, rows, y + 8, vmax, ticks,
+                  f'{arch} — {cpu}' if cpu else arch, SERIES, REFS, note)
     return svg(out, y)
 
 
-def arm_speed_chart(mode):
-    """arm64 twin of the speed chart (no native OpenCV baseline is built on
-    the arm runner, so the asm bars annotate vs the default build)."""
-    t = THEMES[mode]
-    out = []
-    out.append(f'<text x="20" y="20" font-size="15" font-weight="600" fill="{t["ink"]}" {FONT}>'
-               'arm64 — the same pipeline, NEON kernels vs default build, identical output bits</text>')
-    out.append(f'<text x="20" y="38" font-size="12" fill="{t["muted"]}" {FONT}>'
-               f'{DATA.get("hostArm64", "arm64 CI runner")}, one session · '
-               'asm = -tags cvmatch_asm build, pure Go = default build</text>')
-    y = legend(out, t, 60, ARM_SERIES)
-    note = 'ms — lower is better · ×  = asm speedup vs the default build'
-    for panel_key, title in PANELS:
-        rows = rows_for(panel_key, ARM_KEYS)
-        if not rows:
-            continue
-        vmax, ticks = axis_scale(rows)
-        y = panel(out, t, rows, y + 8, vmax, ticks, title, ARM_SERIES, ARM_REFS, note)
-    return svg(out, y)
+def cpu_of(host):
+    """Short CPU tag from a host line, for panel titles."""
+    m = re.search(r"\(([^,]*)", host or "")
+    return (m.group(1) if m else "").replace(" 64-Core Processor", "").strip()
 
 
 def mem_chart(mode):
@@ -259,69 +259,80 @@ def match_table(lines, keys, header):
 
 
 def matrix_markdown():
-    """The README 'full matrix' table between the benchmatrix markers."""
+    """The full measured matrix (matrix.md) — one table per architecture,
+    identical shape."""
     lines = [
-        "`Match`, milliseconds, measured on " + (HOST or "the CI runner") + ".",
-        "Native C++ is the best of 7 end-to-end runs, single-threaded because",
-        "that is how OpenCV's `matchTemplate` runs; the cvmatch columns are",
-        "`go test -benchtime 5x` averages from `-cpu 1,4` — the asm columns",
-        "are the `-tags cvmatch_asm` build, the pure-Go columns the default",
-        "build:",
+        "# cvmatch measured benchmark matrix",
+        "",
+        "Auto-generated by the `bench-charts` workflow (weekly + on demand);",
+        "raw data in [`benchdata.json`](benchdata.json), rendering in the",
+        "main branch's `docs/genchart.py`. Do not edit by hand.",
+        "",
+        "`Match`, milliseconds. Native C++ is the best of 7 end-to-end runs,",
+        "single-threaded because that is how OpenCV's `matchTemplate` runs;",
+        "the cvmatch columns are `go test -benchtime 5x` averages from",
+        "`-cpu 1,4` — asm = the `-tags cvmatch_asm` build, no-asm = the",
+        "default build. Both architectures run the identical comparison.",
+        "",
+        "**amd64** — " + (HOST or "the amd64 CI runner") + ":",
         "",
     ]
-    match_table(lines, ("native", "asm1", "asm4", "go1", "go4"),
-                "| scene | native C++ | asm 1T | asm 4T | pure-Go 1T | pure-Go 4T |")
+    header = "| scene | native C++ | asm 1T | asm 4T | no-asm 1T | no-asm 4T |"
+    match_table(lines, ("native", "asm1", "asm4", "go1", "go4"), header)
     g = SC.get("noise1080p_sub128", {})
     if all(k in g for k in ("agray1", "agray4", "gray1", "gray4")):
         lines += [
             "",
             f"`MatchGray` at 1080p/128 for scale: asm {g['agray1']:.1f} / {g['agray4']:.1f} ms,",
-            f"pure Go {g['gray1']:.1f} / {g['gray4']:.1f} ms (1T / 4T). Native C++ has no gray",
+            f"no-asm {g['gray1']:.1f} / {g['gray4']:.1f} ms (1T / 4T). Native C++ has no gray",
             "row in this suite — a fair baseline would need cvtColor + 1-channel",
             "matchTemplate timed end-to-end, which was not measured; treat MatchGray",
             "numbers as cvmatch-internal.",
         ]
-    if any("asmA1" in s for s in SC.values()):
+    if any("nativeA" in s and "asmA1" in s for s in SC.values()):
         lines += [
             "",
-            "**arm64** — the same `Match` matrix from the arm64 CI leg (" +
-            (DATA.get("hostArm64") or "ubuntu-24.04-arm") + "),",
-            "NEON kernels vs the default build, bit-identical output to the",
+            "**arm64** — " + (DATA.get("hostArm64") or "the arm64 CI runner") + ",",
+            "same OpenCV 4.12 static build, bit-identical cvmatch output to the",
             "amd64 rows above:",
             "",
         ]
-        match_table(lines, ("asmA1", "asmA4", "goA1", "goA4"),
-                    "| scene | asm 1T | asm 4T | pure-Go 1T | pure-Go 4T |")
+        match_table(lines, ("nativeA", "asmA1", "asmA4", "goA1", "goA4"), header)
         ga = SC.get("noise1080p_sub128", {})
         if all(k in ga for k in ("agrayA1", "agrayA4", "grayA1", "grayA4")):
             lines += [
                 "",
                 f"`MatchGray` at 1080p/128 on arm64: asm {ga['agrayA1']:.1f} / "
-                f"{ga['agrayA4']:.1f} ms, pure Go {ga['grayA1']:.1f} / "
+                f"{ga['agrayA4']:.1f} ms, no-asm {ga['grayA1']:.1f} / "
                 f"{ga['grayA4']:.1f} ms (1T / 4T).",
             ]
+    # Derived claims, regenerated with the data so prose can reference them
+    # without ever going stale.
+    r_amd = [s["go1"] / s["asm1"] for s in SC.values() if "go1" in s and "asm1" in s]
+    r_arm = [s["goA1"] / s["asmA1"] for s in SC.values() if "goA1" in s and "asmA1" in s]
+    r_nat = [s["native"] / s["asm1"] for s in SC.values() if "native" in s and "asm1" in s]
+    r_natA = [s["nativeA"] / s["asmA1"] for s in SC.values() if "nativeA" in s and "asmA1" in s]
+    if r_amd and r_arm and r_nat:
+        lines += [
+            "",
+            f"**Measured summary (1T):** the asm build runs {min(r_amd):.1f}–{max(r_amd):.1f}x",
+            f"faster than the default no-asm build on amd64 ({min(r_arm):.1f}–{max(r_arm):.1f}x on",
+            f"arm64), and beats native OpenCV C++ by {min(r_nat):.1f}–{max(r_nat):.1f}x on amd64"
+            + (f" and {min(r_natA):.1f}–{max(r_natA):.1f}x on arm64." if r_natA else "."),
+        ]
+    if all(k in MEM for k in ("native", "match", "gray", "baseline")):
+        lines += [
+            "",
+            "Peak process memory for one 1080p/128 match (VmHWM, fresh process,",
+            f"default build): native OpenCV {MEM['native']:.0f} MB, `Match` {MEM['match']:.0f} MB,",
+            f"`MatchGray` {MEM['gray']:.0f} MB, idle Go baseline {MEM['baseline']:.0f} MB.",
+        ]
     return "\n".join(lines)
 
 
-def rewrite_readme():
-    text = open(README).read()
-    block = ("<!-- benchmatrix:begin — auto-generated by docs/genchart.py, do not edit by hand -->\n"
-             + matrix_markdown() + "\n<!-- benchmatrix:end -->")
-    new, n = re.subn(r"<!-- benchmatrix:begin[^>]*-->.*?<!-- benchmatrix:end -->",
-                     block, text, count=1, flags=re.S)
-    if n != 1:
-        raise SystemExit("README benchmatrix markers not found")
-    if new != text:
-        open(README, "w").write(new)
-        return True
-    return False
-
-
-HAVE_ARM = any(all(k in s for k in ARM_KEYS) for s in SC.values())
+os.makedirs(ARGS.out, exist_ok=True)
 for mode in ("light", "dark"):
-    open(os.path.join(HERE, f"bench-{mode}.svg"), "w").write(speed_chart(mode))
-    open(os.path.join(HERE, f"mem-{mode}.svg"), "w").write(mem_chart(mode))
-    if HAVE_ARM:
-        open(os.path.join(HERE, f"bench-arm64-{mode}.svg"), "w").write(arm_speed_chart(mode))
-changed = rewrite_readme()
-print("charts written; README table " + ("updated" if changed else "unchanged"))
+    open(os.path.join(ARGS.out, f"bench-{mode}.svg"), "w").write(speed_chart(mode))
+    open(os.path.join(ARGS.out, f"mem-{mode}.svg"), "w").write(mem_chart(mode))
+open(os.path.join(ARGS.out, "matrix.md"), "w").write(matrix_markdown() + "\n")
+print(f"charts + matrix.md written to {ARGS.out}")

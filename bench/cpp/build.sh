@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds the native OpenCV benchmark against prebuilt static OpenCV 4.12.0
-# archives (linux/amd64, WITH_IPP=OFF Release build fetched via the Go
-# module proxy), using matching upstream headers. Run from bench/cpp/:
+# archives (linux amd64/arm64 picked by `go env GOARCH`, WITH_IPP=OFF
+# Release build fetched via the Go module proxy), using matching upstream
+# headers. Run from bench/cpp/:
 #
 #   ./build.sh          # downloads headers on first use, then compiles
 #   ./native_bench scenes 5
@@ -10,12 +11,14 @@ cd "$(dirname "$0")"
 
 CV2_VER="${CV2_VER:-v0.41200.0}" # -> OpenCV 4.12.0
 OPENCV_VER="4.12.0"
+GOARCH="$(go env GOARCH)"
 MODCACHE="$(go env GOMODCACHE)"
-LIBDIR="$MODCACHE/github.com/hkloudou/cv2/libs/linux_amd64@$CV2_VER"
+LIBMOD="github.com/hkloudou/cv2/libs/linux_$GOARCH"
+LIBDIR="$MODCACHE/$LIBMOD@$CV2_VER"
 
 if [ ! -f "$LIBDIR/libopencv_core.a" ]; then
-  echo "fetching bundled OpenCV static libs ($CV2_VER)..."
-  GOMODCACHE="$MODCACHE" go mod download github.com/hkloudou/cv2/libs/linux_amd64@"$CV2_VER" ||
+  echo "fetching bundled OpenCV static libs ($LIBMOD@$CV2_VER)..."
+  GOMODCACHE="$MODCACHE" go mod download "$LIBMOD@$CV2_VER" ||
     (cd .. && go mod download all)
 fi
 

@@ -12,7 +12,8 @@ benchdata.json so partial re-measurements stay coherent per field):
   --asm-arm64 / --go-arm64 FILE
                   the same two runs from an arm64 machine (keys gain an
                   'A' suffix: asmA1, goA4, grayA4, ...)
-  --native FILE   `bench/cpp/native_bench cpp/scenes N` output
+  --native FILE   `bench/cpp/native_bench cpp/scenes N` output (amd64)
+  --native-arm64 FILE  the same run on the arm64 machine (key nativeA)
   --mem FILE      concatenated `memprobe -impl {baseline,cvmatch,gray}` lines
   --native-mem KB peak RSS (VmHWM kB) of native_bench on the 1080p/128 scene
   --host TEXT     one-line description of the machine
@@ -30,7 +31,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Everything genchart.py reads; carried-over keys outside this vocabulary
 # (e.g. from retired implementations) are pruned on every run.
-SCENE_KEYS = {"native",
+SCENE_KEYS = {"native", "nativeA",
               "asm1", "asm4", "go1", "go4", "agray1", "agray4", "gray1", "gray4",
               "asmA1", "asmA4", "goA1", "goA4",
               "agrayA1", "agrayA4", "grayA1", "grayA4"}
@@ -80,6 +81,7 @@ def main():
     ap.add_argument("--asm-arm64")
     ap.add_argument("--go-arm64")
     ap.add_argument("--native")
+    ap.add_argument("--native-arm64")
     ap.add_argument("--mem")
     ap.add_argument("--native-mem", type=float, help="VmHWM kB")
     ap.add_argument("--host")
@@ -105,6 +107,9 @@ def main():
     if args.native:
         for scene, ms in parse_native(args.native).items():
             scenes.setdefault(scene, {})["native"] = round(ms, 1)
+    if args.native_arm64:
+        for scene, ms in parse_native(args.native_arm64).items():
+            scenes.setdefault(scene, {})["nativeA"] = round(ms, 1)
     if args.asm:
         put_go(args.asm, "asm", "agray", "")
     if args.go:

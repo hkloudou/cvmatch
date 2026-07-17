@@ -89,40 +89,59 @@ element-wise against a native OpenCV C++ binary.
   compare absolute numbers across hosts; compare only within one run.
 - **1T numbers are the primary signal**; 4T on shared runners carries
   ±2-5% noise and shows outliers in both directions.
-- Iterate on asm perf by pushing to the branch and dispatching
-  `ci.yml` (`workflow_dispatch`); the arm64 matrices are tee'd into the
-  job log so they can be diffed programmatically.
+- **`bench-charts.yml` is the only benchmark pipeline** (weekly cron +
+  `workflow_dispatch`, runnable on any ref; results publish to the
+  `assets` branch, or stay a workflow artifact with `publish=false`).
+  Regular CI runs correctness gates only; the ci.yml matrix steps
+  execute only when ci.yml itself is dispatched (the quick
+  perf-iteration loop, matrices tee'd into the job log for programmatic
+  diffing).
+- After merging a perf-relevant PR, dispatch `bench-charts.yml` to
+  refresh the published numbers; routine merges do not re-measure.
 - Profile before optimizing (`-cpuprofile` + `go tool pprof`); benchmark
   noise has repeatedly falsified plausible hypotheses in this repo.
 
 ## PR workflow
 
-- Every PR gets a dual review with **codex** (auto-reviews new PRs). Claude
-  leads the review and does the merging; codex findings are suggestions to
-  adjudicate, not directives — fix the valid ones, politely rebut the rest,
-  resolve threads.
+- **codex reviews are advisory.** codex auto-reviews new PRs; its
+  findings are suggestions to adjudicate — fix the valid ones, politely
+  rebut the rest, resolve threads. Claude leads the review and does the
+  merging, and when confident merges on green CI without waiting for a
+  codex verdict (owner's standing instruction).
 - A codex **👍 reaction (on the PR body) means approval** and fires no
-  webhook — poll reactions/reviews when waiting. 👀 means still reviewing.
+  webhook — poll reactions/reviews if waiting. 👀 means still reviewing.
 - Merge with a merge commit titled `Merge PR #N: <summary>`.
 - Never write the literal skip-CI marker (bracketed `skip ci`) in commit
   messages — it suppresses all workflows on the PR. The bench-charts
   auto-commit uses it deliberately.
-- After merging anything to `main`, the `bench-charts` workflow re-measures
-  both architectures and commits refreshed charts + README matrix; verify
-  it ran and that README prose still agrees with the new numbers.
+- Measured numbers live only in auto-generated artifacts (charts, the
+  README benchmatrix block and its summary paragraph). Never hand-write
+  a measured value into prose — reference the generated block instead.
 
 ## Charts pipeline
 
-`bench-charts.yml` (push to main): a `bench-arm64` job uploads raw
-benchmark output as an artifact; the `charts` job measures amd64 + native
-OpenCV, then `docs/collect.py` merges everything into `docs/benchdata.json`
-and `docs/genchart.py` renders the SVGs and rewrites the README between
-the `benchmatrix` markers. The comparison is five-way: native OpenCV,
-then {amd64, arm64} × {SIMD build, default build}, each with Match and
-MatchGray. Keys: `asm*`/`agray*` = `-tags cvmatch_asm`, `go*`/`gray*` =
-default build, `A` suffix = arm64. Keep chart series colors
-meaning-stable across all charts (green = native, blue family = Match,
-orange family = MatchGray; solid = SIMD build, light = default).
+`bench-charts.yml` (weekly cron + dispatch): two parallel `bench` matrix
+jobs — one per architecture, identical steps — each measure native
+OpenCV (prebuilt static 4.12; `build.sh` picks `libs/linux_$GOARCH`)
+plus both cvmatch builds and upload raw output; a `render` job merges
+them via `docs/collect.py` and `docs/genchart.py` and **publishes
+`bench/{benchdata.json, bench-*.svg, mem-*.svg, matrix.md}` to the
+`assets` branch** — main is never touched and the README is never
+rewritten (it references the stable `../../raw/assets/bench/...` URLs
+and links `matrix.md`). Dispatch with `publish=false` to get the
+rendered bundle as a workflow artifact instead (perf iteration).
+`matrix.md` carries the two same-shaped tables plus the derived summary
+paragraph (speedup ranges, memory), so no measured number is ever
+hand-written. **amd64 and arm64 are peer configurations with identical
+comparison dimensions**: one speed chart, one panel per architecture
+(representative scenes; full detail in the tables), each showing native
+OpenCV + {asm, no-asm} × {Match, MatchGray} with ratios vs that
+architecture's native. Keys: `asm*`/`agray*` = `-tags cvmatch_asm`,
+`go*`/`gray*` = default build, `native`, `A` suffix = arm64
+(`nativeA`). Colors are meaning-stable (green = native, blue family =
+Match, orange family = MatchGray; solid = asm, light = no-asm); build
+labels are asm / no-asm — never "pure Go", both builds are pure Go in
+the no-cgo sense.
 
 ## History (context for future work)
 
@@ -137,5 +156,11 @@ orange family = MatchGray; solid = SIMD build, light = default).
   OpenCV parity jobs in `bench/`.
 - Phase 4 made the assembly a global opt-in switch (`-tags cvmatch_asm`):
   the default build is pure high-level Go (the safe mode; the kernels
-  measure ~4-5x on amd64, ~2.5x on arm64), and the benchmark comparison
-  became five-way (native + both builds on both architectures).
+  measure several-fold — exact ranges live in the generated README
+  summary), and the benchmark comparison became five-way (native + both
+  builds on both architectures).
+- Phase 5 cleaned the release flow: bench-charts (weekly + dispatch) is
+  the only benchmark pipeline, CI is correctness-only (matrices run only
+  when ci.yml is dispatched), the arm64 leg gained the same native
+  OpenCV baseline as amd64 (identical comparison dimensions, one unified
+  chart), and every measured number in the README is generated.
