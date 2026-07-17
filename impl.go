@@ -10,7 +10,10 @@ package cvmatch
 import (
 	"fmt"
 	"math"
+	"math/bits"
+	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/hkloudou/cvmatch/internal/simd"
 )
@@ -21,6 +24,11 @@ const maxThreads = 16
 // (block spectra include their zero padding, column sums are cleared in
 // colBuildGo, the internal result map is stored before it is read), so
 // dirty reuse is safe and steady-state matching allocates nothing.
+//
+// Peak-RSS note: the benchmarked memory metric (VmHWM) is a monotone
+// high-water mark — trimming pools, forcing GC or FreeOSMemory can never
+// lower it; only reducing the peak of concurrently-live bytes can.
+// sync.Pool's victim cache already sheds idle retention on its own.
 type slicePool[T any] struct{ p sync.Pool }
 
 func (sp *slicePool[T]) get(n int) []T {
@@ -386,39 +394,48 @@ type goPlan struct {
 	prW, prH       []int32
 }
 
-// newGoPlan mirrors plan_init: OpenCV's crossCorr block sizing with
-// power-of-two DFT dims and the same scratch-memory area cap.
+// newGoPlan picks the DFT tile geometry by an integer cost-model argmin
+// over power-of-two (dftW, dftH) pairs — under the Phase 7 contract the
+// geometry only has to be fast, not to reproduce OpenCV's crossCorr
+// block heuristic. Each candidate is scored with a closed-form model of
+// this pipeline's own kernels (validated within ~10% against interleaved
+// A/Bs): packed row FFTs at 5·n·log2 n per pair, two full column passes,
+// and a linear conj-multiply/pack/emit term, summed over the real tile
+// grid including the short edge bands. The search is pure integer
+// arithmetic (bits.Len, int64), so every platform and build picks the
+// identical plan; ties go to the smaller spectrum.
 func newGoPlan(tw, th, rw, rh int) *goPlan {
-	bw := int(float64(tw)*4.5 + 0.5)
-	bh := int(float64(th)*4.5 + 0.5)
-	if bw < 256-tw+1 {
-		bw = 256 - tw + 1
-	}
-	if bh < 256-th+1 {
-		bh = 256 - th + 1
-	}
-	if bw > rw {
-		bw = rw
-	}
-	if bh > rh {
-		bh = rh
-	}
-	dftW, dftH := nextPow2(bw+tw-1), nextPow2(bh+th-1)
-	if dftW < 2 {
-		dftW = 2
-	}
-	if dftH < 2 {
-		dftH = 2
-	}
-	for int64(dftW)*int64(dftH) > 1<<21 {
-		if dftW >= dftH && dftW>>1 >= tw+1 {
-			dftW >>= 1
-		} else if dftH>>1 >= th+1 {
-			dftH >>= 1
-		} else {
-			break
+	const areaCap = 1 << 22 // bounds spec at ~16.8 MB; searched optima stay far below
+	minW, minH := max(2, nextPow2(tw)), max(2, nextPow2(th))
+	maxW, maxH := max(minW, nextPow2(rw+tw-1)), max(minH, nextPow2(rh+th-1))
+	log2 := func(n int) int64 { return int64(bits.Len(uint(n)) - 1) }
+	bestW, bestH := minW, minH
+	var bestCost, bestArea int64 = -1, 0
+	for dftW := minW; dftW <= maxW; dftW <<= 1 {
+		for dftH := minH; dftH <= maxH; dftH <<= 1 {
+			area := int64(dftW) * int64(dftH)
+			if area > areaCap {
+				continue
+			}
+			blockW := min(dftW-tw+1, rw)
+			blockH := min(dftH-th+1, rh)
+			ntx := int64((rw + blockW - 1) / blockW)
+			hw := dftW/2 + 1
+			rowFFT := 5 * int64(dftW) * log2(dftW)
+			colPass := 5 * int64(dftH) * log2(dftH) * int64(hw)
+			specN := int64(dftH) * int64(hw)
+			var cost int64
+			for y0 := 0; y0 < rh; y0 += blockH {
+				bh := min(blockH, rh-y0)
+				loadH := min(bh+th-1, dftH) // zero pad rows are skipped by the forward pass
+				cost += ntx * (int64((loadH+1)/2+(bh+1)/2)*rowFFT + 2*colPass + 16*specN)
+			}
+			if bestCost < 0 || cost < bestCost || (cost == bestCost && area < bestArea) {
+				bestCost, bestArea, bestW, bestH = cost, area, dftW, dftH
+			}
 		}
 	}
+	dftW, dftH := bestW, bestH
 	p := &goPlan{dftW: dftW, dftH: dftH, hw: dftW/2 + 1}
 	p.blockW = dftW - tw + 1
 	if p.blockW > rw {
@@ -604,17 +621,34 @@ func blockInverseEmitGo(p *goPlan, spec, z []complex64, res []float32, rw, x0, y
 // arithmetic is identical for any worker count.
 func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, th, rw, rh, threads int, p *goPlan, result []float32) {
 	specN := p.dftH * p.hw
+	// Tiny blocks cannot amortize a per-pass fan-out (a 20x20 match
+	// regressed ~3x when it fanned out unconditionally — codex finding on
+	// PR #13), so team parallelism only engages when the spectrum carries
+	// real work.
+	teamOK := specN >= 1<<16
 	tspec := cplxPool.get(cn * specN)
-	z0 := cplxPool.get(p.dftW)
-	scale := 1 / (float32(p.dftW) * float32(p.dftH))
-	for k := 0; k < cn; k++ {
-		ts := tspec[k*specN : (k+1)*specN]
-		blockForwardGo(tpl[k:], tstride, step, 0, 0, tw, th, p, ts, z0, 1)
-		for i := range ts {
-			ts[i] = complex(real(ts[i])*scale, imag(ts[i])*scale)
-		}
+	// Template spectra: the channels are disjoint, and within one channel
+	// the team path and the chunked scale partition elementwise work — all
+	// pure scheduling, per-element arithmetic unchanged.
+	tcw := min(threads, cn)
+	tteam := 1
+	if teamOK {
+		tteam = threads / tcw
 	}
-	cplxPool.put(z0)
+	runParallel(tcw, func(w int) {
+		z := cplxPool.get(p.dftW)
+		defer cplxPool.put(z)
+		scale := 1 / (float32(p.dftW) * float32(p.dftH))
+		for k := w; k < cn; k += tcw {
+			ts := tspec[k*specN : (k+1)*specN]
+			blockForwardGo(tpl[k:], tstride, step, 0, 0, tw, th, p, ts, z, tteam)
+			runParallel(tteam, func(u int) {
+				for i := u * specN / tteam; i < (u+1)*specN/tteam; i++ {
+					ts[i] = complex(real(ts[i])*scale, imag(ts[i])*scale)
+				}
+			})
+		}
+	})
 	ntx := (rw + p.blockW - 1) / p.blockW
 	nty := (rh + p.blockH - 1) / p.blockH
 	ntiles := ntx * nty
@@ -627,17 +661,36 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 	// row-pair and elementwise phases inside each block. Pure scheduling of
 	// disjoint work: per-element arithmetic and channel order are unchanged,
 	// so output stays bit-identical for every (threads, ntiles) combination.
-	// Tiny blocks cannot amortize the per-pass fan-out (a 20x20 match
-	// regressed ~3x when it fanned out unconditionally — codex finding on
-	// PR #13), so the team only engages when the spectrum carries real work.
-	team := threads / nw
-	if specN < 1<<16 {
-		team = 1
+	team := 1
+	if teamOK {
+		team = threads / nw
 	}
+	// Tiles are claimed from a shared queue, longest first (ragged edge
+	// tiles load less data), so no worker sits on a full tile while the
+	// rest idle out — tiles own disjoint result regions, so claim order
+	// cannot affect output.
+	order := i32Pool.get(ntiles)
+	for t := range order {
+		order[t] = int32(t)
+	}
+	if nw > 1 {
+		sort.SliceStable(order, func(a, b int) bool {
+			ta, tb := int(order[a]), int(order[b])
+			ca := int64(min(p.blockW, rw-(ta%ntx)*p.blockW)+tw-1) * int64(min(p.blockH, rh-(ta/ntx)*p.blockH)+th-1)
+			cb := int64(min(p.blockW, rw-(tb%ntx)*p.blockW)+tw-1) * int64(min(p.blockH, rh-(tb/ntx)*p.blockH)+th-1)
+			return ca > cb
+		})
+	}
+	var next atomic.Int64
 	runParallel(nw, func(w int) {
 		spec := cplxPool.get(specN)
 		z := cplxPool.get(p.dftW)
-		for t := w; t < ntiles; t += nw {
+		for {
+			ti := next.Add(1) - 1
+			if ti >= int64(ntiles) {
+				break
+			}
+			t := int(order[ti])
 			x0, y0 := (t%ntx)*p.blockW, (t/ntx)*p.blockH
 			bw, bh := min(p.blockW, rw-x0), min(p.blockH, rh-y0)
 			for k := 0; k < cn; k++ {
@@ -658,6 +711,7 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 		cplxPool.put(spec)
 		cplxPool.put(z)
 	})
+	i32Pool.put(order)
 	cplxPool.put(tspec)
 }
 
@@ -681,6 +735,9 @@ func colBuildGo(colSum []int32, colSum2 []int64, img []uint8, istride, iw, cn, c
 	for i := range colSum2 {
 		colSum2[i] = 0
 	}
+	// (A build-as-slide-from-zero-row variant was measured: it deletes the
+	// switch below but costs ~2x integer work per built row and showed +9%
+	// e2e on purego 1T gray — the dedicated loops stay.)
 	u4 := cs == 4 && step == 4
 	for y := y0; y < y0+th; y++ {
 		row := img[y*istride:]
@@ -972,11 +1029,12 @@ func normalizeBandGo(img []uint8, istride, iw int, cn, step, tw, th, rw, y0, y1 
 	return ext
 }
 
-func normalizeParallelGo(img []uint8, istride, iw int, tpl []uint8, tstride, tw, th, cn, step, rw, rh, threads int,
-	corr []float32, result []float32) (float32, int, int, float32, int, int) {
+// templStats computes the per-channel template means and the raw (pre-sqrt)
+// variance sum. Integer accumulation is exact; the float sequence is the
+// pinned normalization order. It reads only the template, so matchU8 runs it
+// before the correlation to short-circuit flat templates.
+func templStats(tpl []uint8, tstride, tw, th, cn, step int) (mean [4]float64, templNorm float64) {
 	invArea := 1 / (float64(tw) * float64(th))
-	var mean [4]float64
-	templNorm := 0.0
 	for k := 0; k < cn; k++ {
 		var s, s2 int64 // template statistics are exact integers
 		for y := 0; y < th; y++ {
@@ -990,12 +1048,12 @@ func normalizeParallelGo(img []uint8, istride, iw int, tpl []uint8, tstride, tw,
 		mean[k] = float64(s) * invArea
 		templNorm += float64(float64(s2)*invArea) - float64(mean[k]*mean[k])
 	}
-	if templNorm < 0x1p-52 { // DBL_EPSILON: flat template
-		for i := range result[:rw*rh] {
-			result[i] = 1
-		}
-		return 1, 0, 0, 1, 0, 0
-	}
+	return mean, templNorm
+}
+
+func normalizeParallelGo(img []uint8, istride, iw, tw, th, cn, step, rw, rh, threads int,
+	mean *[4]float64, templNorm float64,
+	corr []float32, result []float32) (float32, int, int, float32, int, int) {
 	templNorm = math.Sqrt(templNorm * (float64(tw) * float64(th)))
 
 	nb := threads
@@ -1011,7 +1069,7 @@ func normalizeParallelGo(img []uint8, istride, iw int, tpl []uint8, tstride, tw,
 	ext := make([]goExtrema, nb)
 	runParallel(nb, func(w int) {
 		ext[w] = normalizeBandGo(img, istride, iw, cn, step, tw, th, rw,
-			bandY[w], bandY[w+1], &mean, templNorm, corr, result)
+			bandY[w], bandY[w+1], mean, templNorm, corr, result)
 	})
 	r := ext[0]
 	for b := 1; b < nb; b++ { // strict compares keep first occurrence
@@ -1034,6 +1092,15 @@ func matchU8(img []uint8, istride, iw, ih int, tpl []uint8, tstride, tw, th, cn,
 	}
 	threads = clampThreads(threads)
 	rw, rh := iw-tw+1, ih-th+1
+	mean, templNorm := templStats(tpl, tstride, tw, th, cn, step)
+	if templNorm < 0x1p-52 { // DBL_EPSILON: flat template scores 1 everywhere
+		if result != nil {
+			for i := range result[:rw*rh] {
+				result[i] = 1
+			}
+		}
+		return 1, 0, 0, 1, 0, 0
+	}
 	res := result
 	if res == nil {
 		res = f32Pool.get(rw * rh)
@@ -1041,5 +1108,5 @@ func matchU8(img []uint8, istride, iw, ih int, tpl []uint8, tstride, tw, th, cn,
 	}
 	p := newGoPlan(tw, th, rw, rh)
 	crossCorrGo(img, istride, tpl, tstride, step, cn, tw, th, rw, rh, threads, p, res)
-	return normalizeParallelGo(img, istride, iw, tpl, tstride, tw, th, cn, step, rw, rh, threads, res, res)
+	return normalizeParallelGo(img, istride, iw, tw, th, cn, step, rw, rh, threads, &mean, templNorm, res, res)
 }

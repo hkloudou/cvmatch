@@ -9,17 +9,56 @@ invariants and workflows that every change must follow.
 1. **KISS** — as little code as possible; delete redundant code eagerly.
 2. **Faster benchmarks** (the most important goal).
 3. **Lower memory use** — but speed wins when the two conflict.
-4. **Bit-identical output to native OpenCV** `matchTemplate(TM_CCOEFF_NORMED)`
-   + `minMaxLoc` on CV_8UC4/8UC1. Non-negotiable.
-5. **No memory leaks or correctness regressions.** Non-negotiable.
+4. **OpenCV-consistent output** (owner directive, 2026-07-17: OpenCV is a
+   black box f(x) — replicate its answers, not its code): extremum
+   locations must match native `matchTemplate(TM_CCOEFF_NORMED)` +
+   `minMaxLoc` on CV_8UC4/8UC1, and scores must stay within a **5%
+   deviation budget** (the pipeline actually lands ~1e-6; every
+   deliberate deviation from OpenCV's rounding order records its
+   worst-case contribution so the sum stays ≪ budget). Bit-replication
+   of OpenCV's internal rounding order is NOT required. Non-negotiable.
+5. **Self-determinism.** Same input ⇒ bit-identical output across
+   amd64/arm64, asm/purego builds and all thread counts. This is what the
+   golden hashes, asm↔scalar parity and threads tests pin. Non-negotiable.
+6. **No memory leaks or correctness regressions.** Non-negotiable.
 
-## The bit-exactness framework (never violate)
+## The determinism framework (never violate)
 
-Any transformation is legal only if it provably preserves every output bit:
+Until 2026-07-17 this framework additionally required bit-identity to
+OpenCV itself; that requirement is retired (goal 4), the self-determinism
+rules below remain. Any transformation must keep ONE fixed, exactly
+specified op sequence shared by the scalar code and both asm backends:
 
-- Float ops must keep the scalar code's **single-rounding order**. No FMA,
-  ever (Go asm: never `VFMADD*`/`fmla`; the gc compiler does not contract
-  on amd64/arm64 for the explicitly float32-barriered expressions used here).
+- **FMA is allowed** (it was banned only to mirror OpenCV's non-fused
+  rounding), with one sharp caveat for float32 lanes:
+  `float32(math.FMA(float64(a), float64(b), float64(c)))` **double-rounds**
+  and does NOT always equal single-precision `VFMADDPS`/`fmla.4s`
+  (counterexample: a=0x1.000006p0, b=1.5, c=2^-60). Scalar f32 fusion must
+  go through a proven correctly-rounded `fma32` helper (round-to-odd
+  repair of the f64 FMA), and scalar + both asm backends must fuse the
+  **same** products (state the fusion points in the kernel contract; the
+  asm↔scalar parity test then enforces the pairing bit-for-bit).
+  f64 `math.FMA` needs no repair. Soft-float targets (386, riscv64, wasm)
+  are slow but bit-identical — acceptable for fallback targets.
+- **Forbidden instructions** (vendor-defined output bits break
+  self-determinism even within one architecture): `VRSQRTPS`, `VRCPPS`,
+  `frsqrte`/`frsqrts` chains, `frecpe`, x87 80-bit paths, and any
+  FTZ/DAZ mode change.
+- **Guard alignment**: the normalization guard/denominator chain
+  (window sums, variance guards, tie decisions) stays fed by exact
+  integers — only the FFT correlation numerator spends tolerance
+  budget. This keeps near-degenerate windows (flat regions) stable no
+  matter how the FFT is restructured.
+- **Tolerance-budget ledger**: every merged deviation from OpenCV's op
+  order records, in this file, what reorders, its worst-case bound, and
+  the measured same-dump before/after delta; the running sum stays ≪ the
+  5% budget. (Ledger so far: none — the shipped pipeline is still
+  bit-identical to the recorded goldens.)
+- **Golden constants change only via the deliberate re-record flow**
+  (`make regolden`, Phase 7.0): native tolerance parity must pass BEFORE
+  recording, the commit log carries a `Goldens:` reason trailer, and the
+  full cross-arch matrix (both builds, race, both qemu legs) reproves
+  self-identity on the new constants.
 - Exact IEEE identities may be used: addition commutes bitwise;
   `x-y ≡ x+(-y)` with negation by sign-bit xor; multiplication by exact
   powers of two; `sqrt`/`div` are correctly rounded on both ISAs; ±0 sign
@@ -34,6 +73,13 @@ Any transformation is legal only if it provably preserves every output bit:
   scans achieve it via the lexicographic (value, index) tournament.
 - The deterministic `sincospi` twiddle generator is shared by all paths —
   never call libm/math trig in the hot pipeline.
+- **NTT stays dead on merit, under any contract**: exact integer
+  convolution was built (`MatchExact`, v1.1.x tags) and **measured ~17x
+  slower** than the float FFT path (64-bit modular butterflies have no
+  SIMD; two-real-rows packing does not survive in Z_p — details in the
+  README headroom section). Do not re-propose it absent genuinely new
+  math; "integer arithmetic is exact and therefore desirable" was the
+  intuition this measurement refuted.
 
 ## SIMD kernel workflow (`internal/simd`)
 
@@ -189,10 +235,56 @@ the no-cgo sense.
   adopted the kernels' fused FFT shape; in-tile parallelism (row-pair
   distribution + width-chunked column-stage passes + chunked conjugate
   multiply) took single-tile scenes from ~1.0x to 1.2-1.5x at 4T on the
-  reference machines. Remaining known levers and why they stay unpicked:
-  SIMD prefix-sum spill lanes (low single-digit %), output-pruned
-  inverse column FFT (<=15% niche, needs a +-0 laundering proof),
-  further NEON micro-tuning (diminishing); split-radix / mixed-radix /
-  NTT are forbidden by the bit-identity contract (recorded in the README
-  headroom section). Treat new optimization ideas as welcome but hold
-  them to the same measure-on-reference, bit-anchored standard.
+  reference machines. Remaining known levers and why they stayed
+  unpicked under the old contract: SIMD prefix-sum spill lanes (low
+  single-digit %), output-pruned inverse column FFT (<=15% niche, then
+  needed a +-0 laundering proof), further NEON micro-tuning
+  (diminishing). Two distinct kill categories, do not conflate them:
+  split-radix / mixed-radix were blocked **by the old bit-identity
+  contract only** (re-opened by the Phase 7 contract change below);
+  **NTT was killed by measurement** — built as `MatchExact` (v1.1.x),
+  ~17x slower than the float FFT path — and stays dead under any
+  contract (see the determinism framework above).
+- Phase 7 (in progress): the owner retired OpenCV bit-replication —
+  "不复刻 OpenCV 的做法、只复刻它的答案": OpenCV is a black box f(x);
+  matching locations + scores within a 5% budget is the contract,
+  self-determinism stays non-negotiable (goals 4-5). A tolerance parity
+  gate + deliberate golden re-record flow must land before the first
+  deviating optimization ships. Ideas still answer to the same standard:
+  A/B on the reference machines, above the noise floor. Program order:
+  7.0 verification framework → 7.1 tile-geometry argmin (prototype
+  measured ~1.15-1.2x geomean 1T amd64) → 7.2 radix-4+FMA (gated on
+  post-7.1 pprof share ≥70% AND owner sign-off on the purego chart
+  regression it implies) → 7.3 normalize-f32 (independent of 7.2) →
+   7.4 conditional per-edge-tile DFT sizing. A no-record lever (deeper
+  column-stage fusion, 16-row groups — pure loop reorder, bit-identical
+  under any contract) may be prototyped at any time.
+
+## Phase 7 design-study verdict ledger (adjudicated 2026-07-17)
+
+- **fma-everywhere**: PARKED (subsumed) — radix-4 ships the same FMA
+  payload in one golden re-record; the `fma32` round-to-odd helper +
+  directed tests are harvested as 7.2's first commit.
+- **direct-int-corr**: PARKED (no demonstrated workload) — correctness
+  clean, but 0% on the published suite (the smallest bench template,
+  24x24, already loses to the AVX2 FFT baseline by its own arithmetic);
+  revisit only if the owner confirms sub-16x16 templates matter.
+- **pruned-inverse**: REJECTED (do not build) — 0.1-2.1% e2e is under
+  the noise floor, and per-edge-tile DFT sizing (7.4) strictly dominates
+  it. Retained knowledge: inverseRowPair unconditionally reads spec row
+  r+1 — a trap for any future row-band pruning.
+- **rsqrt-approx**: REJECTED (breaks determinism) — estimate-instruction
+  bits are vendor-defined even within amd64; sub-noise gain; the
+  instructions are on the forbidden list above.
+- **split-radix**: DEAD ON MERIT — ~6% FFT-op delta vs radix-4 is
+  sub-noise end-to-end, for 2.5-3x kernel surface and a broken
+  pass/barrier structure. Sits next to NTT: do not re-propose without
+  new math.
+- **one-big-FFT**: DEAD ON MEASUREMENT — 1.13-1.53x slower with 3-6x
+  memory; the 7.1 argmin converges to one tile exactly where that is
+  optimal anyway.
+- **mixed-radix 2^a·3^b·5^c**: DEAD ON MERIT — padding waste only
+  exists in the one-big regime; +60-100% kernel surface for single-digit
+  average gain.
+- **NTT**: measured 17x slower (see the determinism framework) — dead
+  under any contract.

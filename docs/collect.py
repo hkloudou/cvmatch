@@ -74,6 +74,17 @@ def parse_mem(path):
     return out
 
 
+def parse_parity(path):
+    """paritystat lines: scene=X worst_abs=E ... -> {scene: worst_abs}"""
+    out = {}
+    rx = re.compile(r"scene=(\w+) worst_abs=([\d.eE+-]+)")
+    for line in open(path):
+        m = rx.match(line)
+        if m:
+            out[m.group(1)] = float(m.group(2))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--asm")
@@ -84,6 +95,9 @@ def main():
     ap.add_argument("--native-arm64")
     ap.add_argument("--mem")
     ap.add_argument("--native-mem", type=float, help="VmHWM kB")
+    ap.add_argument("--parity", help="paritystat output (amd64)")
+    ap.add_argument("--parity-arm64")
+    ap.add_argument("--opencv", help="native OpenCV version string")
     ap.add_argument("--host")
     ap.add_argument("--host-arm64")
     ap.add_argument("-o", "--out", default=os.path.join(HERE, "benchdata.json"))
@@ -125,6 +139,14 @@ def main():
                 data.setdefault("mem", {})[k_dst] = round(mem[k_src], 1)
     if args.native_mem:
         data.setdefault("mem", {})["native"] = round(args.native_mem / 1024.0, 1)
+    if args.parity:
+        for scene, w in parse_parity(args.parity).items():
+            data.setdefault("parity", {}).setdefault(scene, {})["amd64"] = w
+    if args.parity_arm64:
+        for scene, w in parse_parity(args.parity_arm64).items():
+            data.setdefault("parity", {}).setdefault(scene, {})["arm64"] = w
+    if args.opencv:
+        data["opencv"] = args.opencv
 
     for s in scenes.values():
         for k in list(s):
@@ -133,6 +155,10 @@ def main():
     for k in list(data.get("mem", {})):
         if k not in MEM_KEYS:
             del data["mem"][k]
+    for per in data.get("parity", {}).values():
+        for k in list(per):
+            if k not in ("amd64", "arm64"):
+                del per[k]
 
     json.dump(data, open(args.out, "w"), indent=1, sort_keys=True)
     print(f"wrote {args.out}", file=sys.stderr)
