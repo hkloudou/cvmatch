@@ -251,14 +251,20 @@ the no-cgo sense.
   self-determinism stays non-negotiable (goals 4-5). A tolerance parity
   gate + deliberate golden re-record flow must land before the first
   deviating optimization ships. Ideas still answer to the same standard:
-  A/B on the reference machines, above the noise floor. Program order:
-  7.0 verification framework → 7.1 tile-geometry argmin (prototype
-  measured ~1.15-1.2x geomean 1T amd64) → 7.2 radix-4+FMA (gated on
-  post-7.1 pprof share ≥70% AND owner sign-off on the purego chart
-  regression it implies) → 7.3 normalize-f32 (independent of 7.2) →
-   7.4 conditional per-edge-tile DFT sizing. A no-record lever (deeper
-  column-stage fusion, 16-row groups — pure loop reorder, bit-identical
-  under any contract) may be prototyped at any time.
+  A/B on the reference machines, above the noise floor. Shipped so far:
+  7.0 verification framework + 7.1 tile-geometry argmin (PR #18 —
+  reference A/B: amd64 native-normalized geomean +7%, arm64 +18%
+  absolute on its homogeneous runners; Match VmHWM 48→35 MB) and 7.3
+  normalize-f32 (PR #19 — exact-integer cross/idiff feeding a float32
+  tail; one NormRow kernel for every cn plus the SpillStats1 cn=1 spill
+  kernel; reference A/B: Match native-normalized geomean +6.7%, improved
+  14/14 scenes, gray flat within noise, purego +7%; per-cn stats caps
+  after a codex finding). Remaining program: 7.2 radix-4+FMA (still
+  gated on post-7.1 pprof share ≥70% AND owner sign-off on the purego
+  chart regression it implies) → 7.4 conditional per-edge-tile DFT
+  sizing. A no-record lever (deeper column-stage fusion, 16-row groups —
+  pure loop reorder, bit-identical under any contract) may be
+  prototyped at any time.
 
 ## Phase 7 design-study verdict ledger (adjudicated 2026-07-17)
 
