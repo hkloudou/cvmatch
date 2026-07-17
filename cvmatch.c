@@ -288,7 +288,7 @@ __attribute__((target("avx2"))) static void fft_stages_avx2(
     cf *restrict a, int n, const cf *restrict tw, int inverse) {
   const __m256 signmask = _mm256_castsi256_ps(
       _mm256_set1_epi32(inverse ? (int)0x80000000 : 0));
-  for (int half = 8; half < n; half <<= 1) {
+  for (int half = 4; half < n; half <<= 1) {
     const cf *restrict w = tw + half;
     for (int i = 0; i < n; i += half << 1) {
       cf *restrict p = a + i;
@@ -359,6 +359,13 @@ static void fft(cf *restrict a, int n, const cf *restrict tw,
       p[3].im = u1i - v1i;
     }
   }
+#ifdef CVM_X86_KERNEL
+  if (n >= 8 && __builtin_cpu_supports("avx2")) {
+    /* the vector cascade covers the half=4 stage too */
+    fft_stages_avx2(a, n, tw, inverse);
+    return;
+  }
+#endif
   if (n >= 8) {
     const cf *restrict w = tw + 4;
     for (int i = 0; i < n; i += 8) {
@@ -376,12 +383,6 @@ static void fft(cf *restrict a, int n, const cf *restrict tw,
       }
     }
   }
-#ifdef CVM_X86_KERNEL
-  if (__builtin_cpu_supports("avx2")) {
-    fft_stages_avx2(a, n, tw, inverse);
-    return;
-  }
-#endif
   for (int half = 8; half < n; half <<= 1) {
     const cf *restrict w = tw + half;
     for (int i = 0; i < n; i += half << 1) {
@@ -614,17 +615,44 @@ static void block_forward(const uint8_t *restrict chan, size_t stride,
       memset(sa, 0, (size_t)(p->dftH - r) * hw * sizeof(cf));
       break;
     }
-    const uint8_t *ra = chan + (size_t)(y0 + r) * stride + (size_t)x0 * step;
+    const uint8_t *restrict ra =
+        chan + (size_t)(y0 + r) * stride + (size_t)x0 * step;
+    /* step-specialized loads so the byte gathers vectorize (identical
+     * values, just better code for the two strides the API produces) */
     if (r + 1 < loadH) {
-      const uint8_t *rb = ra + stride;
-      for (int x = 0; x < loadW; x++) {
-        z[x].re = (float)ra[(size_t)x * step];
-        z[x].im = (float)rb[(size_t)x * step];
+      const uint8_t *restrict rb = ra + stride;
+      if (step == 4) {
+        for (int x = 0; x < loadW; x++) {
+          z[x].re = (float)ra[(size_t)x * 4];
+          z[x].im = (float)rb[(size_t)x * 4];
+        }
+      } else if (step == 1) {
+        for (int x = 0; x < loadW; x++) {
+          z[x].re = (float)ra[x];
+          z[x].im = (float)rb[x];
+        }
+      } else {
+        for (int x = 0; x < loadW; x++) {
+          z[x].re = (float)ra[(size_t)x * step];
+          z[x].im = (float)rb[(size_t)x * step];
+        }
       }
     } else {
-      for (int x = 0; x < loadW; x++) {
-        z[x].re = (float)ra[(size_t)x * step];
-        z[x].im = 0.0f;
+      if (step == 4) {
+        for (int x = 0; x < loadW; x++) {
+          z[x].re = (float)ra[(size_t)x * 4];
+          z[x].im = 0.0f;
+        }
+      } else if (step == 1) {
+        for (int x = 0; x < loadW; x++) {
+          z[x].re = (float)ra[x];
+          z[x].im = 0.0f;
+        }
+      } else {
+        for (int x = 0; x < loadW; x++) {
+          z[x].re = (float)ra[(size_t)x * step];
+          z[x].im = 0.0f;
+        }
       }
     }
     memset(z + loadW, 0, (size_t)(n - loadW) * sizeof(cf));
@@ -1050,25 +1078,68 @@ static void normalize_band(const uint8_t *restrict img, size_t istride,
         /* Pass 1 (scalar, exact): slide the integer window sums across the
          * chunk and spill them as doubles (every value is an exact integer,
          * so the conversion is lossless and the spilled values are
-         * bit-identical to what the fused loop computed). */
-        for (int i = 0;; i++) {
-          for (int k = 0; k < cn; k++)
-            wt[(size_t)k * CVM_NORM_CHUNK + i] = (double)s[k];
-          wt[(size_t)cn * CVM_NORM_CHUNK + i] = (double)s2;
-          int x = x0 + i;
-          if (i + 1 >= len) {
-            if (x + 1 < rw) { /* carry the slide into the next chunk */
-              for (int k = 0; k < cn; k++)
-                s[k] += colSum[(size_t)(x + tw) * cs + k] -
-                        colSum[(size_t)x * cs + k];
-              s2 += colSum2[x + tw] - colSum2[x];
+         * bit-identical to what the fused loop computed). Specialized per
+         * channel count so the sums live in registers. */
+        if (cn == 3 && cs == 4) {
+          int64_t s0 = s[0], s1 = s[1], s2c = s[2], q = s2;
+          const int32_t *restrict ca = colSum + (size_t)(x0 + tw) * 4;
+          const int32_t *restrict cb = colSum + (size_t)x0 * 4;
+          const int64_t *restrict qa = colSum2 + x0 + tw;
+          const int64_t *restrict qb = colSum2 + x0;
+          int last = rw - x0 - 1; /* no slide past the final element */
+          for (int i = 0; i < len; i++) {
+            wt[i] = (double)s0;
+            wt[CVM_NORM_CHUNK + i] = (double)s1;
+            wt[2 * CVM_NORM_CHUNK + i] = (double)s2c;
+            wt[3 * CVM_NORM_CHUNK + i] = (double)q;
+            if (i < last) {
+              s0 += ca[i * 4] - cb[i * 4];
+              s1 += ca[i * 4 + 1] - cb[i * 4 + 1];
+              s2c += ca[i * 4 + 2] - cb[i * 4 + 2];
+              q += qa[i] - qb[i];
             }
-            break;
           }
-          for (int k = 0; k < cn; k++)
-            s[k] += colSum[(size_t)(x + tw) * cs + k] -
-                    colSum[(size_t)x * cs + k];
-          s2 += colSum2[x + tw] - colSum2[x];
+          s[0] = s0;
+          s[1] = s1;
+          s[2] = s2c;
+          s2 = q;
+        } else if (cn == 1) {
+          int64_t s0 = s[0], q = s2;
+          const int32_t *restrict ca = colSum + (size_t)(x0 + tw);
+          const int32_t *restrict cb = colSum + x0;
+          const int64_t *restrict qa = colSum2 + x0 + tw;
+          const int64_t *restrict qb = colSum2 + x0;
+          int last = rw - x0 - 1;
+          for (int i = 0; i < len; i++) {
+            wt[i] = (double)s0;
+            wt[CVM_NORM_CHUNK + i] = (double)q;
+            if (i < last) {
+              s0 += ca[i] - cb[i];
+              q += qa[i] - qb[i];
+            }
+          }
+          s[0] = s0;
+          s2 = q;
+        } else {
+          for (int i = 0;; i++) {
+            for (int k = 0; k < cn; k++)
+              wt[(size_t)k * CVM_NORM_CHUNK + i] = (double)s[k];
+            wt[(size_t)cn * CVM_NORM_CHUNK + i] = (double)s2;
+            int x = x0 + i;
+            if (i + 1 >= len) {
+              if (x + 1 < rw) { /* carry the slide into the next chunk */
+                for (int k = 0; k < cn; k++)
+                  s[k] += colSum[(size_t)(x + tw) * cs + k] -
+                          colSum[(size_t)x * cs + k];
+                s2 += colSum2[x + tw] - colSum2[x];
+              }
+              break;
+            }
+            for (int k = 0; k < cn; k++)
+              s[k] += colSum[(size_t)(x + tw) * cs + k] -
+                      colSum[(size_t)x * cs + k];
+            s2 += colSum2[x + tw] - colSum2[x];
+          }
         }
         /* Pass 2 (vector, element-wise): the normalized value. Same
          * expression tree per element as the reference formulation. */
