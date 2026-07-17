@@ -462,50 +462,81 @@ NormRow:
 	movi	v22.2d, #0              // +0.0
 	lsl	x7, x3, #3              // stride in bytes
 	mov	x8, #0                  // i
+	// n is a multiple of 4: each pass handles two f64x2 halves and the
+	// k-loop shares one mean load and one 32-byte wt load across both.
 .Lnr_loop:
-	ldr	d3, [x1], #8            // crow[i..i+1] (2 f32)
-	fcvtl	v3.2d, v3.2s            // num (exact widen)
-	movi	v4.2d, #0               // wndMean2 accumulator
+	ldr	q3, [x1], #16           // crow[i..i+3] (4 f32)
+	fcvtl2	v13.2d, v3.4s           // num, high half (exact widen)
+	fcvtl	v3.2d, v3.2s            // num, low half
+	movi	v4.2d, #0               // wndMean2 accumulators
+	movi	v14.2d, #0
 	add	x9, x2, x8, lsl #3      // &wt[i]
 	mov	x10, x5                 // k = cn
 	mov	x11, x6                 // &mean[0]
 .Lnr_k:
-	ldr	q5, [x9]                // t lanes
+	ldp	q5, q15, [x9]           // t lanes, both halves
 	add	x9, x9, x7
-	fmul	v6.2d, v5.2d, v5.2d
-	fadd	v4.2d, v4.2d, v6.2d     // wndMean2 += t*t
 	ldr	d7, [x11], #8
 	dup	v7.2d, v7.d[0]          // mean[k]
-	fmul	v7.2d, v5.2d, v7.2d
-	fsub	v3.2d, v3.2d, v7.2d     // num -= t*mean[k]
+	fmul	v6.2d, v5.2d, v5.2d
+	fadd	v4.2d, v4.2d, v6.2d     // wndMean2 += t*t
+	fmul	v16.2d, v15.2d, v15.2d
+	fadd	v14.2d, v14.2d, v16.2d
+	fmul	v6.2d, v5.2d, v7.2d
+	fsub	v3.2d, v3.2d, v6.2d     // num -= t*mean[k]
+	fmul	v16.2d, v15.2d, v7.2d
+	fsub	v13.2d, v13.2d, v16.2d
 	subs	x10, x10, #1
 	b.ne	.Lnr_k
-	ldr	q8, [x9]                // s2d = q2 lanes (wt + cn*stride)
+	ldp	q8, q18, [x9]           // s2d = q2 lanes (wt + cn*stride)
 	fmul	v4.2d, v4.2d, v28.2d    // wndMean2 *= invArea
+	fmul	v14.2d, v14.2d, v28.2d
 	fsub	v5.2d, v8.2d, v4.2d     // diff2
+	fsub	v15.2d, v18.2d, v14.2d
 	fmax	v5.2d, v5.2d, v22.2d    // clamp at 0
+	fmax	v15.2d, v15.2d, v22.2d
 	fmul	v6.2d, v8.2d, v29.2d    // lim = eps*s2d
+	fmul	v16.2d, v18.2d, v29.2d
 	fmin	v6.2d, v6.2d, v27.2d    // min(lim, 0.5)
+	fmin	v16.2d, v16.2d, v27.2d
 	fsqrt	v7.2d, v5.2d
+	fsqrt	v17.2d, v15.2d
 	fmul	v7.2d, v7.2d, v30.2d    // den = sqrt(diff2)*templNorm
+	fmul	v17.2d, v17.2d, v30.2d
 	fcmgt	v9.2d, v5.2d, v6.2d     // diff2 > lim
+	fcmgt	v19.2d, v15.2d, v16.2d
 	and	v7.16b, v7.16b, v9.16b  // den, or 0 below the guard
+	and	v17.16b, v17.16b, v19.16b
 	fabs	v10.2d, v3.2d           // an = |num| (bit op, exact)
+	fabs	v20.2d, v13.2d
 	fcmgt	v11.2d, v7.2d, v10.2d   // m1 = an < den
+	fcmgt	v21.2d, v17.2d, v20.2d
 	mov	v12.16b, v11.16b
 	bsl	v12.16b, v7.16b, v25.16b // divisor = m1 ? den : 1.0
-	and	v13.16b, v3.16b, v11.16b // m1 ? num : 0
-	fdiv	v13.2d, v13.2d, v12.2d  // dv
-	fmul	v14.2d, v7.2d, v24.2d   // den*1.125
-	fcmgt	v14.2d, v14.2d, v10.2d  // m2 = an < den*1.125
-	and	v15.16b, v3.16b, v23.16b
-	orr	v15.16b, v15.16b, v25.16b // sat = copysign(1, num)
-	and	v15.16b, v15.16b, v14.16b // inner = m2 ? sat : 0
-	mov	v16.16b, v11.16b
-	bsl	v16.16b, v13.16b, v15.16b // m1 ? dv : inner
-	fcvtn	v16.2s, v16.2d          // correctly rounded narrow
-	str	d16, [x0], #8
-	add	x8, x8, #2
+	and	v5.16b, v3.16b, v11.16b // m1 ? num : 0
+	fdiv	v5.2d, v5.2d, v12.2d    // dv
+	mov	v12.16b, v21.16b
+	bsl	v12.16b, v17.16b, v25.16b
+	and	v15.16b, v13.16b, v21.16b
+	fdiv	v15.2d, v15.2d, v12.2d
+	fmul	v6.2d, v7.2d, v24.2d    // den*1.125
+	fcmgt	v6.2d, v6.2d, v10.2d    // m2 = an < den*1.125
+	fmul	v16.2d, v17.2d, v24.2d
+	fcmgt	v16.2d, v16.2d, v20.2d
+	and	v8.16b, v3.16b, v23.16b
+	orr	v8.16b, v8.16b, v25.16b // sat = copysign(1, num)
+	and	v8.16b, v8.16b, v6.16b  // inner = m2 ? sat : 0
+	and	v18.16b, v13.16b, v23.16b
+	orr	v18.16b, v18.16b, v25.16b
+	and	v18.16b, v18.16b, v16.16b
+	mov	v9.16b, v11.16b
+	bsl	v9.16b, v5.16b, v8.16b  // m1 ? dv : inner
+	mov	v19.16b, v21.16b
+	bsl	v19.16b, v15.16b, v18.16b
+	fcvtn	v9.2s, v9.2d            // correctly rounded narrow
+	fcvtn2	v9.4s, v19.2d
+	str	q9, [x0], #16
+	add	x8, x8, #4
 	cmp	x8, x4
 	b.lt	.Lnr_loop
 	ret
@@ -885,30 +916,58 @@ EmitIm:
 // is the lexicographic (value, index) extremum — the scalar scan's answer.
 .global MinMaxRow
 MinMaxRow:
-	ldr	q0, [x0]                // minV = row[0..3]
-	mov	v1.16b, v0.16b          // maxV
+	ldp	q0, q16, [x0]           // tracker A: row[0..3], B: row[4..7]
+	mov	v1.16b, v0.16b          // maxV A
+	mov	v17.16b, v16.16b        // maxV B
 	mov	x9, #0x0000000100000000 // idx lanes (0, 1)
 	mov	x10, #0x00000002
 	movk	x10, #0x3, lsl #32      // idx lanes (2, 3)
-	mov	v2.d[0], x9             // minIdx
+	mov	v2.d[0], x9             // minIdx A = (0,1,2,3)
 	mov	v2.d[1], x10
-	mov	v3.16b, v2.16b          // maxIdx
-	mov	v4.16b, v2.16b          // curIdx
 	movi	v5.4s, #4
-	add	x10, x0, #16            // element pointer
+	add	v18.4s, v2.4s, v5.4s    // minIdx B = (4,5,6,7)
+	mov	v3.16b, v2.16b          // maxIdx A
+	mov	v19.16b, v18.16b        // maxIdx B
+	mov	v4.16b, v2.16b          // curIdx A
+	mov	v20.16b, v18.16b        // curIdx B
+	movi	v5.4s, #8
+	add	x10, x0, #32            // element pointer
 	add	x11, x0, x1, lsl #2     // row end
 .Lmm_loop:
 	cmp	x10, x11
-	b.ge	.Lmm_reduce
-	ldr	q6, [x10], #16
-	add	v4.4s, v4.4s, v5.4s     // curIdx += 4
+	b.ge	.Lmm_merge
+	ldp	q6, q21, [x10], #32
+	add	v4.4s, v4.4s, v5.4s     // curIdx += 8
+	add	v20.4s, v20.4s, v5.4s
 	fcmgt	v7.4s, v0.4s, v6.4s     // v < minV (ordered, strict)
 	bit	v0.16b, v6.16b, v7.16b
 	bit	v2.16b, v4.16b, v7.16b
 	fcmgt	v7.4s, v6.4s, v1.4s     // v > maxV
 	bit	v1.16b, v6.16b, v7.16b
 	bit	v3.16b, v4.16b, v7.16b
+	fcmgt	v22.4s, v16.4s, v21.4s
+	bit	v16.16b, v21.16b, v22.16b
+	bit	v18.16b, v20.16b, v22.16b
+	fcmgt	v22.4s, v21.4s, v17.4s
+	bit	v17.16b, v21.16b, v22.16b
+	bit	v19.16b, v20.16b, v22.16b
 	b	.Lmm_loop
+.Lmm_merge:
+	// fold tracker B into A with the same lexicographic rule
+	fcmgt	v8.4s, v0.4s, v16.4s
+	fcmeq	v9.4s, v16.4s, v0.4s
+	cmgt	v10.4s, v2.4s, v18.4s
+	and	v9.16b, v9.16b, v10.16b
+	orr	v8.16b, v8.16b, v9.16b
+	bit	v0.16b, v16.16b, v8.16b
+	bit	v2.16b, v18.16b, v8.16b
+	fcmgt	v8.4s, v17.4s, v1.4s
+	fcmeq	v9.4s, v17.4s, v1.4s
+	cmgt	v10.4s, v3.4s, v19.4s
+	and	v9.16b, v9.16b, v10.16b
+	orr	v8.16b, v8.16b, v9.16b
+	bit	v1.16b, v17.16b, v8.16b
+	bit	v3.16b, v19.16b, v8.16b
 .Lmm_reduce:
 	// fold (value, index) lanes pairwise: take = (v'<v) | (v'==v & i'<i)
 	ext	v6.16b, v0.16b, v0.16b, #8
@@ -961,9 +1020,12 @@ RGBAToGray:
 	dup	v29.2d, x9              // coef u16 x8
 	movi	v28.4s, #0x20, lsl #8   // 8192
 	mov	x9, #0
-	cbz	x1, .Lgr_done
+	and	x10, x1, #-16           // end of 16-pixel blocks
+	cmp	x9, x10
+	b.ge	.Lgr_mid
 .Lgr_loop:
-	ldp	q1, q2, [x2], #32       // 8 RGBA pixels
+	ldp	q1, q2, [x2], #32       // 16 RGBA pixels
+	ldp	q23, q24, [x2], #32
 	uxtl	v3.8h, v1.8b            // px 0,1 channels
 	uxtl2	v4.8h, v1.16b           // px 2,3
 	umull	v5.4s, v3.4h, v29.4h    // px0 weighted channels
@@ -972,7 +1034,7 @@ RGBAToGray:
 	umull2	v16.4s, v4.8h, v29.8h   // px3
 	addp	v5.4s, v5.4s, v6.4s     // (rg0, b0, rg1, b1)
 	addp	v7.4s, v7.4s, v16.4s    // (rg2, b2, rg3, b3)
-	addp	v5.4s, v5.4s, v7.4s     // per-pixel sums 0..3
+	addp	v19.4s, v5.4s, v7.4s    // per-pixel sums 0..3
 	uxtl	v3.8h, v2.8b
 	uxtl2	v4.8h, v2.16b
 	umull	v6.4s, v3.4h, v29.4h
@@ -981,7 +1043,66 @@ RGBAToGray:
 	umull2	v17.4s, v4.8h, v29.8h
 	addp	v6.4s, v6.4s, v16.4s
 	addp	v7.4s, v7.4s, v17.4s
-	addp	v6.4s, v6.4s, v7.4s     // per-pixel sums 4..7
+	addp	v20.4s, v6.4s, v7.4s    // per-pixel sums 4..7
+	uxtl	v3.8h, v23.8b
+	uxtl2	v4.8h, v23.16b
+	umull	v5.4s, v3.4h, v29.4h
+	umull2	v6.4s, v3.8h, v29.8h
+	umull	v7.4s, v4.4h, v29.4h
+	umull2	v16.4s, v4.8h, v29.8h
+	addp	v5.4s, v5.4s, v6.4s
+	addp	v7.4s, v7.4s, v16.4s
+	addp	v21.4s, v5.4s, v7.4s    // per-pixel sums 8..11
+	uxtl	v3.8h, v24.8b
+	uxtl2	v4.8h, v24.16b
+	umull	v6.4s, v3.4h, v29.4h
+	umull2	v16.4s, v3.8h, v29.8h
+	umull	v7.4s, v4.4h, v29.4h
+	umull2	v17.4s, v4.8h, v29.8h
+	addp	v6.4s, v6.4s, v16.4s
+	addp	v7.4s, v7.4s, v17.4s
+	addp	v22.4s, v6.4s, v7.4s    // per-pixel sums 12..15
+	add	v19.4s, v19.4s, v28.4s
+	add	v20.4s, v20.4s, v28.4s
+	add	v21.4s, v21.4s, v28.4s
+	add	v22.4s, v22.4s, v28.4s
+	ushr	v19.4s, v19.4s, #14
+	ushr	v20.4s, v20.4s, #14
+	ushr	v21.4s, v21.4s, #14
+	ushr	v22.4s, v22.4s, #14
+	xtn	v19.4h, v19.4s
+	xtn2	v19.8h, v20.4s
+	xtn	v19.8b, v19.8h
+	xtn	v21.4h, v21.4s
+	xtn2	v21.8h, v22.4s
+	xtn	v21.8b, v21.8h
+	mov	v19.d[1], v21.d[0]
+	str	q19, [x0, x9]
+	add	x9, x9, #16
+	cmp	x9, x10
+	b.lt	.Lgr_loop
+.Lgr_mid:
+	cmp	x9, x1
+	b.ge	.Lgr_done
+	ldp	q1, q2, [x2], #32       // final 8 pixels
+	uxtl	v3.8h, v1.8b
+	uxtl2	v4.8h, v1.16b
+	umull	v5.4s, v3.4h, v29.4h
+	umull2	v6.4s, v3.8h, v29.8h
+	umull	v7.4s, v4.4h, v29.4h
+	umull2	v16.4s, v4.8h, v29.8h
+	addp	v5.4s, v5.4s, v6.4s
+	addp	v7.4s, v7.4s, v16.4s
+	addp	v5.4s, v5.4s, v7.4s
+	uxtl	v3.8h, v2.8b
+	uxtl2	v4.8h, v2.16b
+	umull	v6.4s, v3.4h, v29.4h
+	umull2	v16.4s, v3.8h, v29.8h
+	umull	v7.4s, v4.4h, v29.4h
+	umull2	v17.4s, v4.8h, v29.8h
+	addp	v6.4s, v6.4s, v16.4s
+	addp	v7.4s, v7.4s, v17.4s
+	addp	v6.4s, v6.4s, v7.4s
 	add	v5.4s, v5.4s, v28.4s
 	add	v6.4s, v6.4s, v28.4s
 	ushr	v5.4s, v5.4s, #14
@@ -990,9 +1111,6 @@ RGBAToGray:
 	xtn2	v5.8h, v6.4s
 	xtn	v5.8b, v5.8h
 	str	d5, [x0, x9]
-	add	x9, x9, #8
-	cmp	x9, x1
-	b.lt	.Lgr_loop
 .Lgr_done:
 	ret
 
