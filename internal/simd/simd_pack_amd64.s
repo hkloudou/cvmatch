@@ -1,4 +1,4 @@
-//go:build gc && cvmatch_asm
+//go:build gc && !purego
 
 #include "textflag.h"
 // Data-movement kernels: byte->complex packing (two real rows per

@@ -1,11 +1,11 @@
 // Package cvmatch implements OpenCV-compatible TM_CCOEFF_NORMED template
 // matching in pure Go — no OpenCV, no cgo, no dependencies.
 //
-// The default build is 100% high-level Go on every platform. Building
-// with -tags cvmatch_asm swaps the hot loops for hand-written SIMD
-// kernels (AVX2 on amd64, NEON on arm64), measured several-fold faster
-// end to end (per-scene numbers in the README benchmark matrix); on
-// other architectures the tag is a no-op.
+// The default build runs hand-written SIMD kernels on the hot loops
+// (AVX2 on amd64, NEON on arm64), measured several-fold faster end to
+// end (per-scene numbers in the README benchmark matrix). Building with
+// -tags purego opts out of all assembly for a 100% high-level Go
+// binary; other architectures run that scalar code either way.
 //
 // Match is numerically aligned with OpenCV's matchTemplate + minMaxLoc on
 // CV_8UC4 input (the classic ImageToMatRGBA-style pipeline), while

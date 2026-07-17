@@ -1,4 +1,4 @@
-//go:build gc && cvmatch_asm
+//go:build gc && !purego
 
 #include "textflag.h"
 // FFT kernels: the radix-2 stage cascade, column-direction butterflies

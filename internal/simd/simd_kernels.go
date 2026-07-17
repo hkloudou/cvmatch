@@ -1,4 +1,4 @@
-//go:build (amd64 || arm64) && gc && cvmatch_asm
+//go:build (amd64 || arm64) && gc && !purego
 
 package simd
 

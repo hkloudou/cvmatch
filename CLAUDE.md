@@ -37,12 +37,12 @@ Any transformation is legal only if it provably preserves every output bit:
 
 ## SIMD kernel workflow (`internal/simd`)
 
-- The kernels are **opt-in**: they compile only under `-tags cvmatch_asm`
-  (on amd64/arm64 + gc). The default build is 100% high-level Go — the
-  safe mode — with `simd.Enabled` a constant false so every kernel call
-  site dead-code-eliminates. The SIMD build measures ~4-5x end to end on
-  amd64 and ~2.5x on arm64; both modes must stay bit-identical and both
-  run in CI on both arches.
+- The kernels are **default-on** (amd64/arm64 + gc); `-tags purego`
+  (community-standard tag) opts out to 100% high-level Go with
+  `simd.Enabled` a constant false so every kernel call site
+  dead-code-eliminates. The kernels measure several-fold end to end
+  (exact ranges live in the generated summary); both modes must stay
+  bit-identical and both run in CI on both arches.
 - Shared, arch-independent contracts live in `simd_kernels.go`; every
   kernel's doc comment states its exactness argument and bounds contract.
 - The asm is split by domain — amd64: `simd_amd64.s` (CPU detection) +
@@ -75,14 +75,14 @@ Any transformation is legal only if it provably preserves every output bit:
 ## Validation gates (run all before pushing kernel/core changes)
 
 ```sh
-go vet ./... && go vet -tags cvmatch_asm ./... && (cd bench && go vet ./...)
-go test -count=1 .                    # default build (golden anchors, scalar)
-go test -tags cvmatch_asm -count=1 .  # SIMD build (kernels + asm-vs-scalar parity)
-go test -race -count=1 . && go test -tags cvmatch_asm -race -count=1 .
-GOOS=linux GOARCH=arm64 go test -tags cvmatch_asm -c -o /tmp/t.arm64 . \
+go vet ./... && go vet -tags purego ./... && (cd bench && go vet ./...)
+go test -count=1 .                    # default build (kernels + asm-vs-scalar parity)
+go test -tags purego -count=1 .       # no-asm safe mode (golden anchors, scalar)
+go test -race -count=1 . && go test -tags purego -race -count=1 .
+GOOS=linux GOARCH=arm64 go test -c -o /tmp/t.arm64 . \
   && qemu-aarch64-static /tmp/t.arm64      # NEON suite under emulation
-GOOS=linux GOARCH=arm64 go test -c -o /tmp/tg.arm64 . \
-  && qemu-aarch64-static /tmp/tg.arm64     # arm64 default build too
+GOOS=linux GOARCH=arm64 go test -tags purego -c -o /tmp/tg.arm64 . \
+  && qemu-aarch64-static /tmp/tg.arm64     # arm64 no-asm build too
 # TestGoldenOutputs passing on both architectures in both modes IS the
 # bit-identity proof (the constants pin every output bit)
 for t in linux/386 linux/riscv64 windows/amd64 wasip1/wasm darwin/arm64; do
@@ -156,8 +156,8 @@ hand-written. **amd64 and arm64 are peer configurations with identical
 comparison dimensions**: one speed chart, one panel per architecture
 (representative scenes; full detail in the tables), each showing native
 OpenCV + {asm, no-asm} × {Match, MatchGray} with ratios vs that
-architecture's native. Keys: `asm*`/`agray*` = `-tags cvmatch_asm`,
-`go*`/`gray*` = default build, `native`, `A` suffix = arm64
+architecture's native. Keys: `asm*`/`agray*` = default build,
+`go*`/`gray*` = `-tags purego`, `native`, `A` suffix = arm64
 (`nativeA`). Colors are meaning-stable (green = native, blue family =
 Match, orange family = MatchGray; solid = asm, light = no-asm); build
 labels are asm / no-asm — never "pure Go", both builds are pure Go in
@@ -174,9 +174,10 @@ the no-cgo sense.
   on both architectures); the golden-output tests recorded while both
   cores existed remain the bit-identity anchor, alongside the native
   OpenCV parity jobs in `bench/`.
-- Phase 4 made the assembly a global opt-in switch (`-tags cvmatch_asm`):
-  the default build is pure high-level Go (the safe mode; the kernels
-  measure several-fold — exact ranges live in the generated README
+- Phase 4 made the assembly a global tag switch, and after the no-asm
+  default measurably lost to native OpenCV on 8/14 scenes the owner
+  flipped the polarity: kernels are default-on, `-tags purego` opts out
+  (the kernels measure several-fold — exact ranges live in the generated
   summary), and the benchmark comparison became five-way (native + both
   builds on both architectures).
 - Phase 5 cleaned the release flow: bench-charts (weekly + dispatch) is
