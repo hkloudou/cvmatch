@@ -37,15 +37,25 @@ func FFTCols4(r0, r1, r2, r3 []complex64, w1, w2a, w2b complex64)
 func MulConj(spec, tspec []complex64)
 
 // NormRow evaluates the TM_CCOEFF_NORMED tail over one chunk of n result
-// elements. wt holds cn lanes of window sums followed by one lane of
-// window square sums, each stride float64s apart, all exact integers.
-// Every vector lane executes the scalar op sequence (divides and square
-// roots are correctly rounded); n must be a multiple of 4 (the caller
-// finishes the tail in Go). cn must be 1, 3 or 4.
+// elements from three float32 lanes at wt, each stride floats apart:
+// lane0 (the exact integer cross Σ_k wndSum_k·templSum_k for cn ≥ 3, or
+// the raw window sum for cn = 1 with the template mean folded into
+// numScale), idiff (area·wndSum2 − Σ_k wndSum_k², the exact-integer
+// variance numerator, ≥ 0) and s2 (the raw window square sum) — the
+// channel count is folded into the lanes and constants, so one kernel
+// serves every cn. Per element: num = corr − lane0·numScale;
+// diff2 = idiff·varScale; lim = min(eps·s2, 0.5); den = diff2 > lim ?
+// sqrt(diff2)·templNorm : 0; then OpenCV's guard ladder (|num| < den →
+// num/den; < den·1.125 → ±1; else 0). Every vector lane executes the
+// scalar normOne op sequence with correctly rounded float32
+// mul/sub/sqrt/div and exact predicates/bit-selects — no FMA (fusing
+// here would break asm↔scalar bit-identity; declined by design, see the
+// Phase 7 ledger). n must be a multiple of 8 (the caller finishes the
+// tail in Go).
 //
 //go:noescape
-func NormRow(rrow []float32, crow []float32, wt *float64, stride, n, cn int,
-	mean *[4]float64, invArea, eps, templNorm float64)
+func NormRow(rrow []float32, crow []float32, wt *float32, stride, n int,
+	numScale, varScale, eps, templNorm float32)
 
 // PackRows2 fills z[i] = complex(float32(ra[i*step]), float32(rb[i*step]))
 // for i < len(z); step must be 1 or 4. uint8->float32 conversions are
@@ -129,13 +139,19 @@ func SlideCols1(colSum []int32, colSum2 []int64, rsub, radd []uint8)
 //go:noescape
 func SlideCols4(colSum []int32, colSum2 []int64, rsub, radd []uint8, cn int)
 
-// SlideSpill1 runs the single-channel normalize spill: for each i,
-// wt[i] = float64(s0), q2[i] = float64(s2), then the window slides by
-// s0 += hi[i]-lo[i], s2 += hi2[i]-lo2[i]; the advanced sums are
-// returned. All inputs are exact nonnegative integers below 2^52, so
-// the int64->float64 conversions are exact and the additions are
-// order-fixed scalar chains — identical to the Go loop. lo/hi/lo2/hi2
-// hold at least len(wt) elements; len(q2) >= len(wt).
+// SpillStats1 runs the single-channel normalize spill over len(wt)
+// elements (a multiple of 4): element i gets the three float32 lanes
+// s0, idiff = area·s2 − s0² and s2 — each through the same
+// exact int64 → float64 → float32 double conversion as the scalar spill
+// (float64(v) is one correct rounding for |v| < 2^62, float32 of it the
+// second) — then the window slides s0 += hi[i]−lo[i], s2 += hi2[i]−lo2[i];
+// the advanced sums are returned. All integer arithmetic is exact: the
+// products decompose into signed 32×32→64 pieces (s0 < 2^31 by the
+// matchU8 area bound; the caller gates th ≤ 32767 so the row-delta
+// products fit) and int64 prefix regrouping is free, so output is
+// bit-identical to the scalar loop. wt holds the s0 lane; the idiff and
+// s2 lanes live stride and 2·stride floats later. lo/hi/lo2/hi2 hold at
+// least len(wt) elements.
 //
 //go:noescape
-func SlideSpill1(wt, q2 []float64, lo, hi []int32, lo2, hi2 []int64, s0, s2 int64) (ns0, ns2 int64)
+func SpillStats1(wt []float32, stride int, lo, hi []int32, lo2, hi2 []int64, s0, s2, area int64) (ns0, ns2 int64)

@@ -33,84 +33,77 @@
 .text
 
 // ---------------------------------------------------------------------------
-// NormRow: x0=rrow, x1=crow, x2=wt, x3=stride, x4=n (multiple of 4, > 0),
-// x5=cn, x6=mean; v0.d[0]=invArea, v1.d[0]=eps, v2.d[0]=templNorm.
-// The TM_CCOEFF_NORMED tail at f64x2, mirroring the amd64 norm_tail4 ops:
-// clamp/lim/sqrt/guarded-div/copysign-sat, all exact or correctly rounded.
+// NormRow: x0=rrow, x1=crow, x2=wt (lane0), x3=stride, x4=n (multiple
+// of 8, > 0); v0.s[0]=numScale, v1.s[0]=varScale, v2.s[0]=eps,
+// v3.s[0]=templNorm.
+// One float32 kernel for every channel count — the spill folded the
+// channels into the cross/idiff/s2 lanes (exact integers, converted
+// once). Two f32x4 halves (A/B) per pass, mirroring the amd64 kernel op
+// for op: mul/sub/fsqrt/fdiv correctly rounded, fcmgt/and/bsl exact.
+// Deliberately no fmla: fusing cross*invArea into the subtract would
+// break asm<->purego bit-identity (Phase 7 ledger, fma-everywhere).
+// Register map: v28=invArea v29=eps v30=templNorm v27=0.5 v25=1.0
+// v24=1.125 v23=sign mask; x7=stride bytes, x9/x10=idiff/s2 lane bases,
+// x8=i, x11=lane addressing scratch. Per half (A/B): v3/v13=num,
+// v5/v15=diff2->numer->dv, v6/v16=lim->m2, v7/v17=den, v8/v18=sat/inner,
+// v9/v19=guard mask->result, v10/v20=|num|, v11/v21=m1, v12=divisor.
 .global NormRow
 NormRow:
-	dup	v28.2d, v0.d[0]         // invArea
-	dup	v29.2d, v1.d[0]         // eps
-	dup	v30.2d, v2.d[0]         // templNorm
-	fmov	v27.2d, #0.5
-	fmov	v25.2d, #1.0
-	fmov	v24.2d, #1.125
-	mov	x9, #0x8000000000000000
-	dup	v23.2d, x9              // f64 sign mask
-	movi	v22.2d, #0              // +0.0
-	lsl	x7, x3, #3              // stride in bytes
+	dup	v28.4s, v0.s[0]         // numScale
+	dup	v26.4s, v1.s[0]         // varScale
+	dup	v29.4s, v2.s[0]         // eps
+	dup	v30.4s, v3.s[0]         // templNorm
+	fmov	v27.4s, #0.5
+	fmov	v25.4s, #1.0
+	fmov	v24.4s, #1.125
+	mov	w9, #0x80000000
+	dup	v23.4s, w9              // f32 sign mask
+	lsl	x7, x3, #2              // stride in bytes
+	add	x9, x2, x7              // idiff lane base
+	add	x10, x9, x7             // s2 lane base
 	mov	x8, #0                  // i
-	// n is a multiple of 4: each pass handles two f64x2 halves and the
-	// k-loop shares one mean load and one 32-byte wt load across both.
 .Lnr_loop:
-	ldr	q3, [x1], #16           // crow[i..i+3] (4 f32)
-	fcvtl2	v13.2d, v3.4s           // num, high half (exact widen)
-	fcvtl	v3.2d, v3.2s            // num, low half
-	movi	v4.2d, #0               // wndMean2 accumulators
-	movi	v14.2d, #0
-	add	x9, x2, x8, lsl #3      // &wt[i]
-	mov	x10, x5                 // k = cn
-	mov	x11, x6                 // &mean[0]
-.Lnr_k:
-	ldp	q5, q15, [x9]           // t lanes, both halves
-	add	x9, x9, x7
-	ldr	d7, [x11], #8
-	dup	v7.2d, v7.d[0]          // mean[k]
-	fmul	v6.2d, v5.2d, v5.2d
-	fadd	v4.2d, v4.2d, v6.2d     // wndMean2 += t*t
-	fmul	v16.2d, v15.2d, v15.2d
-	fadd	v14.2d, v14.2d, v16.2d
-	fmul	v6.2d, v5.2d, v7.2d
-	fsub	v3.2d, v3.2d, v6.2d     // num -= t*mean[k]
-	fmul	v16.2d, v15.2d, v7.2d
-	fsub	v13.2d, v13.2d, v16.2d
-	subs	x10, x10, #1
-	b.ne	.Lnr_k
-	ldp	q8, q18, [x9]           // s2d = q2 lanes (wt + cn*stride)
-	fmul	v4.2d, v4.2d, v28.2d    // wndMean2 *= invArea
-	fmul	v14.2d, v14.2d, v28.2d
-	fsub	v5.2d, v8.2d, v4.2d     // diff2
-	fsub	v15.2d, v18.2d, v14.2d
-	fmax	v5.2d, v5.2d, v22.2d    // clamp at 0
-	fmax	v15.2d, v15.2d, v22.2d
-	fmul	v6.2d, v8.2d, v29.2d    // lim = eps*s2d
-	fmul	v16.2d, v18.2d, v29.2d
-	fmin	v6.2d, v6.2d, v27.2d    // min(lim, 0.5)
-	fmin	v16.2d, v16.2d, v27.2d
-	fsqrt	v7.2d, v5.2d
-	fsqrt	v17.2d, v15.2d
-	fmul	v7.2d, v7.2d, v30.2d    // den = sqrt(diff2)*templNorm
-	fmul	v17.2d, v17.2d, v30.2d
-	fcmgt	v9.2d, v5.2d, v6.2d     // diff2 > lim
-	fcmgt	v19.2d, v15.2d, v16.2d
+	add	x11, x2, x8, lsl #2
+	ldp	q5, q15, [x11]          // lane0 A, B
+	fmul	v5.4s, v5.4s, v28.4s    // lane0*numScale
+	fmul	v15.4s, v15.4s, v28.4s
+	ldp	q3, q13, [x1], #32      // corr A, B
+	fsub	v3.4s, v3.4s, v5.4s     // num = corr - lane0*numScale
+	fsub	v13.4s, v13.4s, v15.4s
+	add	x11, x9, x8, lsl #2
+	ldp	q5, q15, [x11]          // idiff A, B
+	fmul	v5.4s, v5.4s, v26.4s    // diff2 = idiff*varScale (>= +0)
+	fmul	v15.4s, v15.4s, v26.4s
+	add	x11, x10, x8, lsl #2
+	ldp	q8, q18, [x11]          // s2 A, B
+	fmul	v6.4s, v8.4s, v29.4s    // e = eps*s2
+	fmul	v16.4s, v18.4s, v29.4s
+	fmin	v6.4s, v6.4s, v27.4s    // lim = min(e, 0.5)
+	fmin	v16.4s, v16.4s, v27.4s
+	fsqrt	v7.4s, v5.4s
+	fsqrt	v17.4s, v15.4s
+	fmul	v7.4s, v7.4s, v30.4s    // sq = sqrt(diff2)*templNorm
+	fmul	v17.4s, v17.4s, v30.4s
+	fcmgt	v9.4s, v5.4s, v6.4s     // diff2 > lim
+	fcmgt	v19.4s, v15.4s, v16.4s
 	and	v7.16b, v7.16b, v9.16b  // den, or 0 below the guard
 	and	v17.16b, v17.16b, v19.16b
-	fabs	v10.2d, v3.2d           // an = |num| (bit op, exact)
-	fabs	v20.2d, v13.2d
-	fcmgt	v11.2d, v7.2d, v10.2d   // m1 = an < den
-	fcmgt	v21.2d, v17.2d, v20.2d
+	fabs	v10.4s, v3.4s           // an = |num| (bit op, exact)
+	fabs	v20.4s, v13.4s
+	fcmgt	v11.4s, v7.4s, v10.4s   // m1 = an < den
+	fcmgt	v21.4s, v17.4s, v20.4s
 	mov	v12.16b, v11.16b
 	bsl	v12.16b, v7.16b, v25.16b // divisor = m1 ? den : 1.0
 	and	v5.16b, v3.16b, v11.16b // m1 ? num : 0
-	fdiv	v5.2d, v5.2d, v12.2d    // dv
+	fdiv	v5.4s, v5.4s, v12.4s    // dv A
 	mov	v12.16b, v21.16b
 	bsl	v12.16b, v17.16b, v25.16b
 	and	v15.16b, v13.16b, v21.16b
-	fdiv	v15.2d, v15.2d, v12.2d
-	fmul	v6.2d, v7.2d, v24.2d    // den*1.125
-	fcmgt	v6.2d, v6.2d, v10.2d    // m2 = an < den*1.125
-	fmul	v16.2d, v17.2d, v24.2d
-	fcmgt	v16.2d, v16.2d, v20.2d
+	fdiv	v15.4s, v15.4s, v12.4s  // dv B
+	fmul	v6.4s, v7.4s, v24.4s    // den*1.125
+	fcmgt	v6.4s, v6.4s, v10.4s    // m2 = an < den*1.125
+	fmul	v16.4s, v17.4s, v24.4s
+	fcmgt	v16.4s, v16.4s, v20.4s
 	and	v8.16b, v3.16b, v23.16b
 	orr	v8.16b, v8.16b, v25.16b // sat = copysign(1, num)
 	and	v8.16b, v8.16b, v6.16b  // inner = m2 ? sat : 0
@@ -121,10 +114,8 @@ NormRow:
 	bsl	v9.16b, v5.16b, v8.16b  // m1 ? dv : inner
 	mov	v19.16b, v21.16b
 	bsl	v19.16b, v15.16b, v18.16b
-	fcvtn	v9.2s, v9.2d            // correctly rounded narrow
-	fcvtn2	v9.4s, v19.2d
-	str	q9, [x0], #16
-	add	x8, x8, #4
+	stp	q9, q19, [x0], #32
+	add	x8, x8, #8
 	cmp	x8, x4
 	b.lt	.Lnr_loop
 	ret
@@ -433,65 +424,6 @@ SlideCols1:
 	ret
 
 // ---------------------------------------------------------------------------
-// SlideSpill1: x0=wt, x1=n, x2=q2, x3=lo, x4=hi, x5=lo2, x6=hi2,
-// x7=s0, x8=s2. Leaves the advanced sums in x7/x8 for the template to
-// store. wt[i]=float64(s0), q2[i]=float64(s2), then s0 += hi[i]-lo[i],
-// s2 += hi2[i]-lo2[i]. scvtf on integers < 2^52 is exact, and the sum
-// chains run scalar in registers — identical values to the Go loop.
-.global SlideSpill1
-SlideSpill1:
-	and	x12, x1, #-2
-	mov	x13, #0
-.Lss_loop:
-	cmp	x13, x12
-	b.ge	.Lss_tail
-	ldrsw	x9, [x4], #4            // hi[i]
-	ldrsw	x10, [x3], #4           // lo[i]
-	sub	x9, x9, x10
-	add	x9, x7, x9              // s1 = s0 + d0
-	fmov	d0, x7
-	mov	v0.d[1], x9
-	scvtf	v0.2d, v0.2d            // exact
-	str	q0, [x0], #16
-	ldrsw	x10, [x4], #4
-	ldrsw	x11, [x3], #4
-	sub	x10, x10, x11
-	add	x7, x9, x10             // s0 advanced past both
-	ldr	x9, [x6], #8            // hi2[i]
-	ldr	x10, [x5], #8           // lo2[i]
-	sub	x9, x9, x10
-	add	x9, x8, x9              // t1 = s2 + e0
-	fmov	d1, x8
-	mov	v1.d[1], x9
-	scvtf	v1.2d, v1.2d
-	str	q1, [x2], #16
-	ldr	x10, [x6], #8
-	ldr	x11, [x5], #8
-	sub	x10, x10, x11
-	add	x8, x9, x10             // s2 advanced
-	add	x13, x13, #2
-	b	.Lss_loop
-.Lss_tail:
-	cmp	x13, x1
-	b.ge	.Lss_done
-	scvtf	d0, x7
-	str	d0, [x0], #8
-	scvtf	d1, x8
-	str	d1, [x2], #8
-	ldrsw	x9, [x4], #4
-	ldrsw	x10, [x3], #4
-	sub	x9, x9, x10
-	add	x7, x7, x9
-	ldr	x9, [x6], #8
-	ldr	x10, [x5], #8
-	sub	x9, x9, x10
-	add	x8, x8, x9
-	add	x13, x13, #1
-	b	.Lss_tail
-.Lss_done:
-	ret
-
-// ---------------------------------------------------------------------------
 // SlideCols4: x0=colSum, x1=colSum2, x2=pixels (multiple of 8), x3=rsub,
 // x4=radd, x5=cn. All four colSum lanes slide per pixel; colSum2 gets the
 // summed squared channel deltas with alpha masked out when cn == 3.
@@ -596,4 +528,121 @@ SlideCols4:
 	cmp	x9, x2
 	b.lt	.Ls4_loop
 .Ls4_done:
+	ret
+
+// ---------------------------------------------------------------------------
+// SpillStats1: x0=wt(s0 lane), x1=n (multiple of 4, > 0), x2=stride,
+// x3=lo, x4=hi, x5=lo2, x6=hi2, x7=s0 (in/out), x8=s2 (in/out),
+// x9=area. The cn=1 normalize spill, 4 elements per pass, mirroring the
+// amd64 kernel: window sums stay below 2^31 (matchU8 area bound), so
+// every wide product is one smull 32x32->64, the running idiff advances
+// by Didiff = area*d2 - 2*d*s0 - d*d, and int64 prefix regrouping is
+// exact. Emitted lanes are float32(float64(v)): scvtf.2d is the one
+// correct rounding to f64, fcvtn the one to f32 — the scalar spill's
+// exact sequence.
+// Register map: x11=idiff base x12=s2 base x13/x15=scalar scratch x14=i
+// v28=area.4s v31=0; per pass: v0=d32 v4=s0v32 v5/v6=s0 widen
+// v7/v8=d2 v9/v10=inclusive prefixes v12/v13=t2v v15=idiff0
+// v16=d2_32 v17-v22=products v23/v24=idiff64
+.global SpillStats1
+SpillStats1:
+	lsl	x13, x2, #2             // stride in bytes
+	add	x11, x0, x13            // idiff lane base
+	add	x12, x11, x13           // s2 lane base
+	dup	v28.4s, w9              // area (< 2^23)
+	movi	v31.16b, #0
+	mov	x14, #0                 // i
+.Lsp1_loop:
+	// idiff0 = area*s2 - s0*s0 at quad entry (scalar, exact)
+	mul	x13, x8, x9
+	mul	x15, x7, x7
+	sub	x13, x13, x15
+	dup	v15.2d, x13             // idiff0
+	// d = hi-lo (int32x4); 32-bit exclusive prefix -> s0v
+	add	x15, x4, x14, lsl #2
+	ldr	q0, [x15]
+	add	x15, x3, x14, lsl #2
+	ldr	q1, [x15]
+	sub	v0.4s, v0.4s, v1.4s     // d
+	ext	v1.16b, v31.16b, v0.16b, #12
+	add	v2.4s, v0.4s, v1.4s
+	ext	v3.16b, v31.16b, v2.16b, #8
+	add	v2.4s, v2.4s, v3.4s     // inclusive prefix of d
+	ext	v3.16b, v31.16b, v2.16b, #12
+	dup	v4.4s, w7
+	add	v4.4s, v4.4s, v3.4s     // s0v (pre-slide, < 2^31)
+	smov	x15, v2.s[3]
+	add	x7, x7, x15             // s0 advanced past the quad
+	// s0 lane: widen and convert (one rounding each step)
+	ushll	v5.2d, v4.2s, #0
+	ushll2	v6.2d, v4.4s, #0
+	scvtf	v5.2d, v5.2d
+	scvtf	v6.2d, v6.2d
+	fcvtn	v5.2s, v5.2d
+	fcvtn2	v5.4s, v6.2d
+	add	x15, x0, x14, lsl #2
+	str	q5, [x15]
+	// d2 = hi2-lo2 (int64x2 x2)
+	add	x15, x6, x14, lsl #3
+	ldp	q7, q8, [x15]
+	add	x15, x5, x14, lsl #3
+	ldp	q9, q10, [x15]
+	sub	v7.2d, v7.2d, v9.2d
+	sub	v8.2d, v8.2d, v10.2d
+	// t2v = s2 + 64-bit exclusive prefix of d2; advance scalar s2
+	ext	v9.16b, v31.16b, v7.16b, #8
+	add	v9.2d, v9.2d, v7.2d     // incl A
+	ext	v10.16b, v31.16b, v8.16b, #8
+	add	v10.2d, v10.2d, v8.2d
+	dup	v11.2d, v9.d[1]
+	add	v10.2d, v10.2d, v11.2d  // incl B
+	ext	v12.16b, v31.16b, v9.16b, #8
+	ext	v13.16b, v9.16b, v10.16b, #8
+	dup	v14.2d, x8
+	add	v12.2d, v12.2d, v14.2d  // t2v lanes 0-1
+	add	v13.2d, v13.2d, v14.2d  // t2v lanes 2-3
+	umov	x15, v10.d[1]
+	add	x8, x8, x15             // s2 advanced past the quad
+	// Didiff = area*d2 - 2*d*s0v - d*d (each product 32x32->64)
+	xtn	v16.2s, v7.2d
+	xtn2	v16.4s, v8.2d           // d2 as int32 (|d2| < 2^31: th gate)
+	smull	v17.2d, v16.2s, v28.2s
+	smull2	v18.2d, v16.4s, v28.4s // area*d2
+	smull	v19.2d, v0.2s, v4.2s
+	smull2	v20.2d, v0.4s, v4.4s   // d*s0v
+	shl	v19.2d, v19.2d, #1
+	shl	v20.2d, v20.2d, #1
+	sub	v17.2d, v17.2d, v19.2d
+	sub	v18.2d, v18.2d, v20.2d
+	smull	v21.2d, v0.2s, v0.2s
+	smull2	v22.2d, v0.4s, v0.4s   // d*d
+	sub	v17.2d, v17.2d, v21.2d  // Didiff lanes 0-1
+	sub	v18.2d, v18.2d, v22.2d  // Didiff lanes 2-3
+	// idiff64 = idiff0 + 64-bit exclusive prefix of Didiff
+	ext	v9.16b, v31.16b, v17.16b, #8
+	add	v9.2d, v9.2d, v17.2d
+	ext	v10.16b, v31.16b, v18.16b, #8
+	add	v10.2d, v10.2d, v18.2d
+	dup	v11.2d, v9.d[1]
+	add	v10.2d, v10.2d, v11.2d
+	ext	v23.16b, v31.16b, v9.16b, #8
+	ext	v24.16b, v9.16b, v10.16b, #8
+	add	v23.2d, v23.2d, v15.2d  // idiff64 lanes 0-1
+	add	v24.2d, v24.2d, v15.2d  // idiff64 lanes 2-3
+	// converts: scvtf (one rounding to f64), fcvtn (one to f32); stores
+	scvtf	v23.2d, v23.2d
+	scvtf	v24.2d, v24.2d
+	fcvtn	v23.2s, v23.2d
+	fcvtn2	v23.4s, v24.2d
+	add	x15, x11, x14, lsl #2
+	str	q23, [x15]              // idiff lane
+	scvtf	v12.2d, v12.2d
+	scvtf	v13.2d, v13.2d
+	fcvtn	v12.2s, v12.2d
+	fcvtn2	v12.4s, v13.2d
+	add	x15, x12, x14, lsl #2
+	str	q12, [x15]              // s2 lane
+	add	x14, x14, #4
+	cmp	x14, x1
+	b.lt	.Lsp1_loop
 	ret

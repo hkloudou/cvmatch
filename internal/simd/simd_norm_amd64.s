@@ -14,151 +14,78 @@
 // is commuted; IEEE addition commutes bit-exactly). Never VFMADD*: every
 // multiply and add rounds separately, exactly like the scalar code.
 
-// func NormRow(rrow []float32, crow []float32, wt *float64, stride, n, cn int,
-//              mean *[4]float64, invArea, eps, templNorm float64)
-// Register map: constants Y9..Y15 = 0.5, 1.0, 1.125, invArea, eps,
-// templNorm, m0; m1..m3 live in Y6..Y8 when cn needs them.
+// func NormRow(rrow []float32, crow []float32, wt *float32, stride, n int,
+//              numScale, varScale, eps, templNorm float32)
+// One float32 kernel for every channel count: the spill already folded
+// the channels into the cross/idiff/s2 lanes (exact integers, converted
+// once), so the tail runs 8 lanes per iteration with no cn dispatch and
+// no f64 anywhere. Sequence per lane = the scalar normOne exactly:
+// mul/sub/sqrt/div correctly rounded, predicates and blends exact — and
+// deliberately NO FMA: fusing cross*invArea into the subtract would
+// break asm<->purego bit-identity (Phase 7 ledger, fma-everywhere).
 // Register map (NormRow):
-//   DI=rrow  SI=crow  R8=wt(t0)  R9=stride(bytes)  R10=t1|q2(cn1)
-//   R11=t2  R12=t3|q2(cn3)  R13=q2(cn4)  DX=n  CX=cn  BX=mean  AX=index
-//   Y9=0.5  Y10=1.0  Y11=1.125  Y12=invArea  Y13=eps  Y14=templNorm
-//   Y15=mean[0]  Y6/Y7/Y8=mean[1..3] (cn>=3)
-//   loop scratch: Y0=num  Y1=t_k lanes  Y2=mul scratch  Y3=wndMean2
-//   Y4/Y5=den/guard lanes (see norm_tail4)
-TEXT ·NormRow(SB), NOSPLIT, $0-112
+//   DI=rrow  SI=crow  R8=wt(cross)  R9=stride(bytes)  R10=idiff lane
+//   R11=s2 lane  DX=n  AX=index
+//   Y9=0.5  Y10=1.0  Y11=1.125  Y12=numScale  Y8=varScale  Y13=eps
+//   Y14=templNorm
+//   Y15=abs mask; loop scratch: Y0=num  Y1=diff2/numer/dv  Y2=sq/scratch
+//   Y3=den  Y4=s2/m1  Y5=lim/an/m2
+TEXT ·NormRow(SB), NOSPLIT, $0-88
 	MOVQ rrow_base+0(FP), DI
 	MOVQ crow_base+24(FP), SI
-	MOVQ wt+48(FP), R8          // t0
+	MOVQ wt+48(FP), R8          // cross lane
 	MOVQ stride+56(FP), R9
-	SHLQ $3, R9                 // stride in bytes
+	SHLQ $2, R9                 // stride in bytes
 	MOVQ n+64(FP), DX
-	MOVQ cn+72(FP), CX
-	MOVQ mean+80(FP), BX
 
-	VBROADCASTSD normconst<>+0(SB), Y9    // 0.5
-	VBROADCASTSD normconst<>+8(SB), Y10   // 1.0
-	VBROADCASTSD normconst<>+16(SB), Y11  // 1.125
-	VBROADCASTSD invArea+88(FP), Y12
-	VBROADCASTSD eps+96(FP), Y13
-	VBROADCASTSD templNorm+104(FP), Y14
-	VBROADCASTSD 0(BX), Y15               // m0
+	VBROADCASTSS normconst<>+0(SB), Y9   // 0.5
+	VBROADCASTSS normconst<>+4(SB), Y10  // 1.0
+	VBROADCASTSS normconst<>+8(SB), Y11  // 1.125
+	VBROADCASTSS numScale+72(FP), Y12
+	VBROADCASTSS varScale+76(FP), Y8
+	VBROADCASTSS eps+80(FP), Y13
+	VBROADCASTSS templNorm+84(FP), Y14
+	VMOVUPS      absmask<>(SB), Y15
 
-	LEAQ (R8)(R9*1), R10        // t1 (or q2 when cn==1)
-	LEAQ (R10)(R9*1), R11       // t2
-	LEAQ (R11)(R9*1), R12       // t3 (or q2 when cn==3)
+	LEAQ (R8)(R9*1), R10        // idiff lane
+	LEAQ (R10)(R9*1), R11       // s2 lane
 	XORQ AX, AX                 // element index
 
-	CMPQ CX, $3
-	JEQ  cn3_setup
-	CMPQ CX, $1
-	JEQ  cn1_loop
-	// cn == 4
-	VBROADCASTSD 8(BX), Y6      // m1
-	VBROADCASTSD 16(BX), Y7     // m2
-	VBROADCASTSD 24(BX), Y8     // m3
-	LEAQ (R12)(R9*1), R13       // q2 = wt + 4*stride
-
-cn4_loop:
+norm_loop:
 	CMPQ AX, DX
 	JGE  norm_done
-	VCVTPS2PD (SI)(AX*4), Y0    // num = crow
-	VMOVUPD   (R8)(AX*8), Y1    // t0
-	VMULPD    Y15, Y1, Y2
-	VSUBPD    Y2, Y0, Y0
-	VMULPD    Y1, Y1, Y3        // wm2
-	VMOVUPD   (R10)(AX*8), Y1   // t1
-	VMULPD    Y6, Y1, Y2
-	VSUBPD    Y2, Y0, Y0
-	VMULPD    Y1, Y1, Y2
-	VADDPD    Y2, Y3, Y3
-	VMOVUPD   (R11)(AX*8), Y1   // t2
-	VMULPD    Y7, Y1, Y2
-	VSUBPD    Y2, Y0, Y0
-	VMULPD    Y1, Y1, Y2
-	VADDPD    Y2, Y3, Y3
-	VMOVUPD   (R12)(AX*8), Y1   // t3
-	VMULPD    Y8, Y1, Y2
-	VSUBPD    Y2, Y0, Y0
-	VMULPD    Y1, Y1, Y2
-	VADDPD    Y2, Y3, Y3
-	VMOVUPD   (R13)(AX*8), Y4   // s2d
-	CALL      norm_tail4<>(SB)
-	ADDQ      $4, AX
-	JMP       cn4_loop
-
-cn3_setup:
-	VBROADCASTSD 8(BX), Y6      // m1
-	VBROADCASTSD 16(BX), Y7     // m2
-
-cn3_loop:
-	CMPQ AX, DX
-	JGE  norm_done
-	VCVTPS2PD (SI)(AX*4), Y0
-	VMOVUPD   (R8)(AX*8), Y1
-	VMULPD    Y15, Y1, Y2
-	VSUBPD    Y2, Y0, Y0
-	VMULPD    Y1, Y1, Y3
-	VMOVUPD   (R10)(AX*8), Y1
-	VMULPD    Y6, Y1, Y2
-	VSUBPD    Y2, Y0, Y0
-	VMULPD    Y1, Y1, Y2
-	VADDPD    Y2, Y3, Y3
-	VMOVUPD   (R11)(AX*8), Y1
-	VMULPD    Y7, Y1, Y2
-	VSUBPD    Y2, Y0, Y0
-	VMULPD    Y1, Y1, Y2
-	VADDPD    Y2, Y3, Y3
-	VMOVUPD   (R12)(AX*8), Y4   // q2 = wt + 3*stride
-	CALL      norm_tail4<>(SB)
-	ADDQ      $4, AX
-	JMP       cn3_loop
-
-cn1_loop:
-	CMPQ AX, DX
-	JGE  norm_done
-	VCVTPS2PD (SI)(AX*4), Y0
-	VMOVUPD   (R8)(AX*8), Y1
-	VMULPD    Y15, Y1, Y2
-	VSUBPD    Y2, Y0, Y0
-	VMULPD    Y1, Y1, Y3
-	VMOVUPD   (R10)(AX*8), Y4   // q2 = wt + stride
-	CALL      norm_tail4<>(SB)
-	ADDQ      $4, AX
-	JMP       cn1_loop
+	VMOVUPS   (R8)(AX*4), Y1    // lane0
+	VMULPS    Y12, Y1, Y1
+	VMOVUPS   (SI)(AX*4), Y0
+	VSUBPS    Y1, Y0, Y0        // num = corr - lane0*numScale
+	VMOVUPS   (R10)(AX*4), Y1
+	VMULPS    Y8, Y1, Y1        // diff2 = idiff*varScale (>= +0: both nonneg)
+	VMOVUPS   (R11)(AX*4), Y4   // s2
+	VMULPS    Y13, Y4, Y5       // e = eps*s2
+	VMINPS    Y5, Y9, Y5        // lim = 0.5 < e ? 0.5 : e
+	VSQRTPS   Y1, Y2
+	VMULPS    Y14, Y2, Y2       // sq = sqrt(diff2)*templNorm
+	VCMPPS    $0x12, Y5, Y1, Y3 // diff2 <= lim (LE_OQ)
+	VANDNPS   Y2, Y3, Y3        // den = mask ? 0 : sq
+	VANDPS    Y15, Y0, Y5       // an = |num|
+	VCMPPS    $0x11, Y3, Y5, Y4 // m1 = an < den (LT_OQ)
+	VANDPS    Y4, Y0, Y1        // numer = m1 ? num : 0
+	VBLENDVPS Y4, Y3, Y10, Y2   // divisor = m1 ? den : 1.0
+	VDIVPS    Y2, Y1, Y1        // dv
+	VMULPS    Y11, Y3, Y2       // den*1.125
+	VCMPPS    $0x11, Y2, Y5, Y5 // m2 = an < den*1.125
+	VANDPS    signmask<>(SB), Y0, Y2
+	VORPS     Y10, Y2, Y2       // sat = copysign(1, num); only selected
+	                            // when num is nonzero, where it equals
+	                            // the scalar num>0 ? 1 : -1
+	VANDPS    Y5, Y2, Y2        // inner = m2 ? sat : 0
+	VBLENDVPS Y4, Y1, Y2, Y2    // v = m1 ? dv : inner
+	VMOVUPS   Y2, (DI)(AX*4)
+	ADDQ      $8, AX
+	JMP       norm_loop
 
 norm_done:
 	VZEROUPPER
-	RET
-
-// norm_tail4: shared per-vector tail. In: Y0 = num, Y3 = wm2 (pre
-// invArea), Y4 = s2d; constants Y9=0.5 Y10=1.0 Y11=1.125 Y12=invArea
-// Y13=eps Y14=templNorm; AX = element index, DI = rrow. Clobbers Y0..Y5.
-TEXT norm_tail4<>(SB), NOSPLIT, $0-0
-	VMULPD  Y12, Y3, Y3         // wm2 *= invArea
-	VSUBPD  Y3, Y4, Y1          // diff2 = s2d - wm2
-	VXORPD  Y2, Y2, Y2
-	VMAXPD  Y2, Y1, Y1          // clamp at 0 (diff2 is never -0/NaN)
-	VMULPD  Y13, Y4, Y5         // e = eps*s2d
-	VMINPD  Y5, Y9, Y5          // lim = 0.5 < e ? 0.5 : e
-	VSQRTPD Y1, Y2
-	VMULPD  Y14, Y2, Y2         // sq = sqrt(diff2)*templNorm
-	VCMPPD  $0x12, Y5, Y1, Y3   // diff2 <= lim (LE_OQ)
-	VANDNPD Y2, Y3, Y3          // den = mask ? 0 : sq
-	VANDPD  absmask<>(SB), Y0, Y5 // an = |num|
-	VCMPPD  $0x11, Y3, Y5, Y4   // m1 = an < den (LT_OQ)
-	VANDPD  Y4, Y0, Y1          // numer = m1 ? num : 0
-	VBLENDVPD Y4, Y3, Y10, Y2   // divisor = m1 ? den : 1.0
-	VDIVPD  Y2, Y1, Y1          // dv
-	VMULPD  Y11, Y3, Y2         // den*1.125
-	VCMPPD  $0x11, Y2, Y5, Y5   // m2 = an < den*1.125
-	VANDPD  signmask<>(SB), Y0, Y2
-	VORPD   Y10, Y2, Y2         // sat = copysign(1, num); only selected
-	                            // when num is nonzero, where it equals
-	                            // the scalar num>0 ? 1 : -1
-	VANDPD  Y5, Y2, Y2          // inner = m2 ? sat : 0
-	VBLENDVPD Y4, Y1, Y2, Y2    // v = m1 ? dv : inner
-	VCVTPD2PSY Y2, X2
-	VMOVUPS X2, (DI)(AX*4)
 	RET
 
 // func MinMaxRow(row []float32) (minV, maxV float32, minI, maxI int)
@@ -458,97 +385,169 @@ DATA permlin<>+24(SB)/4, $6
 DATA permlin<>+28(SB)/4, $7
 GLOBL permlin<>(SB), RODATA|NOPTR, $32
 
-// func SlideSpill1(wt, q2 []float64, lo, hi []int32, lo2, hi2 []int64,
-//	s0, s2 int64) (ns0, ns2 int64)
-// The cn=1 normalize spill: wt[i]=float64(s0), q2[i]=float64(s2), then
-// s0 += hi[i]-lo[i], s2 += hi2[i]-lo2[i]. The sums are exact nonnegative
-// integers < 2^52, so float64(v) == asDouble(v | 2^52bits) - 2^52 with no
-// rounding anywhere; the integer chains run in scalar registers exactly
-// like the Go loop.
-TEXT ·SlideSpill1(SB), NOSPLIT, $0-176
-	MOVQ wt_base+0(FP), DI
-	MOVQ wt_len+8(FP), DX
-	MOVQ q2_base+24(FP), SI
-	MOVQ lo_base+48(FP), R8
-	MOVQ hi_base+72(FP), R9
-	MOVQ lo2_base+96(FP), R10
-	MOVQ hi2_base+120(FP), R11
-	MOVQ s0+144(FP), AX
-	MOVQ s2+152(FP), BX
-	MOVQ $0x4330000000000000, R12 // 2^52: OR-mask and, as a double, the bias
-	MOVQ R12, X14
-	PUNPCKLQDQ X14, X14
-	XORQ CX, CX
-	MOVQ DX, R15
-	ANDQ $-2, R15
-
-ss1_loop:
-	CMPQ CX, R15
-	JGE  ss1_tail
-	MOVLQSX (R9)(CX*4), R12     // hi[i]
-	MOVLQSX (R8)(CX*4), R13     // lo[i]
-	SUBQ    R13, R12
-	LEAQ    (AX)(R12*1), R13    // s1 = s0 + d0
-	MOVQ    AX, X0
-	MOVQ    R13, X1
-	PUNPCKLQDQ X1, X0           // (s0, s1)
-	POR     X14, X0
-	SUBPD   X14, X0             // exact int64 -> float64 pair
-	MOVUPS  X0, (DI)(CX*8)
-	MOVLQSX 4(R9)(CX*4), R12
-	MOVLQSX 4(R8)(CX*4), AX     // s0's old value is dead; reuse as scratch
-	SUBQ    AX, R12
-	LEAQ    (R13)(R12*1), AX    // s0 advanced past both
-	MOVQ    (R11)(CX*8), R12    // hi2[i]
-	SUBQ    (R10)(CX*8), R12
-	LEAQ    (BX)(R12*1), R13    // t1 = s2 + e0
-	MOVQ    BX, X2
-	MOVQ    R13, X3
-	PUNPCKLQDQ X3, X2
-	POR     X14, X2
-	SUBPD   X14, X2
-	MOVUPS  X2, (SI)(CX*8)
-	MOVQ    8(R11)(CX*8), R12
-	SUBQ    8(R10)(CX*8), R12
-	LEAQ    (R13)(R12*1), BX    // s2 advanced
-	ADDQ    $2, CX
-	JMP     ss1_loop
-
-ss1_tail:
-	CMPQ CX, DX
-	JGE  ss1_done
-	CVTSQ2SD AX, X0             // exact below 2^52
-	MOVSD    X0, (DI)(CX*8)
-	CVTSQ2SD BX, X1
-	MOVSD    X1, (SI)(CX*8)
-	MOVLQSX  (R9)(CX*4), R12
-	MOVLQSX  (R8)(CX*4), R13
-	SUBQ     R13, R12
-	ADDQ     R12, AX
-	MOVQ     (R11)(CX*8), R12
-	SUBQ     (R10)(CX*8), R12
-	ADDQ     R12, BX
-	INCQ     CX
-	JMP      ss1_tail
-
-ss1_done:
-	MOVQ AX, ns0+160(FP)
-	MOVQ BX, ns2+168(FP)
-	RET
-
-DATA absmask<>+0(SB)/8, $0x7fffffffffffffff
-DATA absmask<>+8(SB)/8, $0x7fffffffffffffff
-DATA absmask<>+16(SB)/8, $0x7fffffffffffffff
-DATA absmask<>+24(SB)/8, $0x7fffffffffffffff
+DATA absmask<>+0(SB)/8, $0x7fffffff7fffffff
+DATA absmask<>+8(SB)/8, $0x7fffffff7fffffff
+DATA absmask<>+16(SB)/8, $0x7fffffff7fffffff
+DATA absmask<>+24(SB)/8, $0x7fffffff7fffffff
 GLOBL absmask<>(SB), RODATA|NOPTR, $32
 
-DATA signmask<>+0(SB)/8, $0x8000000000000000
-DATA signmask<>+8(SB)/8, $0x8000000000000000
-DATA signmask<>+16(SB)/8, $0x8000000000000000
-DATA signmask<>+24(SB)/8, $0x8000000000000000
+DATA signmask<>+0(SB)/8, $0x8000000080000000
+DATA signmask<>+8(SB)/8, $0x8000000080000000
+DATA signmask<>+16(SB)/8, $0x8000000080000000
+DATA signmask<>+24(SB)/8, $0x8000000080000000
 GLOBL signmask<>(SB), RODATA|NOPTR, $32
 
-DATA normconst<>+0(SB)/8, $0.5
-DATA normconst<>+8(SB)/8, $1.0
-DATA normconst<>+16(SB)/8, $1.125
-GLOBL normconst<>(SB), RODATA|NOPTR, $24
+DATA normconst<>+0(SB)/4, $0x3f000000 // 0.5f
+DATA normconst<>+4(SB)/4, $0x3f800000 // 1.0f
+DATA normconst<>+8(SB)/4, $0x3f900000 // 1.125f
+GLOBL normconst<>(SB), RODATA|NOPTR, $12
+
+// func SpillStats1(wt []float32, stride int, lo, hi []int32, lo2, hi2 []int64,
+//	s0, s2, area int64) (ns0, ns2 int64)
+// The cn=1 normalize spill, 4 elements per pass. Everything integer is
+// exact: window sums stay below 2^31 (matchU8 area bound), so every wide
+// product decomposes into one signed 32x32->64 VPMULDQ, the running
+// idiff advances by Didiff = area*d2 - 2*d*s0 - d*d (algebra of
+// (s+d)^2), and int64 prefix-sum regrouping is free. Each emitted lane
+// is float32(float64(v)): float64 built exactly as hi*2^32 + lo (both
+// addends exact, one rounding) or a single 2^52 bithack when v < 2^52,
+// then one VCVTPD2PS — the same two roundings as the scalar spill.
+// Register map (SpillStats1):
+//   DI=wt(s0 lane) R10=idiff lane R11=s2 lane R9=stride(bytes) DX=n SI=i
+//   R8=lo BX=hi R12=lo2 R13=hi2 AX=s0 CX=s2 R14=idiff0 R15=scratch
+//   Y15=2^52 magic Y14=2^32(f64) Y13=low-32 mask Y11=area
+//   loop: Y0=d Y1/Y3=slide scratch Y2=inclusive prefix Y4=s0v
+//   Y6=Didiff/idiff64 Y7=d2 Y8=t2v/products Y9/Y10=converts
+TEXT ·SpillStats1(SB), NOSPLIT, $0-168
+	MOVQ wt_base+0(FP), DI
+	MOVQ wt_len+8(FP), DX
+	MOVQ stride+24(FP), R9
+	SHLQ $2, R9                 // stride in bytes
+	MOVQ lo_base+32(FP), R8
+	MOVQ hi_base+56(FP), BX
+	MOVQ lo2_base+80(FP), R12
+	MOVQ hi2_base+104(FP), R13
+	MOVQ s0+128(FP), AX
+	MOVQ s2+136(FP), CX
+	VPBROADCASTQ magic52<>(SB), Y15
+	VBROADCASTSD pow32<>(SB), Y14
+	VPBROADCASTQ mask32lo<>(SB), Y13
+	VPBROADCASTQ area+144(FP), Y11
+	LEAQ (DI)(R9*1), R10        // idiff lane
+	LEAQ (R10)(R9*1), R11       // s2 lane
+	XORQ SI, SI
+
+sp1_loop:
+	CMPQ SI, DX
+	JGE  sp1_done
+	// idiff0 = area*s2 - s0*s0 at quad entry (scalar, exact)
+	MOVQ  CX, R14
+	IMULQ area+144(FP), R14
+	MOVQ  AX, R15
+	IMULQ AX, R15
+	SUBQ  R15, R14
+	// d = hi-lo as int64 lanes; exclusive prefix -> per-element s0v
+	VPMOVSXDQ (BX)(SI*4), Y0
+	VPMOVSXDQ (R8)(SI*4), Y1
+	VPSUBQ    Y1, Y0, Y0        // d
+	VPERMQ    $0x93, Y0, Y1
+	VPAND     slidem1<>(SB), Y1, Y1
+	VPADDQ    Y1, Y0, Y2
+	VPERMQ    $0x4E, Y2, Y3
+	VPAND     slidem2<>(SB), Y3, Y3
+	VPADDQ    Y3, Y2, Y2        // inclusive prefix of d
+	VPERMQ    $0x93, Y2, Y3
+	VPAND     slidem1<>(SB), Y3, Y3
+	VMOVQ     AX, X4
+	VPBROADCASTQ X4, Y4
+	VPADDQ    Y3, Y4, Y4        // s0v (pre-slide, < 2^31)
+	VEXTRACTI128 $1, Y2, X3
+	VPEXTRQ   $1, X3, R15
+	ADDQ      R15, AX           // s0 advanced past the quad
+	// s0 lane: s0v < 2^31 < 2^52 -> one bithack is exactly float64(s0v)
+	VPOR      Y15, Y4, Y9
+	VSUBPD    Y15, Y9, Y9
+	VCVTPD2PSY Y9, X9
+	VMOVUPS   X9, (DI)(SI*4)
+	// Didiff = area*d2 - 2*d*s0v - d*d
+	VMOVDQU   (R13)(SI*8), Y7
+	VMOVDQU   (R12)(SI*8), Y8
+	VPSUBQ    Y8, Y7, Y7        // d2 (|d2| < 2^31: th gate)
+	VPMULDQ   Y11, Y7, Y6       // area*d2
+	VPMULDQ   Y0, Y4, Y8        // d*s0v
+	VPSLLQ    $1, Y8, Y8
+	VPSUBQ    Y8, Y6, Y6
+	VPMULDQ   Y0, Y0, Y8        // d*d
+	VPSUBQ    Y8, Y6, Y6        // Didiff
+	// t2v = s2 + exclusive prefix of d2; advance scalar s2
+	VPERMQ    $0x93, Y7, Y1
+	VPAND     slidem1<>(SB), Y1, Y1
+	VPADDQ    Y1, Y7, Y2
+	VPERMQ    $0x4E, Y2, Y3
+	VPAND     slidem2<>(SB), Y3, Y3
+	VPADDQ    Y3, Y2, Y2
+	VPERMQ    $0x93, Y2, Y3
+	VPAND     slidem1<>(SB), Y3, Y3
+	VMOVQ     CX, X8
+	VPBROADCASTQ X8, Y8
+	VPADDQ    Y3, Y8, Y8        // t2v
+	VEXTRACTI128 $1, Y2, X3
+	VPEXTRQ   $1, X3, R15
+	ADDQ      R15, CX
+	// idiff64 = idiff0 + exclusive prefix of Didiff
+	VPERMQ    $0x93, Y6, Y1
+	VPAND     slidem1<>(SB), Y1, Y1
+	VPADDQ    Y1, Y6, Y2
+	VPERMQ    $0x4E, Y2, Y3
+	VPAND     slidem2<>(SB), Y3, Y3
+	VPADDQ    Y3, Y2, Y2
+	VPERMQ    $0x93, Y2, Y3
+	VPAND     slidem1<>(SB), Y3, Y3
+	VMOVQ     R14, X6
+	VPBROADCASTQ X6, Y6
+	VPADDQ    Y3, Y6, Y6        // idiff64 (>= 0, < 2^62)
+	// s2 lane: t2v < 2^52 -> one bithack is exactly float64(t2v)
+	VPOR      Y15, Y8, Y9
+	VSUBPD    Y15, Y9, Y9
+	VCVTPD2PSY Y9, X9
+	VMOVUPS   X9, (R11)(SI*4)
+	// idiff lane: hi*2^32 + lo (exact addends, one rounding) -> f32
+	VPSRLQ    $32, Y6, Y9
+	VPAND     Y13, Y6, Y10
+	VPOR      Y15, Y9, Y9
+	VSUBPD    Y15, Y9, Y9
+	VPOR      Y15, Y10, Y10
+	VSUBPD    Y15, Y10, Y10
+	VMULPD    Y14, Y9, Y9
+	VADDPD    Y10, Y9, Y9
+	VCVTPD2PSY Y9, X9
+	VMOVUPS   X9, (R10)(SI*4)
+	ADDQ      $4, SI
+	JMP       sp1_loop
+
+sp1_done:
+	MOVQ AX, ns0+152(FP)
+	MOVQ CX, ns2+160(FP)
+	VZEROUPPER
+	RET
+
+DATA magic52<>+0(SB)/8, $0x4330000000000000
+GLOBL magic52<>(SB), RODATA|NOPTR, $8
+
+DATA pow32<>+0(SB)/8, $0x41F0000000000000 // 2^32 as float64
+GLOBL pow32<>(SB), RODATA|NOPTR, $8
+
+DATA mask32lo<>+0(SB)/8, $0x00000000FFFFFFFF
+GLOBL mask32lo<>(SB), RODATA|NOPTR, $8
+
+DATA slidem1<>+0(SB)/8, $0
+DATA slidem1<>+8(SB)/8, $0xFFFFFFFFFFFFFFFF
+DATA slidem1<>+16(SB)/8, $0xFFFFFFFFFFFFFFFF
+DATA slidem1<>+24(SB)/8, $0xFFFFFFFFFFFFFFFF
+GLOBL slidem1<>(SB), RODATA|NOPTR, $32
+
+DATA slidem2<>+0(SB)/8, $0
+DATA slidem2<>+8(SB)/8, $0
+DATA slidem2<>+16(SB)/8, $0xFFFFFFFFFFFFFFFF
+DATA slidem2<>+24(SB)/8, $0xFFFFFFFFFFFFFFFF
+GLOBL slidem2<>(SB), RODATA|NOPTR, $32

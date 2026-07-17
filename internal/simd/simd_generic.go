@@ -27,8 +27,8 @@ func MulConj(spec, tspec []complex64) {
 	panic("cvmatch: SIMD kernel on unsupported platform")
 }
 
-func NormRow(rrow []float32, crow []float32, wt *float64, stride, n, cn int,
-	mean *[4]float64, invArea, eps, templNorm float64) {
+func NormRow(rrow []float32, crow []float32, wt *float32, stride, n int,
+	numScale, varScale, eps, templNorm float32) {
 	panic("cvmatch: SIMD kernel on unsupported platform")
 }
 
@@ -76,6 +76,6 @@ func SlideCols4(colSum []int32, colSum2 []int64, rsub, radd []uint8, cn int) {
 	panic("cvmatch: SIMD kernel on unsupported platform")
 }
 
-func SlideSpill1(wt, q2 []float64, lo, hi []int32, lo2, hi2 []int64, s0, s2 int64) (ns0, ns2 int64) {
+func SpillStats1(wt []float32, stride int, lo, hi []int32, lo2, hi2 []int64, s0, s2, area int64) (ns0, ns2 int64) {
 	panic("cvmatch: SIMD kernel on unsupported platform")
 }

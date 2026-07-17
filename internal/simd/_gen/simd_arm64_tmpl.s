@@ -54,19 +54,18 @@ TEXT ·MulConj(SB), NOSPLIT, $0-48
 	// GENBODY: MulConj
 	RET
 
-// func NormRow(rrow []float32, crow []float32, wt *float64, stride, n, cn int,
-//	mean *[4]float64, invArea, eps, templNorm float64)
-TEXT ·NormRow(SB), NOSPLIT, $0-112
+// func NormRow(rrow []float32, crow []float32, wt *float32, stride, n int,
+//	numScale, varScale, eps, templNorm float32)
+TEXT ·NormRow(SB), NOSPLIT, $0-88
 	MOVD  rrow_base+0(FP), R0
 	MOVD  crow_base+24(FP), R1
 	MOVD  wt+48(FP), R2
 	MOVD  stride+56(FP), R3
 	MOVD  n+64(FP), R4
-	MOVD  cn+72(FP), R5
-	MOVD  mean+80(FP), R6
-	FMOVD invArea+88(FP), F0
-	FMOVD eps+96(FP), F1
-	FMOVD templNorm+104(FP), F2
+	FMOVS numScale+72(FP), F0
+	FMOVS varScale+76(FP), F1
+	FMOVS eps+80(FP), F2
+	FMOVS templNorm+84(FP), F3
 	// GENBODY: NormRow
 	RET
 
@@ -171,21 +170,22 @@ TEXT ·SlideCols1(SB), NOSPLIT, $0-96
 	// GENBODY: SlideCols1
 	RET
 
-// func SlideSpill1(wt, q2 []float64, lo, hi []int32, lo2, hi2 []int64,
-//	s0, s2 int64) (ns0, ns2 int64)
-TEXT ·SlideSpill1(SB), NOSPLIT, $0-176
+// func SpillStats1(wt []float32, stride int, lo, hi []int32, lo2, hi2 []int64,
+//	s0, s2, area int64) (ns0, ns2 int64)
+TEXT ·SpillStats1(SB), NOSPLIT, $0-168
 	MOVD wt_base+0(FP), R0
 	MOVD wt_len+8(FP), R1
-	MOVD q2_base+24(FP), R2
-	MOVD lo_base+48(FP), R3
-	MOVD hi_base+72(FP), R4
-	MOVD lo2_base+96(FP), R5
-	MOVD hi2_base+120(FP), R6
-	MOVD s0+144(FP), R7
-	MOVD s2+152(FP), R8
-	// GENBODY: SlideSpill1
-	MOVD R7, ns0+160(FP)
-	MOVD R8, ns2+168(FP)
+	MOVD stride+24(FP), R2
+	MOVD lo_base+32(FP), R3
+	MOVD hi_base+56(FP), R4
+	MOVD lo2_base+80(FP), R5
+	MOVD hi2_base+104(FP), R6
+	MOVD s0+128(FP), R7
+	MOVD s2+136(FP), R8
+	MOVD area+144(FP), R9
+	// GENBODY: SpillStats1
+	MOVD R7, ns0+152(FP)
+	MOVD R8, ns2+160(FP)
 	RET
 
 // func SlideCols4(colSum []int32, colSum2 []int64, rsub, radd []uint8, cn int)
