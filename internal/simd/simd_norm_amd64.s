@@ -405,7 +405,7 @@ GLOBL normconst<>(SB), RODATA|NOPTR, $12
 // func SpillStats1(wt []float32, stride int, lo, hi []int32, lo2, hi2 []int64,
 //	s0, s2, area int64) (ns0, ns2 int64)
 // The cn=1 normalize spill, 4 elements per pass. Everything integer is
-// exact: window sums stay below 2^31 (matchU8 area bound), so every wide
+// exact: window sums stay below 2^31 (caller-gated area bound), so every wide
 // product decomposes into one signed 32x32->64 VPMULDQ, the running
 // idiff advances by Didiff = area*d2 - 2*d*s0 - d*d (algebra of
 // (s+d)^2), and int64 prefix-sum regrouping is free. Each emitted lane

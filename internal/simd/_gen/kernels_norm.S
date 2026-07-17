@@ -534,7 +534,7 @@ SlideCols4:
 // SpillStats1: x0=wt(s0 lane), x1=n (multiple of 4, > 0), x2=stride,
 // x3=lo, x4=hi, x5=lo2, x6=hi2, x7=s0 (in/out), x8=s2 (in/out),
 // x9=area. The cn=1 normalize spill, 4 elements per pass, mirroring the
-// amd64 kernel: window sums stay below 2^31 (matchU8 area bound), so
+// amd64 kernel: window sums stay below 2^31 (caller-gated area), so
 // every wide product is one smull 32x32->64, the running idiff advances
 // by Didiff = area*d2 - 2*d*s0 - d*d, and int64 prefix regrouping is
 // exact. Emitted lanes are float32(float64(v)): scvtf.2d is the one

@@ -146,9 +146,9 @@ func SlideCols4(colSum []int32, colSum2 []int64, rsub, radd []uint8, cn int)
 // (float64(v) is one correct rounding for |v| < 2^62, float32 of it the
 // second) — then the window slides s0 += hi[i]−lo[i], s2 += hi2[i]−lo2[i];
 // the advanced sums are returned. All integer arithmetic is exact: the
-// products decompose into signed 32×32→64 pieces (s0 < 2^31 by the
-// matchU8 area bound; the caller gates th ≤ 32767 so the row-delta
-// products fit) and int64 prefix regrouping is free, so output is
+// products decompose into signed 32×32→64 pieces (the caller gates
+// area ≤ 8421504 so window sums stay below 2^31, and th ≤ 32767 so the
+// row-delta products fit) and int64 prefix regrouping is free, so output is
 // bit-identical to the scalar loop. wt holds the s0 lane; the idiff and
 // s2 lanes live stride and 2·stride floats later. lo/hi/lo2/hi2 hold at
 // least len(wt) elements.

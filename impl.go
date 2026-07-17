@@ -934,9 +934,11 @@ func normalizeBandGo(img []uint8, istride, iw int, cn, step, tw, th, rw, y0, y1 
 				lo2, hi2 := colSum2[x0:], colSum2[x0+tw:]
 				i := 0
 				// The kernel's 32-bit product decomposition needs the
-				// row-delta bound |hi2-lo2| < 2^31, i.e. th ≤ 32767 —
-				// true for every real template; taller strips spill scalar.
-				if vns := ns &^ 3; simd.Enabled && th <= 32767 && vns > 0 {
+				// row-delta bound |hi2-lo2| < 2^31 (th ≤ 32767) AND window
+				// sums below 2^31 (255·area < 2^31, i.e. area ≤ 8421504 —
+				// the cn=1 stats cap is looser at 11.9M). Shapes beyond
+				// either bound spill scalar, exactly.
+				if vns := ns &^ 3; simd.Enabled && th <= 32767 && area <= 8_421_504 && vns > 0 {
 					s[0], s2 = simd.SpillStats1(wt[:vns], normChunkGo,
 						lo, hi, lo2, hi2, s[0], s2, area)
 					i = vns
@@ -1121,16 +1123,21 @@ func normalizeParallelGo(img []uint8, istride, iw, tw, th, cn, step, rw, rh, thr
 
 // ----------------------------------------------------------- entrypoint --
 
+// statsCap returns the largest template area whose exact-integer window
+// statistics fit int64: cn·65025·area² < 2^63, i.e. ⌊√(2^63/65025/cn)⌋ —
+// 11.9M pixels single-channel down to 5.95M at cn=4 (a ~2400x2400 RGBA
+// template). Far beyond any real workload, but asserted, not assumed.
+func statsCap(cn int) int64 {
+	return [5]int64{0, 11_909_805, 8_421_504, 6_876_129, 5_954_902}[cn]
+}
+
 func matchU8(img []uint8, istride, iw, ih int, tpl []uint8, tstride, tw, th, cn, step, threads int, result []float32) (float32, int, int, float32, int, int) {
 	if cn < 1 || cn > 4 || step < cn || tw < 1 || th < 1 || tw > iw || th > ih ||
 		istride < iw*step || tstride < tw*step {
 		panic(fmt.Sprintf("cvmatch: bad match arguments (%dx%d in %dx%d, cn=%d step=%d)", tw, th, iw, ih, cn, step))
 	}
-	// The exact-integer window statistics (cross, idiff and their template
-	// twins) need cn·(255·area)² < 2^63; 5.9e6 pixels is a ~2400x2400 RGBA
-	// template — far beyond any real workload, but asserted, not assumed.
-	if int64(tw)*int64(th) > 5_900_000 {
-		panic(fmt.Sprintf("cvmatch: template area %dx%d exceeds the exact-statistics bound", tw, th))
+	if int64(tw)*int64(th) > statsCap(cn) {
+		panic(fmt.Sprintf("cvmatch: template area %dx%d exceeds the exact-statistics bound for cn=%d", tw, th, cn))
 	}
 	threads = clampThreads(threads)
 	rw, rh := iw-tw+1, ih-th+1
