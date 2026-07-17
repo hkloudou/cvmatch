@@ -221,6 +221,32 @@ def matrix_markdown():
             "matchTemplate timed end-to-end, which was not measured; treat MatchGray",
             "numbers as cvmatch-internal.",
         ]
+    if any("cgoA1" in s for s in SC.values()):
+        lines += [
+            "",
+            "**arm64** — the same `Match` matrix from the arm64 CI leg (" +
+            (DATA.get("hostArm64") or "ubuntu-24.04-arm") + "). No native",
+            "OpenCV baseline is built there, so the columns compare the two",
+            "cvmatch cores — NEON pure-Go vs the C core:",
+            "",
+            "| scene | cgo 1T | cgo 4T | pure-Go 1T | pure-Go 4T |",
+            "|---|---|---|---|---|",
+        ]
+        for key, label, _ in LAYOUT:
+            s = SC.get(key)
+            if not s or not all(k in s for k in ("cgoA1", "cgoA4", "goA1", "goA4")):
+                continue
+            cells = [s["cgoA1"], s["cgoA4"], s["goA1"], s["goA4"]]
+            best = min(cells)
+            fmt = [f"**{v:.1f}**" if v == best else f"{v:.1f}" for v in cells]
+            lines.append(f"| {label} | " + " | ".join(fmt) + " |")
+        ga = SC.get("noise1080p_sub128", {})
+        if all(k in ga for k in ("grayA1", "grayA4", "pgrayA1", "pgrayA4")):
+            lines += [
+                "",
+                f"`MatchGray` at 1080p/128 on arm64: cgo {ga['grayA1']:.1f} / {ga['grayA4']:.1f} ms, "
+                f"pure-Go {ga['pgrayA1']:.1f} / {ga['pgrayA4']:.1f} ms (1T / 4T).",
+            ]
     return "\n".join(lines)
 
 

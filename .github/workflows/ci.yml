@@ -39,6 +39,8 @@ jobs:
         with:
           go-version: "1.24"
           cache: false
+      - name: Fetch real sample images (OpenCV samples/data)
+        run: bench/testdata/fetch.sh
       - name: NEON kernel stream matches kernels.S (generator is deterministic)
         run: |
           python3 internal/simd/_gen/gen.py

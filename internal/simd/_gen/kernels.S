@@ -39,6 +39,10 @@ FFTStages:
 	dup	v29.4s, w9              // s: 0x80000000 lanes when inverse
 	mov	w9, #0x80000000
 	dup	v26.2d, x9              // evensign: flip even 32-bit lanes
+	movz	x9, #0x8000, lsl #48
+	movk	x9, #0x8000, lsl #16
+	movi	v25.2d, #0
+	mov	v25.d[1], x9            // highsign: flip the high complex only
 	ldr	d30, [x2, #8]           // tw[1]
 	dup	v27.4s, v30.s[0]        // wr1
 	dup	v28.4s, v30.s[1]
@@ -52,30 +56,27 @@ FFTStages:
 
 .Lfs_s12:
 	ldp	q3, q4, [x9]            // c0,c1 | c2,c3
-	// half=1 on (c0,c1): butterfly with tw[1]
+	// half=1 on (c0,c1): butterfly with tw[1]; the p±qw pair is built as
+	// (c0,c0) + (qw,-qw) — negation by xor is exact, x-y == x+(-y)
 	rev64	v5.4s, v3.4s
 	fmul	v6.4s, v3.4s, v27.4s
 	fmul	v7.4s, v5.4s, v28.4s
 	eor	v7.16b, v7.16b, v26.16b
-	fadd	v6.4s, v6.4s, v7.4s     // q*w in odd complex lane
-	dup	v8.2d, v3.d[0]          // (p, p)
-	dup	v9.2d, v6.d[1]          // (qw, qw)
-	fadd	v10.4s, v8.4s, v9.4s
-	fsub	v11.4s, v8.4s, v9.4s
-	mov	v3.16b, v10.16b
-	ins	v3.d[1], v11.d[0]       // (p+qw, p-qw)
+	fadd	v6.4s, v6.4s, v7.4s     // q*w in the odd complex lane
+	dup	v8.2d, v6.d[1]          // (qw, qw)
+	eor	v8.16b, v8.16b, v25.16b // (qw, -qw)
+	dup	v9.2d, v3.d[0]          // (p, p)
+	fadd	v3.4s, v9.4s, v8.4s     // (p+qw, p-qw)
 	// half=1 on (c2,c3)
 	rev64	v5.4s, v4.4s
 	fmul	v6.4s, v4.4s, v27.4s
 	fmul	v7.4s, v5.4s, v28.4s
 	eor	v7.16b, v7.16b, v26.16b
 	fadd	v6.4s, v6.4s, v7.4s
-	dup	v8.2d, v4.d[0]
-	dup	v9.2d, v6.d[1]
-	fadd	v10.4s, v8.4s, v9.4s
-	fsub	v11.4s, v8.4s, v9.4s
-	mov	v4.16b, v10.16b
-	ins	v4.d[1], v11.d[0]
+	dup	v8.2d, v6.d[1]
+	eor	v8.16b, v8.16b, v25.16b
+	dup	v9.2d, v4.d[0]
+	fadd	v4.4s, v9.4s, v8.4s
 	// half=2 across the pair: (c0,c2) w=tw[2], (c1,c3) w=tw[3]
 	rev64	v5.4s, v4.4s
 	fmul	v6.4s, v4.4s, v23.4s
@@ -98,10 +99,10 @@ FFTStages:
 	add	x7, x0, x6, lsl #3      // p
 	add	x8, x7, x4, lsl #3      // q = p + half
 	mov	x9, x5                  // wj
-	mov	x10, x4                 // j countdown, steps of 2
+	mov	x10, x4                 // j countdown, steps of 4
 .Lfs_j:
-	ldr	q1, [x8]                // q pair
-	ldr	q2, [x9], #16           // twiddle pair
+	ldp	q1, q10, [x8]           // two q pairs
+	ldp	q2, q12, [x9], #32      // two twiddle pairs
 	trn1	v3.4s, v2.4s, v2.4s     // wr lanes
 	trn2	v4.4s, v2.4s, v2.4s     // wi lanes
 	eor	v4.16b, v4.16b, v29.16b
@@ -110,12 +111,22 @@ FFTStages:
 	fmul	v7.4s, v5.4s, v4.4s
 	eor	v7.16b, v7.16b, v26.16b
 	fadd	v6.4s, v6.4s, v7.4s     // q*w
-	ldr	q0, [x7]
+	trn1	v13.4s, v12.4s, v12.4s
+	trn2	v14.4s, v12.4s, v12.4s
+	eor	v14.16b, v14.16b, v29.16b
+	rev64	v15.4s, v10.4s
+	fmul	v16.4s, v10.4s, v13.4s
+	fmul	v17.4s, v15.4s, v14.4s
+	eor	v17.16b, v17.16b, v26.16b
+	fadd	v16.4s, v16.4s, v17.4s
+	ldp	q0, q11, [x7]
 	fadd	v8.4s, v0.4s, v6.4s
 	fsub	v9.4s, v0.4s, v6.4s
-	str	q8, [x7], #16
-	str	q9, [x8], #16
-	subs	x10, x10, #2
+	fadd	v18.4s, v11.4s, v16.4s
+	fsub	v19.4s, v11.4s, v16.4s
+	stp	q8, q18, [x7], #32
+	stp	q9, q19, [x8], #32
+	subs	x10, x10, #4
 	b.ne	.Lfs_j
 	add	x6, x6, x4, lsl #1      // i += half*2
 	cmp	x6, x1
@@ -134,13 +145,37 @@ FFTColsBfly:
 	dup	v28.4s, v1.s[0]
 	mov	w9, #0x80000000
 	dup	v26.2d, x9              // evensign
-	and	x3, x1, #-2
-	add	x9, x0, x3, lsl #3      // p vector end
+	and	x3, x1, #-4
+	add	x9, x0, x3, lsl #3      // p end of 4-complex blocks
+	and	x4, x1, #-2
+	add	x13, x0, x4, lsl #3     // p end of 2-complex blocks
 	add	x10, x0, x1, lsl #3     // p true end
 	mov	x11, x0
 	mov	x12, x2
 .Lcb_main:
 	cmp	x11, x9
+	b.ge	.Lcb_mid
+	ldp	q1, q10, [x12]
+	rev64	v5.4s, v1.4s
+	fmul	v6.4s, v1.4s, v27.4s
+	fmul	v7.4s, v5.4s, v28.4s
+	eor	v7.16b, v7.16b, v26.16b
+	fadd	v6.4s, v6.4s, v7.4s
+	rev64	v15.4s, v10.4s
+	fmul	v16.4s, v10.4s, v27.4s
+	fmul	v17.4s, v15.4s, v28.4s
+	eor	v17.16b, v17.16b, v26.16b
+	fadd	v16.4s, v16.4s, v17.4s
+	ldp	q0, q11, [x11]
+	fadd	v8.4s, v0.4s, v6.4s
+	fsub	v9.4s, v0.4s, v6.4s
+	fadd	v18.4s, v11.4s, v16.4s
+	fsub	v19.4s, v11.4s, v16.4s
+	stp	q8, q18, [x11], #32
+	stp	q9, q19, [x12], #32
+	b	.Lcb_main
+.Lcb_mid:
+	cmp	x11, x13
 	b.ge	.Lcb_tail
 	ldr	q1, [x12]
 	rev64	v5.4s, v1.4s
@@ -153,7 +188,6 @@ FFTColsBfly:
 	fsub	v9.4s, v0.4s, v6.4s
 	str	q8, [x11], #16
 	str	q9, [x12], #16
-	b	.Lcb_main
 .Lcb_tail:
 	cmp	x11, x10
 	b.ge	.Lcb_done
@@ -187,17 +221,88 @@ FFTCols4:
 	dup	v25.4s, v5.s[0]         // w2bi
 	mov	w9, #0x80000000
 	dup	v26.2d, x9
-	and	x5, x4, #-2
-	add	x6, x0, x5, lsl #3      // r0 vector end
+	and	x5, x4, #-4
+	add	x6, x0, x5, lsl #3      // r0 end of 4-complex blocks
+	and	x8, x4, #-2
+	add	x10, x0, x8, lsl #3     // r0 end of 2-complex blocks
 	add	x7, x0, x4, lsl #3      // r0 true end
 .Lc4_main:
 	cmp	x0, x6
+	b.ge	.Lc4_mid
+	ldp	q1, q10, [x0]           // A
+	ldp	q2, q11, [x1]           // B
+	ldp	q3, q13, [x2]           // C
+	ldp	q4, q14, [x3]           // D
+	// stage 1: A,B = A±B*w1 ; C,D = C±D*w1  (two blocks interleaved)
+	rev64	v5.4s, v2.4s
+	fmul	v6.4s, v2.4s, v20.4s
+	fmul	v7.4s, v5.4s, v21.4s
+	eor	v7.16b, v7.16b, v26.16b
+	fadd	v6.4s, v6.4s, v7.4s     // B*w1
+	fadd	v8.4s, v1.4s, v6.4s     // A'
+	fsub	v2.4s, v1.4s, v6.4s     // B'
+	rev64	v15.4s, v11.4s
+	fmul	v16.4s, v11.4s, v20.4s
+	fmul	v17.4s, v15.4s, v21.4s
+	eor	v17.16b, v17.16b, v26.16b
+	fadd	v16.4s, v16.4s, v17.4s
+	fadd	v18.4s, v10.4s, v16.4s  // A2'
+	fsub	v11.4s, v10.4s, v16.4s  // B2'
+	rev64	v5.4s, v4.4s
+	fmul	v6.4s, v4.4s, v20.4s
+	fmul	v7.4s, v5.4s, v21.4s
+	eor	v7.16b, v7.16b, v26.16b
+	fadd	v6.4s, v6.4s, v7.4s     // D*w1
+	fadd	v9.4s, v3.4s, v6.4s     // C'
+	fsub	v4.4s, v3.4s, v6.4s     // D'
+	rev64	v15.4s, v14.4s
+	fmul	v16.4s, v14.4s, v20.4s
+	fmul	v17.4s, v15.4s, v21.4s
+	eor	v17.16b, v17.16b, v26.16b
+	fadd	v16.4s, v16.4s, v17.4s
+	fadd	v19.4s, v13.4s, v16.4s  // C2'
+	fsub	v14.4s, v13.4s, v16.4s  // D2'
+	// stage 2: A,C = A'±C'*w2a ; B,D = B'±D'*w2b
+	rev64	v5.4s, v9.4s
+	fmul	v6.4s, v9.4s, v22.4s
+	fmul	v7.4s, v5.4s, v23.4s
+	eor	v7.16b, v7.16b, v26.16b
+	fadd	v6.4s, v6.4s, v7.4s     // C'*w2a
+	fadd	v1.4s, v8.4s, v6.4s     // r0 out
+	fsub	v3.4s, v8.4s, v6.4s     // r2 out
+	rev64	v15.4s, v19.4s
+	fmul	v16.4s, v19.4s, v22.4s
+	fmul	v17.4s, v15.4s, v23.4s
+	eor	v17.16b, v17.16b, v26.16b
+	fadd	v16.4s, v16.4s, v17.4s
+	fadd	v10.4s, v18.4s, v16.4s  // r0 out, block 2
+	fsub	v13.4s, v18.4s, v16.4s  // r2 out, block 2
+	rev64	v5.4s, v4.4s
+	fmul	v6.4s, v4.4s, v24.4s
+	fmul	v7.4s, v5.4s, v25.4s
+	eor	v7.16b, v7.16b, v26.16b
+	fadd	v6.4s, v6.4s, v7.4s     // D'*w2b
+	fadd	v8.4s, v2.4s, v6.4s     // r1 out
+	fsub	v4.4s, v2.4s, v6.4s     // r3 out
+	rev64	v15.4s, v14.4s
+	fmul	v16.4s, v14.4s, v24.4s
+	fmul	v17.4s, v15.4s, v25.4s
+	eor	v17.16b, v17.16b, v26.16b
+	fadd	v16.4s, v16.4s, v17.4s
+	fadd	v18.4s, v11.4s, v16.4s  // r1 out, block 2
+	fsub	v14.4s, v11.4s, v16.4s  // r3 out, block 2
+	stp	q1, q10, [x0], #32
+	stp	q8, q18, [x1], #32
+	stp	q3, q13, [x2], #32
+	stp	q4, q14, [x3], #32
+	b	.Lc4_main
+.Lc4_mid:
+	cmp	x0, x10
 	b.ge	.Lc4_tail
 	ldr	q1, [x0]                // A
 	ldr	q2, [x1]                // B
 	ldr	q3, [x2]                // C
 	ldr	q4, [x3]                // D
-	// stage 1: A,B = A±B*w1 ; C,D = C±D*w1
 	rev64	v5.4s, v2.4s
 	fmul	v6.4s, v2.4s, v20.4s
 	fmul	v7.4s, v5.4s, v21.4s
@@ -212,7 +317,6 @@ FFTCols4:
 	fadd	v6.4s, v6.4s, v7.4s     // D*w1
 	fadd	v9.4s, v3.4s, v6.4s     // C'
 	fsub	v4.4s, v3.4s, v6.4s     // D'
-	// stage 2: A,C = A'±C'*w2a ; B,D = B'±D'*w2b
 	rev64	v5.4s, v9.4s
 	fmul	v6.4s, v9.4s, v22.4s
 	fmul	v7.4s, v5.4s, v23.4s
@@ -231,7 +335,6 @@ FFTCols4:
 	str	q8, [x1], #16
 	str	q3, [x2], #16
 	str	q4, [x3], #16
-	b	.Lc4_main
 .Lc4_tail:
 	cmp	x0, x7
 	b.ge	.Lc4_done
@@ -283,13 +386,36 @@ FFTCols4:
 MulConj:
 	mov	x9, #0x8000000000000000
 	dup	v26.2d, x9              // oddsign: flip odd 32-bit lanes
-	and	x3, x1, #-2
-	add	x9, x0, x3, lsl #3
+	and	x3, x1, #-4
+	add	x9, x0, x3, lsl #3      // end of 4-complex blocks
+	and	x4, x1, #-2
+	add	x13, x0, x4, lsl #3     // end of 2-complex blocks
 	add	x10, x0, x1, lsl #3
 	mov	x11, x0
 	mov	x12, x2
 .Lmc_main:
 	cmp	x11, x9
+	b.ge	.Lmc_mid
+	ldp	q1, q10, [x11]          // a
+	ldp	q2, q12, [x12], #32     // b
+	trn1	v3.4s, v2.4s, v2.4s     // br
+	trn2	v4.4s, v2.4s, v2.4s     // bi
+	rev64	v5.4s, v1.4s
+	fmul	v6.4s, v1.4s, v3.4s     // t1
+	fmul	v7.4s, v5.4s, v4.4s     // t2
+	eor	v7.16b, v7.16b, v26.16b
+	fadd	v6.4s, v6.4s, v7.4s
+	trn1	v13.4s, v12.4s, v12.4s
+	trn2	v14.4s, v12.4s, v12.4s
+	rev64	v15.4s, v10.4s
+	fmul	v16.4s, v10.4s, v13.4s
+	fmul	v17.4s, v15.4s, v14.4s
+	eor	v17.16b, v17.16b, v26.16b
+	fadd	v16.4s, v16.4s, v17.4s
+	stp	q6, q16, [x11], #32
+	b	.Lmc_main
+.Lmc_mid:
+	cmp	x11, x13
 	b.ge	.Lmc_tail
 	ldr	q1, [x11]               // a
 	ldr	q2, [x12], #16          // b
@@ -301,7 +427,6 @@ MulConj:
 	eor	v7.16b, v7.16b, v26.16b
 	fadd	v6.4s, v6.4s, v7.4s
 	str	q6, [x11], #16
-	b	.Lmc_main
 .Lmc_tail:
 	cmp	x11, x10
 	b.ge	.Lmc_done
@@ -337,50 +462,81 @@ NormRow:
 	movi	v22.2d, #0              // +0.0
 	lsl	x7, x3, #3              // stride in bytes
 	mov	x8, #0                  // i
+	// n is a multiple of 4: each pass handles two f64x2 halves and the
+	// k-loop shares one mean load and one 32-byte wt load across both.
 .Lnr_loop:
-	ldr	d3, [x1], #8            // crow[i..i+1] (2 f32)
-	fcvtl	v3.2d, v3.2s            // num (exact widen)
-	movi	v4.2d, #0               // wndMean2 accumulator
+	ldr	q3, [x1], #16           // crow[i..i+3] (4 f32)
+	fcvtl2	v13.2d, v3.4s           // num, high half (exact widen)
+	fcvtl	v3.2d, v3.2s            // num, low half
+	movi	v4.2d, #0               // wndMean2 accumulators
+	movi	v14.2d, #0
 	add	x9, x2, x8, lsl #3      // &wt[i]
 	mov	x10, x5                 // k = cn
 	mov	x11, x6                 // &mean[0]
 .Lnr_k:
-	ldr	q5, [x9]                // t lanes
+	ldp	q5, q15, [x9]           // t lanes, both halves
 	add	x9, x9, x7
-	fmul	v6.2d, v5.2d, v5.2d
-	fadd	v4.2d, v4.2d, v6.2d     // wndMean2 += t*t
 	ldr	d7, [x11], #8
 	dup	v7.2d, v7.d[0]          // mean[k]
-	fmul	v7.2d, v5.2d, v7.2d
-	fsub	v3.2d, v3.2d, v7.2d     // num -= t*mean[k]
+	fmul	v6.2d, v5.2d, v5.2d
+	fadd	v4.2d, v4.2d, v6.2d     // wndMean2 += t*t
+	fmul	v16.2d, v15.2d, v15.2d
+	fadd	v14.2d, v14.2d, v16.2d
+	fmul	v6.2d, v5.2d, v7.2d
+	fsub	v3.2d, v3.2d, v6.2d     // num -= t*mean[k]
+	fmul	v16.2d, v15.2d, v7.2d
+	fsub	v13.2d, v13.2d, v16.2d
 	subs	x10, x10, #1
 	b.ne	.Lnr_k
-	ldr	q8, [x9]                // s2d = q2 lanes (wt + cn*stride)
+	ldp	q8, q18, [x9]           // s2d = q2 lanes (wt + cn*stride)
 	fmul	v4.2d, v4.2d, v28.2d    // wndMean2 *= invArea
+	fmul	v14.2d, v14.2d, v28.2d
 	fsub	v5.2d, v8.2d, v4.2d     // diff2
+	fsub	v15.2d, v18.2d, v14.2d
 	fmax	v5.2d, v5.2d, v22.2d    // clamp at 0
+	fmax	v15.2d, v15.2d, v22.2d
 	fmul	v6.2d, v8.2d, v29.2d    // lim = eps*s2d
+	fmul	v16.2d, v18.2d, v29.2d
 	fmin	v6.2d, v6.2d, v27.2d    // min(lim, 0.5)
+	fmin	v16.2d, v16.2d, v27.2d
 	fsqrt	v7.2d, v5.2d
+	fsqrt	v17.2d, v15.2d
 	fmul	v7.2d, v7.2d, v30.2d    // den = sqrt(diff2)*templNorm
+	fmul	v17.2d, v17.2d, v30.2d
 	fcmgt	v9.2d, v5.2d, v6.2d     // diff2 > lim
+	fcmgt	v19.2d, v15.2d, v16.2d
 	and	v7.16b, v7.16b, v9.16b  // den, or 0 below the guard
+	and	v17.16b, v17.16b, v19.16b
 	fabs	v10.2d, v3.2d           // an = |num| (bit op, exact)
+	fabs	v20.2d, v13.2d
 	fcmgt	v11.2d, v7.2d, v10.2d   // m1 = an < den
+	fcmgt	v21.2d, v17.2d, v20.2d
 	mov	v12.16b, v11.16b
 	bsl	v12.16b, v7.16b, v25.16b // divisor = m1 ? den : 1.0
-	and	v13.16b, v3.16b, v11.16b // m1 ? num : 0
-	fdiv	v13.2d, v13.2d, v12.2d  // dv
-	fmul	v14.2d, v7.2d, v24.2d   // den*1.125
-	fcmgt	v14.2d, v14.2d, v10.2d  // m2 = an < den*1.125
-	and	v15.16b, v3.16b, v23.16b
-	orr	v15.16b, v15.16b, v25.16b // sat = copysign(1, num)
-	and	v15.16b, v15.16b, v14.16b // inner = m2 ? sat : 0
-	mov	v16.16b, v11.16b
-	bsl	v16.16b, v13.16b, v15.16b // m1 ? dv : inner
-	fcvtn	v16.2s, v16.2d          // correctly rounded narrow
-	str	d16, [x0], #8
-	add	x8, x8, #2
+	and	v5.16b, v3.16b, v11.16b // m1 ? num : 0
+	fdiv	v5.2d, v5.2d, v12.2d    // dv
+	mov	v12.16b, v21.16b
+	bsl	v12.16b, v17.16b, v25.16b
+	and	v15.16b, v13.16b, v21.16b
+	fdiv	v15.2d, v15.2d, v12.2d
+	fmul	v6.2d, v7.2d, v24.2d    // den*1.125
+	fcmgt	v6.2d, v6.2d, v10.2d    // m2 = an < den*1.125
+	fmul	v16.2d, v17.2d, v24.2d
+	fcmgt	v16.2d, v16.2d, v20.2d
+	and	v8.16b, v3.16b, v23.16b
+	orr	v8.16b, v8.16b, v25.16b // sat = copysign(1, num)
+	and	v8.16b, v8.16b, v6.16b  // inner = m2 ? sat : 0
+	and	v18.16b, v13.16b, v23.16b
+	orr	v18.16b, v18.16b, v25.16b
+	and	v18.16b, v18.16b, v16.16b
+	mov	v9.16b, v11.16b
+	bsl	v9.16b, v5.16b, v8.16b  // m1 ? dv : inner
+	mov	v19.16b, v21.16b
+	bsl	v19.16b, v15.16b, v18.16b
+	fcvtn	v9.2s, v9.2d            // correctly rounded narrow
+	fcvtn2	v9.4s, v19.2d
+	str	q9, [x0], #16
+	add	x8, x8, #4
 	cmp	x8, x4
 	b.lt	.Lnr_loop
 	ret
@@ -561,8 +717,10 @@ Untangle:
 	dup	v26.2d, x9              // oddsign
 	fmov	v27.4s, #0.5
 	sub	x6, x5, x4
+	and	x13, x6, #-4
+	add	x13, x13, x4            // end of 4-complex blocks
 	and	x6, x6, #-2
-	add	x6, x6, x4              // vector end
+	add	x6, x6, x4              // end of 2-complex blocks
 	add	x7, x0, x4, lsl #3      // sa ptr
 	add	x8, x1, x4, lsl #3      // sb ptr
 	add	x10, x2, x4, lsl #3     // zk ptr
@@ -570,6 +728,34 @@ Untangle:
 	sub	x11, x11, #1            // n-k0-1
 	add	x11, x2, x11, lsl #3    // zn load ptr (descending pairs)
 	mov	x12, x4                 // k
+.Lut_loop4:
+	cmp	x12, x13
+	b.ge	.Lut_loop
+	ldp	q1, q10, [x10], #32     // zk pairs
+	ldp	q12, q2, [x11, #-16]    // zn pairs, descending
+	sub	x11, x11, #32
+	ext	v2.16b, v2.16b, v2.16b, #8 // zn for k, k+1
+	ext	v12.16b, v12.16b, v12.16b, #8 // zn for k+2, k+3
+	eor	v3.16b, v2.16b, v26.16b
+	fadd	v3.4s, v1.4s, v3.4s
+	fmul	v3.4s, v3.4s, v27.4s
+	eor	v13.16b, v12.16b, v26.16b
+	fadd	v13.4s, v10.4s, v13.4s
+	fmul	v13.4s, v13.4s, v27.4s
+	stp	q3, q13, [x7], #32      // sa
+	rev64	v4.4s, v1.4s
+	eor	v4.16b, v4.16b, v26.16b
+	rev64	v5.4s, v2.4s
+	fadd	v4.4s, v4.4s, v5.4s
+	fmul	v4.4s, v4.4s, v27.4s
+	rev64	v14.4s, v10.4s
+	eor	v14.16b, v14.16b, v26.16b
+	rev64	v15.4s, v12.4s
+	fadd	v14.4s, v14.4s, v15.4s
+	fmul	v14.4s, v14.4s, v27.4s
+	stp	q4, q14, [x8], #32      // sb
+	add	x12, x12, #4
+	b	.Lut_loop4
 .Lut_loop:
 	cmp	x12, x6
 	b.ge	.Lut_tail
@@ -616,9 +802,24 @@ Untangle:
 CombineLow:
 	mov	w9, #0x80000000
 	dup	v26.2d, x9              // evensign
+	and	x7, x1, #-4
+	add	x8, x0, x7, lsl #3      // end of 4-complex blocks
 	and	x4, x1, #-2
 	add	x5, x0, x4, lsl #3
 	add	x6, x0, x1, lsl #3
+.Lcl_main4:
+	cmp	x0, x8
+	b.ge	.Lcl_main
+	ldp	q1, q10, [x2], #32
+	ldp	q2, q11, [x3], #32
+	rev64	v2.4s, v2.4s
+	eor	v2.16b, v2.16b, v26.16b
+	fadd	v1.4s, v1.4s, v2.4s
+	rev64	v11.4s, v11.4s
+	eor	v11.16b, v11.16b, v26.16b
+	fadd	v10.4s, v10.4s, v11.4s
+	stp	q1, q10, [x0], #32
+	b	.Lcl_main4
 .Lcl_main:
 	cmp	x0, x5
 	b.ge	.Lcl_tail
@@ -628,7 +829,6 @@ CombineLow:
 	eor	v2.16b, v2.16b, v26.16b
 	fadd	v1.4s, v1.4s, v2.4s
 	str	q1, [x0], #16
-	b	.Lcl_main
 .Lcl_tail:
 	cmp	x0, x6
 	b.ge	.Lcl_done
@@ -651,14 +851,36 @@ CombineHigh:
 	mov	x9, #0x8000000000000000
 	dup	v26.2d, x9              // oddsign
 	sub	x5, x3, x4              // count = n-hw
+	and	x13, x5, #-4
+	add	x14, x0, x4, lsl #3
+	add	x14, x14, x13, lsl #3   // z end of 4-complex blocks
 	and	x6, x5, #-2
 	add	x7, x0, x4, lsl #3      // z ptr at k=hw
-	add	x8, x7, x6, lsl #3      // z vector end
+	add	x8, x7, x6, lsl #3      // z end of 2-complex blocks
 	add	x9, x0, x3, lsl #3      // z true end
 	sub	x10, x3, x4             // m = n-hw
 	sub	x10, x10, #1            // m-1
 	add	x11, x1, x10, lsl #3    // sa load ptr (descending pairs)
 	add	x12, x2, x10, lsl #3    // sb load ptr
+.Lch_main4:
+	cmp	x7, x14
+	b.ge	.Lch_main
+	ldp	q10, q1, [x11, #-16]    // sa[m-3..m-2], sa[m-1..m]
+	sub	x11, x11, #32
+	ldp	q11, q2, [x12, #-16]
+	sub	x12, x12, #32
+	ext	v1.16b, v1.16b, v1.16b, #8 // sa[m], sa[m-1] for k, k+1
+	ext	v2.16b, v2.16b, v2.16b, #8
+	rev64	v2.4s, v2.4s
+	eor	v1.16b, v1.16b, v26.16b
+	fadd	v1.4s, v2.4s, v1.4s
+	ext	v10.16b, v10.16b, v10.16b, #8 // sa[m-2], sa[m-3] for k+2, k+3
+	ext	v11.16b, v11.16b, v11.16b, #8
+	rev64	v11.4s, v11.4s
+	eor	v10.16b, v10.16b, v26.16b
+	fadd	v10.4s, v11.4s, v10.4s
+	stp	q1, q10, [x7], #32
+	b	.Lch_main4
 .Lch_main:
 	cmp	x7, x8
 	b.ge	.Lch_tail
@@ -692,9 +914,25 @@ CombineHigh:
 // accumulating (addition commutes bitwise).
 .global EmitRe
 EmitRe:
+	and	x7, x1, #-8
+	add	x8, x0, x7, lsl #2      // dst end of 8-element blocks
 	and	x4, x1, #-4
-	add	x5, x0, x4, lsl #2      // dst vector end
+	add	x5, x0, x4, lsl #2      // dst end of 4-element blocks
 	add	x6, x0, x1, lsl #2      // dst true end
+.Ler_main8:
+	cmp	x0, x8
+	b.ge	.Ler_main
+	ldp	q1, q2, [x2], #32
+	ldp	q10, q11, [x2], #32
+	uzp1	v3.4s, v1.4s, v2.4s     // re lanes
+	uzp1	v12.4s, v10.4s, v11.4s
+	cbz	x3, .Ler_store8
+	ldp	q0, q9, [x0]
+	fadd	v3.4s, v0.4s, v3.4s
+	fadd	v12.4s, v9.4s, v12.4s
+.Ler_store8:
+	stp	q3, q12, [x0], #32
+	b	.Ler_main8
 .Ler_main:
 	cmp	x0, x5
 	b.ge	.Ler_tail
@@ -705,7 +943,6 @@ EmitRe:
 	fadd	v3.4s, v0.4s, v3.4s
 .Ler_store:
 	str	q3, [x0], #16
-	b	.Ler_main
 .Ler_tail:
 	cmp	x0, x6
 	b.ge	.Ler_done
@@ -723,9 +960,25 @@ EmitRe:
 // EmitIm: x0=dst, x1=len, x2=z, x3=add flag. Imaginary-part variant.
 .global EmitIm
 EmitIm:
+	and	x7, x1, #-8
+	add	x8, x0, x7, lsl #2
 	and	x4, x1, #-4
 	add	x5, x0, x4, lsl #2
 	add	x6, x0, x1, lsl #2
+.Lei_main8:
+	cmp	x0, x8
+	b.ge	.Lei_main
+	ldp	q1, q2, [x2], #32
+	ldp	q10, q11, [x2], #32
+	uzp2	v3.4s, v1.4s, v2.4s     // im lanes
+	uzp2	v12.4s, v10.4s, v11.4s
+	cbz	x3, .Lei_store8
+	ldp	q0, q9, [x0]
+	fadd	v3.4s, v0.4s, v3.4s
+	fadd	v12.4s, v9.4s, v12.4s
+.Lei_store8:
+	stp	q3, q12, [x0], #32
+	b	.Lei_main8
 .Lei_main:
 	cmp	x0, x5
 	b.ge	.Lei_tail
@@ -736,7 +989,6 @@ EmitIm:
 	fadd	v3.4s, v0.4s, v3.4s
 .Lei_store:
 	str	q3, [x0], #16
-	b	.Lei_main
 .Lei_tail:
 	cmp	x0, x6
 	b.ge	.Lei_done
@@ -760,30 +1012,58 @@ EmitIm:
 // is the lexicographic (value, index) extremum — the scalar scan's answer.
 .global MinMaxRow
 MinMaxRow:
-	ldr	q0, [x0]                // minV = row[0..3]
-	mov	v1.16b, v0.16b          // maxV
+	ldp	q0, q16, [x0]           // tracker A: row[0..3], B: row[4..7]
+	mov	v1.16b, v0.16b          // maxV A
+	mov	v17.16b, v16.16b        // maxV B
 	mov	x9, #0x0000000100000000 // idx lanes (0, 1)
 	mov	x10, #0x00000002
 	movk	x10, #0x3, lsl #32      // idx lanes (2, 3)
-	mov	v2.d[0], x9             // minIdx
+	mov	v2.d[0], x9             // minIdx A = (0,1,2,3)
 	mov	v2.d[1], x10
-	mov	v3.16b, v2.16b          // maxIdx
-	mov	v4.16b, v2.16b          // curIdx
 	movi	v5.4s, #4
-	add	x10, x0, #16            // element pointer
+	add	v18.4s, v2.4s, v5.4s    // minIdx B = (4,5,6,7)
+	mov	v3.16b, v2.16b          // maxIdx A
+	mov	v19.16b, v18.16b        // maxIdx B
+	mov	v4.16b, v2.16b          // curIdx A
+	mov	v20.16b, v18.16b        // curIdx B
+	movi	v5.4s, #8
+	add	x10, x0, #32            // element pointer
 	add	x11, x0, x1, lsl #2     // row end
 .Lmm_loop:
 	cmp	x10, x11
-	b.ge	.Lmm_reduce
-	ldr	q6, [x10], #16
-	add	v4.4s, v4.4s, v5.4s     // curIdx += 4
+	b.ge	.Lmm_merge
+	ldp	q6, q21, [x10], #32
+	add	v4.4s, v4.4s, v5.4s     // curIdx += 8
+	add	v20.4s, v20.4s, v5.4s
 	fcmgt	v7.4s, v0.4s, v6.4s     // v < minV (ordered, strict)
 	bit	v0.16b, v6.16b, v7.16b
 	bit	v2.16b, v4.16b, v7.16b
 	fcmgt	v7.4s, v6.4s, v1.4s     // v > maxV
 	bit	v1.16b, v6.16b, v7.16b
 	bit	v3.16b, v4.16b, v7.16b
+	fcmgt	v22.4s, v16.4s, v21.4s
+	bit	v16.16b, v21.16b, v22.16b
+	bit	v18.16b, v20.16b, v22.16b
+	fcmgt	v22.4s, v21.4s, v17.4s
+	bit	v17.16b, v21.16b, v22.16b
+	bit	v19.16b, v20.16b, v22.16b
 	b	.Lmm_loop
+.Lmm_merge:
+	// fold tracker B into A with the same lexicographic rule
+	fcmgt	v8.4s, v0.4s, v16.4s
+	fcmeq	v9.4s, v16.4s, v0.4s
+	cmgt	v10.4s, v2.4s, v18.4s
+	and	v9.16b, v9.16b, v10.16b
+	orr	v8.16b, v8.16b, v9.16b
+	bit	v0.16b, v16.16b, v8.16b
+	bit	v2.16b, v18.16b, v8.16b
+	fcmgt	v8.4s, v17.4s, v1.4s
+	fcmeq	v9.4s, v17.4s, v1.4s
+	cmgt	v10.4s, v3.4s, v19.4s
+	and	v9.16b, v9.16b, v10.16b
+	orr	v8.16b, v8.16b, v9.16b
+	bit	v1.16b, v17.16b, v8.16b
+	bit	v3.16b, v19.16b, v8.16b
 .Lmm_reduce:
 	// fold (value, index) lanes pairwise: take = (v'<v) | (v'==v & i'<i)
 	ext	v6.16b, v0.16b, v0.16b, #8
@@ -836,9 +1116,12 @@ RGBAToGray:
 	dup	v29.2d, x9              // coef u16 x8
 	movi	v28.4s, #0x20, lsl #8   // 8192
 	mov	x9, #0
-	cbz	x1, .Lgr_done
+	and	x10, x1, #-16           // end of 16-pixel blocks
+	cmp	x9, x10
+	b.ge	.Lgr_mid
 .Lgr_loop:
-	ldp	q1, q2, [x2], #32       // 8 RGBA pixels
+	ldp	q1, q2, [x2], #32       // 16 RGBA pixels
+	ldp	q23, q24, [x2], #32
 	uxtl	v3.8h, v1.8b            // px 0,1 channels
 	uxtl2	v4.8h, v1.16b           // px 2,3
 	umull	v5.4s, v3.4h, v29.4h    // px0 weighted channels
@@ -847,7 +1130,7 @@ RGBAToGray:
 	umull2	v16.4s, v4.8h, v29.8h   // px3
 	addp	v5.4s, v5.4s, v6.4s     // (rg0, b0, rg1, b1)
 	addp	v7.4s, v7.4s, v16.4s    // (rg2, b2, rg3, b3)
-	addp	v5.4s, v5.4s, v7.4s     // per-pixel sums 0..3
+	addp	v19.4s, v5.4s, v7.4s    // per-pixel sums 0..3
 	uxtl	v3.8h, v2.8b
 	uxtl2	v4.8h, v2.16b
 	umull	v6.4s, v3.4h, v29.4h
@@ -856,7 +1139,66 @@ RGBAToGray:
 	umull2	v17.4s, v4.8h, v29.8h
 	addp	v6.4s, v6.4s, v16.4s
 	addp	v7.4s, v7.4s, v17.4s
-	addp	v6.4s, v6.4s, v7.4s     // per-pixel sums 4..7
+	addp	v20.4s, v6.4s, v7.4s    // per-pixel sums 4..7
+	uxtl	v3.8h, v23.8b
+	uxtl2	v4.8h, v23.16b
+	umull	v5.4s, v3.4h, v29.4h
+	umull2	v6.4s, v3.8h, v29.8h
+	umull	v7.4s, v4.4h, v29.4h
+	umull2	v16.4s, v4.8h, v29.8h
+	addp	v5.4s, v5.4s, v6.4s
+	addp	v7.4s, v7.4s, v16.4s
+	addp	v21.4s, v5.4s, v7.4s    // per-pixel sums 8..11
+	uxtl	v3.8h, v24.8b
+	uxtl2	v4.8h, v24.16b
+	umull	v6.4s, v3.4h, v29.4h
+	umull2	v16.4s, v3.8h, v29.8h
+	umull	v7.4s, v4.4h, v29.4h
+	umull2	v17.4s, v4.8h, v29.8h
+	addp	v6.4s, v6.4s, v16.4s
+	addp	v7.4s, v7.4s, v17.4s
+	addp	v22.4s, v6.4s, v7.4s    // per-pixel sums 12..15
+	add	v19.4s, v19.4s, v28.4s
+	add	v20.4s, v20.4s, v28.4s
+	add	v21.4s, v21.4s, v28.4s
+	add	v22.4s, v22.4s, v28.4s
+	ushr	v19.4s, v19.4s, #14
+	ushr	v20.4s, v20.4s, #14
+	ushr	v21.4s, v21.4s, #14
+	ushr	v22.4s, v22.4s, #14
+	xtn	v19.4h, v19.4s
+	xtn2	v19.8h, v20.4s
+	xtn	v19.8b, v19.8h
+	xtn	v21.4h, v21.4s
+	xtn2	v21.8h, v22.4s
+	xtn	v21.8b, v21.8h
+	mov	v19.d[1], v21.d[0]
+	str	q19, [x0, x9]
+	add	x9, x9, #16
+	cmp	x9, x10
+	b.lt	.Lgr_loop
+.Lgr_mid:
+	cmp	x9, x1
+	b.ge	.Lgr_done
+	ldp	q1, q2, [x2], #32       // final 8 pixels
+	uxtl	v3.8h, v1.8b
+	uxtl2	v4.8h, v1.16b
+	umull	v5.4s, v3.4h, v29.4h
+	umull2	v6.4s, v3.8h, v29.8h
+	umull	v7.4s, v4.4h, v29.4h
+	umull2	v16.4s, v4.8h, v29.8h
+	addp	v5.4s, v5.4s, v6.4s
+	addp	v7.4s, v7.4s, v16.4s
+	addp	v5.4s, v5.4s, v7.4s
+	uxtl	v3.8h, v2.8b
+	uxtl2	v4.8h, v2.16b
+	umull	v6.4s, v3.4h, v29.4h
+	umull2	v16.4s, v3.8h, v29.8h
+	umull	v7.4s, v4.4h, v29.4h
+	umull2	v17.4s, v4.8h, v29.8h
+	addp	v6.4s, v6.4s, v16.4s
+	addp	v7.4s, v7.4s, v17.4s
+	addp	v6.4s, v6.4s, v7.4s
 	add	v5.4s, v5.4s, v28.4s
 	add	v6.4s, v6.4s, v28.4s
 	ushr	v5.4s, v5.4s, #14
@@ -865,9 +1207,6 @@ RGBAToGray:
 	xtn2	v5.8h, v6.4s
 	xtn	v5.8b, v5.8h
 	str	d5, [x0, x9]
-	add	x9, x9, #8
-	cmp	x9, x1
-	b.lt	.Lgr_loop
 .Lgr_done:
 	ret
 
@@ -878,21 +1217,79 @@ RGBAToGray:
 .global SlideCols1
 SlideCols1:
 	mov	x9, #0
-	cbz	x1, .Ls1_done
+	and	x10, x1, #-16           // end of 16-pixel blocks
+	cmp	x9, x10
+	b.ge	.Ls1_mid
 .Ls1_loop:
-	ldr	d1, [x4, x9]            // a bytes
-	ldr	d2, [x3, x9]            // b bytes
-	uxtl	v1.8h, v1.8b
-	uxtl	v2.8h, v2.8b
+	ldr	q0, [x4, x9]            // a bytes x16
+	ldr	q25, [x3, x9]           // b bytes x16
+	uxtl	v1.8h, v0.8b
+	uxtl	v2.8h, v25.8b
+	uxtl2	v26.8h, v0.16b
+	uxtl2	v27.8h, v25.16b
 	sub	v3.8h, v1.8h, v2.8h     // d in [-255, 255]
 	add	v4.8h, v1.8h, v2.8h     // s in [0, 510]
+	sub	v28.8h, v26.8h, v27.8h
+	add	v29.8h, v26.8h, v27.8h
+	sshll	v5.4s, v3.4h, #0
+	sshll2	v6.4s, v3.8h, #0
+	sshll	v30.4s, v28.4h, #0
+	sshll2	v31.4s, v28.8h, #0
+	ldp	q16, q17, [x0]
+	add	v16.4s, v16.4s, v5.4s
+	add	v17.4s, v17.4s, v6.4s
+	stp	q16, q17, [x0], #32
+	ldp	q16, q17, [x0]
+	add	v16.4s, v16.4s, v30.4s
+	add	v17.4s, v17.4s, v31.4s
+	stp	q16, q17, [x0], #32
+	smull	v7.4s, v3.4h, v4.4h     // a²-b² per px (|.| <= 65025)
+	smull2	v18.4s, v3.8h, v4.8h
+	smull	v5.4s, v28.4h, v29.4h
+	smull2	v6.4s, v28.8h, v29.8h
+	sshll	v19.2d, v7.2s, #0
+	sshll2	v20.2d, v7.4s, #0
+	sshll	v21.2d, v18.2s, #0
+	sshll2	v22.2d, v18.4s, #0
+	sshll	v26.2d, v5.2s, #0
+	sshll2	v27.2d, v5.4s, #0
+	sshll	v30.2d, v6.2s, #0
+	sshll2	v31.2d, v6.4s, #0
+	ldp	q23, q24, [x2]
+	add	v23.2d, v23.2d, v19.2d
+	add	v24.2d, v24.2d, v20.2d
+	stp	q23, q24, [x2], #32
+	ldp	q23, q24, [x2]
+	add	v23.2d, v23.2d, v21.2d
+	add	v24.2d, v24.2d, v22.2d
+	stp	q23, q24, [x2], #32
+	ldp	q23, q24, [x2]
+	add	v23.2d, v23.2d, v26.2d
+	add	v24.2d, v24.2d, v27.2d
+	stp	q23, q24, [x2], #32
+	ldp	q23, q24, [x2]
+	add	v23.2d, v23.2d, v30.2d
+	add	v24.2d, v24.2d, v31.2d
+	stp	q23, q24, [x2], #32
+	add	x9, x9, #16
+	cmp	x9, x10
+	b.lt	.Ls1_loop
+.Ls1_mid:
+	cmp	x9, x1
+	b.ge	.Ls1_done
+	ldr	d1, [x4, x9]            // final 8 pixels
+	ldr	d2, [x3, x9]
+	uxtl	v1.8h, v1.8b
+	uxtl	v2.8h, v2.8b
+	sub	v3.8h, v1.8h, v2.8h
+	add	v4.8h, v1.8h, v2.8h
 	sshll	v5.4s, v3.4h, #0
 	sshll2	v6.4s, v3.8h, #0
 	ldp	q16, q17, [x0]
 	add	v16.4s, v16.4s, v5.4s
 	add	v17.4s, v17.4s, v6.4s
 	stp	q16, q17, [x0], #32
-	smull	v7.4s, v3.4h, v4.4h     // a²-b² per px (|.| <= 65025)
+	smull	v7.4s, v3.4h, v4.4h
 	smull2	v18.4s, v3.8h, v4.8h
 	sshll	v19.2d, v7.2s, #0
 	sshll2	v20.2d, v7.4s, #0
@@ -906,10 +1303,66 @@ SlideCols1:
 	add	v23.2d, v23.2d, v21.2d
 	add	v24.2d, v24.2d, v22.2d
 	stp	q23, q24, [x2], #32
-	add	x9, x9, #8
-	cmp	x9, x1
-	b.lt	.Ls1_loop
 .Ls1_done:
+	ret
+
+// ---------------------------------------------------------------------------
+// SlideSpill1: x0=wt, x1=n, x2=q2, x3=lo, x4=hi, x5=lo2, x6=hi2,
+// x7=s0, x8=s2. Leaves the advanced sums in x7/x8 for the template to
+// store. wt[i]=float64(s0), q2[i]=float64(s2), then s0 += hi[i]-lo[i],
+// s2 += hi2[i]-lo2[i]. scvtf on integers < 2^52 is exact, and the sum
+// chains run scalar in registers — identical values to the Go loop.
+.global SlideSpill1
+SlideSpill1:
+	and	x12, x1, #-2
+	mov	x13, #0
+.Lss_loop:
+	cmp	x13, x12
+	b.ge	.Lss_tail
+	ldrsw	x9, [x4], #4            // hi[i]
+	ldrsw	x10, [x3], #4           // lo[i]
+	sub	x9, x9, x10
+	add	x9, x7, x9              // s1 = s0 + d0
+	fmov	d0, x7
+	mov	v0.d[1], x9
+	scvtf	v0.2d, v0.2d            // exact
+	str	q0, [x0], #16
+	ldrsw	x10, [x4], #4
+	ldrsw	x11, [x3], #4
+	sub	x10, x10, x11
+	add	x7, x9, x10             // s0 advanced past both
+	ldr	x9, [x6], #8            // hi2[i]
+	ldr	x10, [x5], #8           // lo2[i]
+	sub	x9, x9, x10
+	add	x9, x8, x9              // t1 = s2 + e0
+	fmov	d1, x8
+	mov	v1.d[1], x9
+	scvtf	v1.2d, v1.2d
+	str	q1, [x2], #16
+	ldr	x10, [x6], #8
+	ldr	x11, [x5], #8
+	sub	x10, x10, x11
+	add	x8, x9, x10             // s2 advanced
+	add	x13, x13, #2
+	b	.Lss_loop
+.Lss_tail:
+	cmp	x13, x1
+	b.ge	.Lss_done
+	scvtf	d0, x7
+	str	d0, [x0], #8
+	scvtf	d1, x8
+	str	d1, [x2], #8
+	ldrsw	x9, [x4], #4
+	ldrsw	x10, [x3], #4
+	sub	x9, x9, x10
+	add	x7, x7, x9
+	ldr	x9, [x6], #8
+	ldr	x10, [x5], #8
+	sub	x9, x9, x10
+	add	x8, x8, x9
+	add	x13, x13, #1
+	b	.Lss_tail
+.Lss_done:
 	ret
 
 // ---------------------------------------------------------------------------

@@ -19,8 +19,35 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  bench-arm64:
+    runs-on: ubuntu-24.04-arm
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
+      - name: Fetch real sample images (OpenCV samples/data)
+        run: bench/testdata/fetch.sh
+      - name: Measure Go cores on arm64 (-cpu 1,4, both builds)
+        run: |
+          mkdir -p /tmp/arm64
+          go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m | tee /tmp/arm64/cgo.txt
+          CGO_ENABLED=0 go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m | tee /tmp/arm64/purego.txt
+          CPU=$(lscpu | awk -F': +' '/Model name/{print $2; exit}')
+          echo "GitHub Actions ubuntu-24.04-arm ($(nproc)-vCPU ${CPU:-arm64}, linux/arm64)" > /tmp/arm64/host.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arm64-bench
+          path: /tmp/arm64/
+          retention-days: 3
+
   charts:
     runs-on: ubuntu-latest
+    needs: bench-arm64
     defaults:
       run:
         # bash with -eo pipefail, so a failing benchmark can't hide behind
@@ -32,6 +59,10 @@ jobs:
         with:
           go-version: "1.24"
           cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: arm64-bench
+          path: /tmp/arm64
       - name: Fetch real sample images (OpenCV samples/data)
         run: bench/testdata/fetch.sh
       - name: Build native OpenCV benchmark (prebuilt static OpenCV 4.12)
@@ -68,9 +99,10 @@ jobs:
           NATMEM=$(cat /tmp/native-hwm.txt)
           python3 docs/collect.py \
             --cgo /tmp/gobench-cgo.txt --purego /tmp/gobench-purego.txt \
+            --cgo-arm64 /tmp/arm64/cgo.txt --purego-arm64 /tmp/arm64/purego.txt \
             --native /tmp/native.txt --mem /tmp/memprobe.txt \
             ${NATMEM:+--native-mem "$NATMEM"} \
-            --host "$HOST"
+            --host "$HOST" --host-arm64 "$(cat /tmp/arm64/host.txt)"
           python3 docs/genchart.py
           {
             echo "### Refreshed benchmark data (docs/benchdata.json)"

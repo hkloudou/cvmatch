@@ -1110,6 +1110,84 @@ DATA permlin<>+24(SB)/4, $6
 DATA permlin<>+28(SB)/4, $7
 GLOBL permlin<>(SB), RODATA|NOPTR, $32
 
+// func SlideSpill1(wt, q2 []float64, lo, hi []int32, lo2, hi2 []int64,
+//	s0, s2 int64) (ns0, ns2 int64)
+// The cn=1 normalize spill: wt[i]=float64(s0), q2[i]=float64(s2), then
+// s0 += hi[i]-lo[i], s2 += hi2[i]-lo2[i]. The sums are exact nonnegative
+// integers < 2^52, so float64(v) == asDouble(v | 2^52bits) - 2^52 with no
+// rounding anywhere; the integer chains run in scalar registers exactly
+// like the Go loop.
+TEXT ·SlideSpill1(SB), NOSPLIT, $0-176
+	MOVQ wt_base+0(FP), DI
+	MOVQ wt_len+8(FP), DX
+	MOVQ q2_base+24(FP), SI
+	MOVQ lo_base+48(FP), R8
+	MOVQ hi_base+72(FP), R9
+	MOVQ lo2_base+96(FP), R10
+	MOVQ hi2_base+120(FP), R11
+	MOVQ s0+144(FP), AX
+	MOVQ s2+152(FP), BX
+	MOVQ $0x4330000000000000, R12 // 2^52: OR-mask and, as a double, the bias
+	MOVQ R12, X14
+	PUNPCKLQDQ X14, X14
+	XORQ CX, CX
+	MOVQ DX, R15
+	ANDQ $-2, R15
+
+ss1_loop:
+	CMPQ CX, R15
+	JGE  ss1_tail
+	MOVLQSX (R9)(CX*4), R12     // hi[i]
+	MOVLQSX (R8)(CX*4), R13     // lo[i]
+	SUBQ    R13, R12
+	LEAQ    (AX)(R12*1), R13    // s1 = s0 + d0
+	MOVQ    AX, X0
+	MOVQ    R13, X1
+	PUNPCKLQDQ X1, X0           // (s0, s1)
+	POR     X14, X0
+	SUBPD   X14, X0             // exact int64 -> float64 pair
+	MOVUPS  X0, (DI)(CX*8)
+	MOVLQSX 4(R9)(CX*4), R12
+	MOVLQSX 4(R8)(CX*4), AX     // s0's old value is dead; reuse as scratch
+	SUBQ    AX, R12
+	LEAQ    (R13)(R12*1), AX    // s0 advanced past both
+	MOVQ    (R11)(CX*8), R12    // hi2[i]
+	SUBQ    (R10)(CX*8), R12
+	LEAQ    (BX)(R12*1), R13    // t1 = s2 + e0
+	MOVQ    BX, X2
+	MOVQ    R13, X3
+	PUNPCKLQDQ X3, X2
+	POR     X14, X2
+	SUBPD   X14, X2
+	MOVUPS  X2, (SI)(CX*8)
+	MOVQ    8(R11)(CX*8), R12
+	SUBQ    8(R10)(CX*8), R12
+	LEAQ    (R13)(R12*1), BX    // s2 advanced
+	ADDQ    $2, CX
+	JMP     ss1_loop
+
+ss1_tail:
+	CMPQ CX, DX
+	JGE  ss1_done
+	CVTSQ2SD AX, X0             // exact below 2^52
+	MOVSD    X0, (DI)(CX*8)
+	CVTSQ2SD BX, X1
+	MOVSD    X1, (SI)(CX*8)
+	MOVLQSX  (R9)(CX*4), R12
+	MOVLQSX  (R8)(CX*4), R13
+	SUBQ     R13, R12
+	ADDQ     R12, AX
+	MOVQ     (R11)(CX*8), R12
+	SUBQ     (R10)(CX*8), R12
+	ADDQ     R12, BX
+	INCQ     CX
+	JMP      ss1_tail
+
+ss1_done:
+	MOVQ AX, ns0+160(FP)
+	MOVQ BX, ns2+168(FP)
+	RET
+
 // func EmitRe(dst []float32, z []complex64, add bool)
 TEXT ·EmitRe(SB), NOSPLIT, $0-49
 	MOVQ    dst_base+0(FP), DI
