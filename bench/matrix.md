@@ -10,27 +10,27 @@ the cvmatch columns are `go test -benchtime 5x` averages from
 `-cpu 1,4` — asm = the `-tags cvmatch_asm` build, no-asm = the
 default build. Both architectures run the identical comparison.
 
-**amd64** — GitHub Actions ubuntu-latest (4-vCPU AMD EPYC 7763 64-Core Processor, linux/amd64):
+**amd64** — GitHub Actions ubuntu-latest (4-vCPU AMD EPYC 9V74 80-Core Processor, linux/amd64):
 
 | scene | native C++ | asm 1T | asm 4T | no-asm 1T | no-asm 4T |
 |---|---|---|---|---|---|
-| Window 1600×1000 · button 96×32 | 183.2 | 45.0 | **23.9** | 182.2 | 92.2 |
-| Window 1600×1000 · icon 24×24 | 149.4 | 38.2 | **19.5** | 153.5 | 76.7 |
-| Window 1600×1000 · panel 300×200 | 157.5 | 49.3 | **48.0** | 198.8 | 187.7 |
-| Noise 1280×720 · sub 96×96 | 115.8 | 42.1 | **22.9** | 143.2 | 84.7 |
-| Noise 1920×1080 · sub 128×128 | 277.7 | 62.7 | **40.4** | 259.8 | 138.8 |
-| Noise 1920×1080 · sub 32×32 | 195.2 | 50.8 | **26.2** | 204.6 | 100.9 |
-| Noise 640×480 · varying alpha, 4ch | 28.4 | 12.7 | **9.1** | 52.5 | 30.9 |
-| Window 3840×2160 · button 96×32 | 858.9 | 238.2 | **110.5** | 942.3 | 463.0 |
-| Noise 3840×2160 · sub 256×256 | 1186.0 | 299.0 | **171.7** | 1257.7 | 680.3 |
-| fruits 512×480 · sub 80×80 | 49.4 | **6.2** | 6.8 | 24.0 | 22.1 |
-| baboon 512×512 · sub 64×64 | 31.4 | 6.4 | **6.0** | 25.0 | 23.3 |
-| building 868×600 · sub 100×100 | 73.5 | 18.6 | **17.8** | 75.9 | 73.6 |
-| graf1 800×640 · sub 120×120 | 89.2 | 18.8 | **18.5** | 76.7 | 74.0 |
-| starry_night 752×600 · sub 128×128 | 64.1 | **17.9** | 18.0 | 73.6 | 72.6 |
+| Window 1600×1000 · button 96×32 | 184.8 | 50.7 | **22.8** | 177.4 | 91.5 |
+| Window 1600×1000 · icon 24×24 | 149.0 | 38.1 | **19.6** | 147.1 | 73.5 |
+| Window 1600×1000 · panel 300×200 | 160.9 | 49.9 | **38.1** | 196.8 | 128.7 |
+| Noise 1280×720 · sub 96×96 | 120.3 | 34.7 | **23.5** | 141.7 | 87.1 |
+| Noise 1920×1080 · sub 128×128 | 286.1 | 61.0 | **38.4** | 254.7 | 140.2 |
+| Noise 1920×1080 · sub 32×32 | 193.2 | 50.2 | **26.0** | 199.6 | 98.5 |
+| Noise 640×480 · varying alpha, 4ch | 30.2 | 12.5 | **9.0** | 50.8 | 32.0 |
+| Window 3840×2160 · button 96×32 | 861.0 | 222.5 | **107.5** | 925.2 | 451.5 |
+| Noise 3840×2160 · sub 256×256 | 1226.9 | 295.4 | **172.6** | 1240.6 | 666.0 |
+| fruits 512×480 · sub 80×80 | 51.5 | **6.3** | 7.7 | 23.2 | 18.5 |
+| baboon 512×512 · sub 64×64 | 33.0 | **6.6** | 7.5 | 24.5 | 18.8 |
+| building 868×600 · sub 100×100 | 75.3 | 18.7 | **18.3** | 75.5 | 55.1 |
+| graf1 800×640 · sub 120×120 | 90.4 | 18.6 | **18.1** | 76.6 | 55.4 |
+| starry_night 752×600 · sub 128×128 | 66.6 | **17.4** | **17.4** | 73.2 | 55.5 |
 
-`MatchGray` at 1080p/128 for scale: asm 20.7 / 12.9 ms,
-no-asm 99.8 / 55.2 ms (1T / 4T). Native C++ has no gray
+`MatchGray` at 1080p/128 for scale: asm 21.9 / 11.5 ms,
+no-asm 97.9 / 58.9 ms (1T / 4T). Native C++ has no gray
 row in this suite — a fair baseline would need cvtColor + 1-channel
 matchTemplate timed end-to-end, which was not measured; treat MatchGray
 numbers as cvmatch-internal.
@@ -41,27 +41,27 @@ amd64 rows above:
 
 | scene | native C++ | asm 1T | asm 4T | no-asm 1T | no-asm 4T |
 |---|---|---|---|---|---|
-| Window 1600×1000 · button 96×32 | 230.7 | 90.0 | **27.3** | 193.2 | 57.8 |
-| Window 1600×1000 · icon 24×24 | 182.9 | 74.7 | **20.3** | 160.8 | 43.1 |
-| Window 1600×1000 · panel 300×200 | 216.4 | 100.9 | **91.0** | 218.9 | 200.3 |
-| Noise 1280×720 · sub 96×96 | 141.8 | 72.8 | **41.6** | 160.5 | 87.1 |
-| Noise 1920×1080 · sub 128×128 | 364.6 | 129.1 | **50.9** | 288.6 | 106.5 |
-| Noise 1920×1080 · sub 32×32 | 240.3 | 98.7 | **28.9** | 214.1 | 58.5 |
-| Noise 640×480 · varying alpha, 4ch | 34.4 | 25.7 | **14.3** | 57.6 | 30.4 |
-| Window 3840×2160 · button 96×32 | 1099.4 | 458.5 | **125.6** | 992.9 | 269.9 |
-| Noise 3840×2160 · sub 256×256 | 1611.8 | 625.4 | **223.8** | 1416.0 | 491.9 |
-| fruits 512×480 · sub 80×80 | 58.9 | 11.7 | **10.3** | 25.6 | 22.5 |
-| baboon 512×512 · sub 64×64 | 37.7 | 12.1 | **10.7** | 26.6 | 23.2 |
-| building 868×600 · sub 100×100 | 87.6 | 39.2 | **36.1** | 86.3 | 79.6 |
-| graf1 800×640 · sub 120×120 | 109.5 | 38.9 | **36.9** | 86.5 | 81.0 |
-| starry_night 752×600 · sub 128×128 | 78.2 | 37.1 | **36.0** | 83.5 | 79.9 |
+| Window 1600×1000 · button 96×32 | 223.3 | 89.0 | **27.6** | 190.7 | 57.6 |
+| Window 1600×1000 · icon 24×24 | 178.4 | 74.9 | **21.1** | 159.5 | 43.0 |
+| Window 1600×1000 · panel 300×200 | 213.3 | 100.6 | **52.0** | 216.8 | 96.2 |
+| Noise 1280×720 · sub 96×96 | 138.1 | 71.7 | **32.0** | 157.1 | 61.1 |
+| Noise 1920×1080 · sub 128×128 | 357.2 | 128.1 | **50.5** | 284.4 | 105.4 |
+| Noise 1920×1080 · sub 32×32 | 235.2 | 98.5 | **28.6** | 212.5 | 58.0 |
+| Noise 640×480 · varying alpha, 4ch | 33.4 | 25.9 | **12.6** | 56.3 | 24.4 |
+| Window 3840×2160 · button 96×32 | 1093.0 | 456.1 | **124.8** | 982.6 | 264.2 |
+| Noise 3840×2160 · sub 256×256 | 1575.3 | 626.7 | **225.3** | 1394.7 | 483.7 |
+| fruits 512×480 · sub 80×80 | 57.9 | 11.9 | **7.6** | 25.4 | 14.0 |
+| baboon 512×512 · sub 64×64 | 36.7 | 12.1 | **7.8** | 27.1 | 14.3 |
+| building 868×600 · sub 100×100 | 85.8 | 38.8 | **24.7** | 85.8 | 43.1 |
+| graf1 800×640 · sub 120×120 | 107.5 | 39.3 | **23.9** | 85.9 | 44.1 |
+| starry_night 752×600 · sub 128×128 | 77.1 | 37.6 | **24.4** | 82.8 | 44.4 |
 
-`MatchGray` at 1080p/128 on arm64: asm 47.4 / 18.1 ms, no-asm 107.9 / 40.7 ms (1T / 4T).
+`MatchGray` at 1080p/128 on arm64: asm 46.7 / 17.8 ms, no-asm 106.4 / 39.7 ms (1T / 4T).
 
 **Measured summary (single-threaded, like-for-like):** the asm build runs
-3.4–4.2x faster than the default no-asm build on amd64
-(2.1–2.3x on arm64), and beats native OpenCV C++ by
-2.2–8.0x on amd64 and 1.3–5.0x on arm64.
+3.5–4.2x faster than the default no-asm build on amd64
+(2.1–2.2x on arm64), and beats native OpenCV C++ by
+2.4–8.2x on amd64 and 1.3–4.9x on arm64.
 
 Internal multi-threading (4 workers, bit-identical output at any worker
 count) further improves cvmatch by up to 2.2x on the multi-tile
@@ -71,4 +71,4 @@ headline numbers are 1T vs 1T.
 
 Peak process memory for one 1080p/128 match (VmHWM, fresh process,
 default build): native OpenCV 155 MB, `Match` 48 MB,
-`MatchGray` 32 MB, idle Go baseline 12 MB.
+`MatchGray` 34 MB, idle Go baseline 12 MB.
