@@ -11,9 +11,78 @@ import (
 	"fmt"
 	"math"
 	"sync"
+
+	"github.com/hkloudou/cvmatch/internal/simd"
 )
 
 const maxThreadsGo = 16
+
+// Scratch pools: every pooled buffer is fully overwritten before use
+// (block spectra include their zero padding, column sums are cleared in
+// colBuildGo, the internal result map is stored before it is read), so
+// dirty reuse is safe and steady-state matching allocates nothing.
+var (
+	cplxPool sync.Pool // *[]complex64
+	f32Pool  sync.Pool // *[]float32
+	f64Pool  sync.Pool // *[]float64
+	i32Pool  sync.Pool // *[]int32
+	i64Pool  sync.Pool // *[]int64
+	bytePool sync.Pool // *[]uint8
+)
+
+func getCplx(n int) []complex64 {
+	if v, _ := cplxPool.Get().(*[]complex64); v != nil && cap(*v) >= n {
+		return (*v)[:n]
+	}
+	return make([]complex64, n)
+}
+
+func putCplx(s []complex64) { cplxPool.Put(&s) }
+
+func getF32(n int) []float32 {
+	if v, _ := f32Pool.Get().(*[]float32); v != nil && cap(*v) >= n {
+		return (*v)[:n]
+	}
+	return make([]float32, n)
+}
+
+func putF32(s []float32) { f32Pool.Put(&s) }
+
+func getI32(n int) []int32 {
+	if v, _ := i32Pool.Get().(*[]int32); v != nil && cap(*v) >= n {
+		return (*v)[:n]
+	}
+	return make([]int32, n)
+}
+
+func putI32(s []int32) { i32Pool.Put(&s) }
+
+func getI64(n int) []int64 {
+	if v, _ := i64Pool.Get().(*[]int64); v != nil && cap(*v) >= n {
+		return (*v)[:n]
+	}
+	return make([]int64, n)
+}
+
+func putI64(s []int64) { i64Pool.Put(&s) }
+
+func getBytes(n int) []uint8 {
+	if v, _ := bytePool.Get().(*[]uint8); v != nil && cap(*v) >= n {
+		return (*v)[:n]
+	}
+	return make([]uint8, n)
+}
+
+func putBytes(s []uint8) { bytePool.Put(&s) }
+
+func getF64(n int) []float64 {
+	if v, _ := f64Pool.Get().(*[]float64); v != nil && cap(*v) >= n {
+		return (*v)[:n]
+	}
+	return make([]float64, n)
+}
+
+func putF64(s []float64) { f64Pool.Put(&s) }
 
 func nextPow2(v int) int {
 	n := 1
@@ -54,59 +123,166 @@ func runParallel(n int, fn func(w int)) {
 
 // ------------------------------------------------------------------- FFT --
 
+// sincospiFrac returns cos, sin of pi*j/half (0 <= j < half, half a power
+// of two): exact dyadic range reduction plus fdlibm-style minimax kernels
+// in plain sequenced double ops — no library trig. cvmatch.c runs the
+// identical op sequence, so both cores' twiddle tables (and therefore
+// their outputs) are bit-identical on every platform regardless of the
+// system libm. The float64 conversions around products pin each op to one
+// rounding (Go may otherwise fuse mul-adds on some architectures).
+func sincospiFrac(j, half int) (float32, float32) {
+	m := 2 * j    // pi*j/half = k*(pi/2) + u*(pi/2), u in [0,1)
+	k := m / half // 0 or 1
+	rem := m - k*half
+	u := float64(rem) / float64(half) // exact: half is a power of two
+	swap := false
+	if u > 0.5 { // co-function fold, exact dyadic subtraction
+		u = 1.0 - u
+		swap = true
+	}
+	y := float64(u * 1.57079632679489661923) // u*(pi/2), one rounding
+	z := float64(y * y)
+	r := float64(z * (4.16666666666666019037e-02 +
+		float64(z*(-1.38888888888741095749e-03+
+			float64(z*(2.48015872894767294178e-05+
+				float64(z*(-2.75573143513906633035e-07+
+					float64(z*(2.08757232129817482790e-09+
+						float64(z*-1.13596475577881948265e-11)))))))))))
+	hz := float64(0.5 * z)
+	w := 1.0 - hz
+	c := w + (((1.0 - w) - hz) + float64(z*r))
+	r2 := 8.33333333332248946124e-03 +
+		float64(z*(-1.98412698298579493134e-04+
+			float64(z*(2.75573137070700676789e-06+
+				float64(z*(-2.50507602534068634195e-08+
+					float64(z*1.58969099521155010221e-10)))))))
+	v := float64(z * y)
+	s := y + float64(v*(-1.66666666666666324348e-01+float64(z*r2)))
+	if swap {
+		c, s = s, c
+	}
+	if k != 0 { // rotate by pi/2
+		c, s = -s, c
+	}
+	return float32(c), float32(s)
+}
+
 // makeTwiddles fills tw[half+j] = exp(-pi*i*j/half) for each power-of-two
 // stage, matching the C layout.
 func makeTwiddles(n int) []complex64 {
 	tw := make([]complex64, n)
 	tw[0] = 1
 	for half := 1; half < n; half <<= 1 {
-		step := -math.Pi / float64(half)
 		for j := 0; j < half; j++ {
-			s, c := math.Sincos(step * float64(j))
-			tw[half+j] = complex(float32(c), float32(s))
+			c, s := sincospiFrac(j, half)
+			tw[half+j] = complex(c, -s)
 		}
 	}
 	return tw
 }
 
-func makeBitrev(n int) []int {
-	br := make([]int, n)
-	for i := 1; i < n; i++ {
-		br[i] = br[i>>1] >> 1
-		if i&1 != 0 {
-			br[i] |= n >> 1
+// makeSwapPairs lists the bit-reversal swaps (i, br[i]) with i < br[i];
+// iterating pairs avoids the branchy per-element compare. Pure data
+// movement — results are unaffected.
+func makeSwapPairs(n int) []int32 {
+	pairs := make([]int32, 0, n)
+	br := 0
+	for i := 0; i < n; i++ {
+		if br > i {
+			pairs = append(pairs, int32(i), int32(br))
 		}
+		bit := n >> 1
+		for br&bit != 0 {
+			br ^= bit
+			bit >>= 1
+		}
+		br |= bit
 	}
-	return br
+	return pairs
 }
 
-func fftGo(a []complex64, tw []complex64, br []int, inverse bool) {
+// fftTables caches the per-size twiddle/swap-pair tables (immutable once
+// built; real workloads cycle through a handful of power-of-two sizes).
+// Sizes above 4096 stay per-call to bound the cache.
+var (
+	fftTabMu sync.Mutex
+	fftTabs  = map[int]*fftTab{}
+)
+
+type fftTab struct {
+	tw    []complex64
+	pairs []int32
+}
+
+func fftTables(n int) *fftTab {
+	if n > 4096 {
+		return &fftTab{makeTwiddles(n), makeSwapPairs(n)}
+	}
+	fftTabMu.Lock()
+	t := fftTabs[n]
+	if t == nil {
+		t = &fftTab{makeTwiddles(n), makeSwapPairs(n)}
+		fftTabs[n] = t
+	}
+	fftTabMu.Unlock()
+	return t
+}
+
+// bfly applies one radix-2 butterfly with explicit float32 single-rounding
+// semantics: the products are rounded to float32 before the add/sub, which
+// is exactly what the C core computes (the gc compiler would otherwise
+// evaluate complex64 products through float64 intermediates on some
+// architectures, and may fuse mul-adds on others; the float32 conversions
+// pin both down). The SIMD kernels implement precisely these ops.
+func bfly(p, q *complex64, wr, wi float32) {
+	qv := *q
+	vr := float32(real(qv)*wr) - float32(imag(qv)*wi)
+	vi := float32(real(qv)*wi) + float32(imag(qv)*wr)
+	u := *p
+	*p = complex(real(u)+vr, imag(u)+vi)
+	*q = complex(real(u)-vr, imag(u)-vi)
+}
+
+func fftGo(a []complex64, tw []complex64, pairs []int32, inverse bool) {
 	n := len(a)
-	for i, j := range br {
-		if j > i {
-			a[i], a[j] = a[j], a[i]
+	for k := 0; k+1 < len(pairs); k += 2 {
+		i, j := pairs[k], pairs[k+1]
+		a[i], a[j] = a[j], a[i]
+	}
+	s := float32(1)
+	if inverse {
+		s = -1
+	}
+	// The half=1 and half=2 stages are flattened into single loops with the
+	// (tiny) twiddle sets hoisted; each element still sees exactly the
+	// arithmetic of the generic stage loop, so results are bit-identical.
+	if n >= 2 {
+		w0r, w0i := real(tw[1]), s*imag(tw[1])
+		for i := 0; i < n; i += 2 {
+			p := a[i : i+2 : i+2]
+			bfly(&p[0], &p[1], w0r, w0i)
 		}
 	}
-	for half := 1; half < n; half <<= 1 {
+	if n >= 4 {
+		w0r, w0i := real(tw[2]), s*imag(tw[2])
+		w1r, w1i := real(tw[3]), s*imag(tw[3])
+		for i := 0; i < n; i += 4 {
+			p := a[i : i+4 : i+4]
+			bfly(&p[0], &p[2], w0r, w0i)
+			bfly(&p[1], &p[3], w1r, w1i)
+		}
+	}
+	if n >= 8 && simd.Enabled {
+		simd.FFTStages(a, tw, inverse)
+		return
+	}
+	for half := 4; half < n; half <<= 1 {
 		w := tw[half : half*2]
 		for i := 0; i < n; i += half << 1 {
 			p := a[i : i+half : i+half]
 			q := a[i+half : i+half*2 : i+half*2]
-			if inverse {
-				for j := 0; j < half; j++ {
-					wj := complex(real(w[j]), -imag(w[j]))
-					v := q[j] * wj
-					u := p[j]
-					p[j] = u + v
-					q[j] = u - v
-				}
-			} else {
-				for j := 0; j < half; j++ {
-					v := q[j] * w[j]
-					u := p[j]
-					p[j] = u + v
-					q[j] = u - v
-				}
+			for j := 0; j < half; j++ {
+				bfly(&p[j], &q[j], real(w[j]), s*imag(w[j]))
 			}
 		}
 	}
@@ -114,30 +290,31 @@ func fftGo(a []complex64, tw []complex64, br []int, inverse bool) {
 
 // fftColsGo transforms the columns of a row-major [n x width] array; the
 // butterfly inner loop runs across contiguous row elements.
-func fftColsGo(d []complex64, n, width int, tw []complex64, br []int, inverse bool, tmp []complex64) {
-	for i, j := range br {
-		if j > i {
-			ri := d[i*width : i*width+width]
-			rj := d[j*width : j*width+width]
-			copy(tmp[:width], ri)
-			copy(ri, rj)
-			copy(rj, tmp[:width])
-		}
+func fftColsGo(d []complex64, n, width int, tw []complex64, pairs []int32, inverse bool, tmp []complex64) {
+	for k := 0; k+1 < len(pairs); k += 2 {
+		i, j := int(pairs[k]), int(pairs[k+1])
+		ri := d[i*width : i*width+width]
+		rj := d[j*width : j*width+width]
+		copy(tmp[:width], ri)
+		copy(ri, rj)
+		copy(rj, tmp[:width])
+	}
+	s := float32(1)
+	if inverse {
+		s = -1
 	}
 	for half := 1; half < n; half <<= 1 {
 		for i := 0; i < n; i += half << 1 {
 			for j := 0; j < half; j++ {
-				w := tw[half+j]
-				if inverse {
-					w = complex(real(w), -imag(w))
-				}
+				wr, wi := real(tw[half+j]), s*imag(tw[half+j])
 				p := d[(i+j)*width : (i+j)*width+width]
 				q := d[(i+j+half)*width : (i+j+half)*width+width]
+				if simd.Enabled {
+					simd.FFTColsBfly(p, q, complex(wr, wi))
+					continue
+				}
 				for c := range p {
-					v := q[c] * w
-					u := p[c]
-					p[c] = u + v
-					q[c] = u - v
+					bfly(&p[c], &q[c], wr, wi)
 				}
 			}
 		}
@@ -150,7 +327,7 @@ type goPlan struct {
 	dftW, dftH, hw int
 	blockW, blockH int
 	twW, twH       []complex64
-	brW, brH       []int
+	prW, prH       []int32
 }
 
 // newGoPlan mirrors plan_init: OpenCV's crossCorr block sizing with
@@ -195,11 +372,13 @@ func newGoPlan(tw, th, rw, rh int) *goPlan {
 	if p.blockH > rh {
 		p.blockH = rh
 	}
-	p.twW, p.brW = makeTwiddles(dftW), makeBitrev(dftW)
+	tabW := fftTables(dftW)
+	p.twW, p.prW = tabW.tw, tabW.pairs
 	if dftH == dftW {
-		p.twH, p.brH = p.twW, p.brW
+		p.twH, p.prH = p.twW, p.prW
 	} else {
-		p.twH, p.brH = makeTwiddles(dftH), makeBitrev(dftH)
+		tabH := fftTables(dftH)
+		p.twH, p.prH = tabH.tw, tabH.pairs
 	}
 	return p
 }
@@ -232,25 +411,33 @@ func blockForwardGo(chanBase []uint8, stride, step, x0, y0, loadW, loadH int, p 
 		for x := loadW; x < n; x++ {
 			z[x] = 0
 		}
-		fftGo(z, p.twW, p.brW, false)
+		fftGo(z, p.twW, p.prW, false)
 		for k := 0; k < hw; k++ {
 			zk, zn := z[k], z[(n-k)&mask]
 			sa[k] = complex(0.5*(real(zk)+real(zn)), 0.5*(imag(zk)-imag(zn)))
 			sb[k] = complex(0.5*(imag(zk)+imag(zn)), 0.5*(real(zn)-real(zk)))
 		}
 	}
-	fftColsGo(spec, p.dftH, hw, p.twH, p.brH, false, z)
+	fftColsGo(spec, p.dftH, hw, p.twH, p.prH, false, z)
 }
 
 func mulConjGo(spec, tspec []complex64) {
+	if simd.Enabled {
+		simd.MulConj(spec, tspec)
+		return
+	}
 	for i, a := range spec {
 		b := tspec[i]
-		spec[i] = complex(real(a)*real(b)+imag(a)*imag(b), imag(a)*real(b)-real(a)*imag(b))
+		// Explicit float32 roundings, matching the C core and the SIMD
+		// kernel (see bfly).
+		re := float32(real(a)*real(b)) + float32(imag(a)*imag(b))
+		im := float32(imag(a)*real(b)) - float32(real(a)*imag(b))
+		spec[i] = complex(re, im)
 	}
 }
 
 func blockInverseEmitGo(p *goPlan, spec, z []complex64, res []float32, rw, x0, y0, bw, bh int, add bool) {
-	fftColsGo(spec, p.dftH, p.hw, p.twH, p.brH, true, z)
+	fftColsGo(spec, p.dftH, p.hw, p.twH, p.prH, true, z)
 	n, hw := p.dftW, p.hw
 	for r := 0; r < bh; r += 2 {
 		sa := spec[r*hw : r*hw+hw]
@@ -262,7 +449,7 @@ func blockInverseEmitGo(p *goPlan, spec, z []complex64, res []float32, rw, x0, y
 			m := n - k
 			z[k] = complex(real(sa[m])+imag(sb[m]), real(sb[m])-imag(sa[m]))
 		}
-		fftGo(z, p.twW, p.brW, true)
+		fftGo(z, p.twW, p.prW, true)
 		o := res[(y0+r)*rw+x0:]
 		if add {
 			for x := 0; x < bw; x++ {
@@ -293,16 +480,17 @@ func blockInverseEmitGo(p *goPlan, spec, z []complex64, res []float32, rw, x0, y
 // arithmetic is identical for any worker count.
 func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, th, rw, rh, threads int, p *goPlan, result []float32) {
 	specN := p.dftH * p.hw
-	tspec := make([]complex64, cn*specN)
-	z0 := make([]complex64, p.dftW)
-	scale := complex(1/(float32(p.dftW)*float32(p.dftH)), 0)
+	tspec := getCplx(cn * specN)
+	z0 := getCplx(p.dftW)
+	scale := 1 / (float32(p.dftW) * float32(p.dftH))
 	for k := 0; k < cn; k++ {
 		ts := tspec[k*specN : (k+1)*specN]
 		blockForwardGo(tpl[k:], tstride, step, 0, 0, tw, th, p, ts, z0)
 		for i := range ts {
-			ts[i] *= scale
+			ts[i] = complex(real(ts[i])*scale, imag(ts[i])*scale)
 		}
 	}
+	putCplx(z0)
 	ntx := (rw + p.blockW - 1) / p.blockW
 	nty := (rh + p.blockH - 1) / p.blockH
 	ntiles := ntx * nty
@@ -311,8 +499,8 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 		nw = ntiles
 	}
 	runParallel(nw, func(w int) {
-		spec := make([]complex64, specN)
-		z := make([]complex64, p.dftW)
+		spec := getCplx(specN)
+		z := getCplx(p.dftW)
 		for t := w; t < ntiles; t += nw {
 			x0, y0 := (t%ntx)*p.blockW, (t/ntx)*p.blockH
 			bw, bh := min(p.blockW, rw-x0), min(p.blockH, rh-y0)
@@ -322,7 +510,10 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 				blockInverseEmitGo(p, spec, z, result, rw, x0, y0, bw, bh, k > 0)
 			}
 		}
+		putCplx(spec)
+		putCplx(z)
 	})
+	putCplx(tspec)
 }
 
 // ------------------------------------------------- normalization + scan --
@@ -332,143 +523,286 @@ type goExtrema struct {
 	minX, minY, maxX, maxY int
 }
 
-// normalizeBandGo processes result rows [y0, y1). Exactly one of corrF/corrD
-// is non-nil. Band-local column-sum rebuilds are bit-exact because all sums
-// are integer-valued doubles.
-func normalizeBandGo(img []uint8, istride, iw int, cn, step, tw, th, rw, y0, y1 int,
-	mean *[4]float64, templNorm float64, corrF []float32, corrD []float64, result []float32) goExtrema {
-	invArea := 1 / (float64(tw) * float64(th))
-	colSum := make([]float64, iw*cn)
-	colSum2 := make([]float64, iw)
+// Column-sum helpers: the sliding statistics are integer-valued (colSum <=
+// 255*th, colSum2 <= 255^2*th*cn), so int32/int64 accumulation feeds the
+// double window math bit-identical inputs while avoiding per-byte float
+// conversions. The (step,cn) pairs the public API produces get unrolled
+// loops; anything else takes the generic path. With cn==3, step==4 the
+// alpha lane is accumulated too (stride stays 4) but never read.
+func colBuildGo(colSum []int32, colSum2 []int64, img []uint8, istride, iw, cn, cs, step, y0, th int) {
+	for i := range colSum {
+		colSum[i] = 0
+	}
+	for i := range colSum2 {
+		colSum2[i] = 0
+	}
+	u4 := cs == 4 && step == 4
 	for y := y0; y < y0+th; y++ {
 		row := img[y*istride:]
-		for x := 0; x < iw; x++ {
-			for k := 0; k < cn; k++ {
-				v := float64(row[x*step+k])
-				colSum[x*cn+k] += v
-				colSum2[x] += v * v
+		switch {
+		case step == 1 && cn == 1:
+			row = row[:iw]
+			for x, v := range row {
+				colSum[x] += int32(v)
+				colSum2[x] += int64(int32(v) * int32(v))
+			}
+		case u4:
+			row = row[:iw*4]
+			for i, v := range row {
+				colSum[i] += int32(v)
+			}
+			if cn == 3 {
+				for x := 0; x < iw; x++ {
+					r := int32(row[x*4])
+					g := int32(row[x*4+1])
+					b := int32(row[x*4+2])
+					colSum2[x] += int64(r*r + g*g + b*b)
+				}
+			} else {
+				for x := 0; x < iw; x++ {
+					r := int32(row[x*4])
+					g := int32(row[x*4+1])
+					b := int32(row[x*4+2])
+					a := int32(row[x*4+3])
+					colSum2[x] += int64(r*r + g*g + b*b + a*a)
+				}
+			}
+		default:
+			for x := 0; x < iw; x++ {
+				for k := 0; k < cn; k++ {
+					v := int32(row[x*step+k])
+					colSum[x*cs+k] += v
+					colSum2[x] += int64(v * v)
+				}
 			}
 		}
 	}
+}
+
+func colSlideGo(colSum []int32, colSum2 []int64, rsub, radd []uint8, iw, cn, cs, step int) {
+	switch {
+	case step == 1 && cn == 1:
+		for x := 0; x < iw; x++ {
+			a, b := int32(radd[x]), int32(rsub[x])
+			colSum[x] += a - b
+			colSum2[x] += int64(a*a - b*b)
+		}
+	case cs == 4 && step == 4:
+		for i := 0; i < iw*4; i++ {
+			colSum[i] += int32(radd[i]) - int32(rsub[i])
+		}
+		if cn == 3 {
+			for x := 0; x < iw; x++ {
+				ar, ag, ab := int32(radd[x*4]), int32(radd[x*4+1]), int32(radd[x*4+2])
+				br, bg, bb := int32(rsub[x*4]), int32(rsub[x*4+1]), int32(rsub[x*4+2])
+				colSum2[x] += int64(ar*ar + ag*ag + ab*ab - br*br - bg*bg - bb*bb)
+			}
+		} else {
+			for x := 0; x < iw; x++ {
+				ar, ag, ab, aa := int32(radd[x*4]), int32(radd[x*4+1]), int32(radd[x*4+2]), int32(radd[x*4+3])
+				br, bg, bb, ba := int32(rsub[x*4]), int32(rsub[x*4+1]), int32(rsub[x*4+2]), int32(rsub[x*4+3])
+				colSum2[x] += int64(ar*ar + ag*ag + ab*ab + aa*aa - br*br - bg*bg - bb*bb - ba*ba)
+			}
+		}
+	default:
+		for x := 0; x < iw; x++ {
+			for k := 0; k < cn; k++ {
+				a, b := int32(radd[x*step+k]), int32(rsub[x*step+k])
+				colSum[x*cs+k] += a - b
+				colSum2[x] += int64(a*a - b*b)
+			}
+		}
+	}
+}
+
+// normChunkGo is the result-row chunk used when spilling window sums for
+// the SIMD normalize kernel; matches the C core's CVM_NORM_CHUNK.
+const normChunkGo = 256
+
+// normOne evaluates the TM_CCOEFF_NORMED tail for one element. The float64
+// conversions around products pin each op to one rounding (Go may
+// otherwise fuse mul-adds on some architectures); the C core computes the
+// same single-rounded sequence.
+func normOne(num, wndMean2, s2d, invArea, eps, templNorm float64) float32 {
+	wndMean2 = float64(wndMean2 * invArea)
+	diff2 := s2d - wndMean2
+	if diff2 < 0 {
+		diff2 = 0
+	}
+	lim := eps * s2d
+	if lim > 0.5 {
+		lim = 0.5
+	}
+	den := 0.0
+	if diff2 > lim {
+		den = math.Sqrt(diff2) * templNorm
+	}
+	switch {
+	case math.Abs(num) < den:
+		num /= den
+	case math.Abs(num) < den*1.125:
+		if num > 0 {
+			num = 1
+		} else {
+			num = -1
+		}
+	default:
+		num = 0
+	}
+	return float32(num)
+}
+
+// normalizeBandGo processes result rows [y0, y1). Band-local column-sum
+// rebuilds are bit-exact because all window statistics are exact integers.
+func normalizeBandGo(img []uint8, istride, iw int, cn, step, tw, th, rw, y0, y1 int,
+	mean *[4]float64, templNorm float64, corr []float32, result []float32) goExtrema {
+	invArea := 1 / (float64(tw) * float64(th))
+	cs := cn
+	if step == 4 && (cn == 3 || cn == 4) {
+		cs = 4
+	}
+	colSum := getI32(iw * cs)
+	colSum2 := getI64(iw)
+	defer putI32(colSum)
+	defer putI64(colSum2)
+	colBuildGo(colSum, colSum2, img, istride, iw, cn, cs, step, y0, th)
+
+	useKernel := simd.Enabled && (cn == 1 || cn == 3 || cn == 4)
+	var wt []float64
+	if useKernel {
+		wt = getF64((cn + 1) * normChunkGo)
+		defer putF64(wt)
+	}
 
 	ext := goExtrema{minV: math.MaxFloat32, maxV: -math.MaxFloat32, minY: y0, maxY: y0}
-	const eps = 10.0 * 1.1920929e-07 // 10*FLT_EPSILON
+	const eps = 10.0 * 0x1p-23 // 10*FLT_EPSILON, exactly as the C core
 
 	for y := y0; ; y++ {
-		var s [4]float64
-		s2 := 0.0
+		var s [4]int64
+		var s2 int64
 		for x := 0; x < tw; x++ {
 			for k := 0; k < cn; k++ {
-				s[k] += colSum[x*cn+k]
+				s[k] += int64(colSum[x*cs+k])
 			}
 			s2 += colSum2[x]
 		}
 		rrow := result[y*rw : y*rw+rw]
-		var cfr []float32
-		var cdr []float64
-		if corrF != nil {
-			cfr = corrF[y*rw : y*rw+rw]
-		} else {
-			cdr = corrD[y*rw : y*rw+rw]
-		}
-		for x := 0; ; x++ {
-			var num float64
-			if cfr != nil {
-				num = float64(cfr[x])
-			} else {
-				num = cdr[x]
-			}
-			wndMean2 := 0.0
-			for k := 0; k < cn; k++ {
-				t := s[k]
-				wndMean2 += t * t
-				num -= t * mean[k]
-			}
-			wndMean2 *= invArea
-			diff2 := s2 - wndMean2
-			if diff2 < 0 {
-				diff2 = 0
-			}
-			lim := eps * s2
-			if lim > 0.5 {
-				lim = 0.5
-			}
-			den := 0.0
-			if diff2 > lim {
-				den = math.Sqrt(diff2) * templNorm
-			}
-			switch {
-			case math.Abs(num) < den:
-				num /= den
-			case math.Abs(num) < den*1.125:
-				if num > 0 {
-					num = 1
-				} else {
-					num = -1
+		crow := corr[y*rw : y*rw+rw]
+
+		if useKernel {
+			// Chunked: spill the (exact integer) window sums as float64
+			// lanes and evaluate the tail vectorized; conversion is
+			// lossless, so values equal the fused scalar path bit for bit.
+			for x0 := 0; x0 < rw; x0 += normChunkGo {
+				len := min(normChunkGo, rw-x0)
+				q2 := wt[cn*normChunkGo:]
+				for i := 0; ; i++ {
+					for k := 0; k < cn; k++ {
+						wt[k*normChunkGo+i] = float64(s[k])
+					}
+					q2[i] = float64(s2)
+					x := x0 + i
+					if i+1 >= len {
+						if x+1 < rw { // carry the slide into the next chunk
+							for k := 0; k < cn; k++ {
+								s[k] += int64(colSum[(x+tw)*cs+k] - colSum[x*cs+k])
+							}
+							s2 += colSum2[x+tw] - colSum2[x]
+						}
+						break
+					}
+					for k := 0; k < cn; k++ {
+						s[k] += int64(colSum[(x+tw)*cs+k] - colSum[x*cs+k])
+					}
+					s2 += colSum2[x+tw] - colSum2[x]
 				}
-			default:
-				num = 0
+				vlen := len &^ 3
+				if vlen > 0 {
+					simd.NormRow(rrow[x0:x0+vlen], crow[x0:x0+vlen], &wt[0],
+						normChunkGo, vlen, cn, mean, invArea, eps, templNorm)
+				}
+				for i := vlen; i < len; i++ {
+					num := float64(crow[x0+i])
+					wndMean2 := 0.0
+					for k := 0; k < cn; k++ {
+						t := wt[k*normChunkGo+i]
+						wndMean2 += float64(t * t)
+						num -= float64(t * mean[k])
+					}
+					rrow[x0+i] = normOne(num, wndMean2, q2[i], invArea, eps, templNorm)
+				}
 			}
-			// Compare the float32 value actually stored in the result map,
-			// matching OpenCV minMaxLoc scanning the rounded CV_32F data.
-			v := float32(num)
-			rrow[x] = v
-			if v < ext.minV {
-				ext.minV, ext.minX, ext.minY = v, x, y
+			// Row min/max scan of the stored float32 values: ascending x
+			// with strict compares keeps first-occurrence tie semantics.
+			for x, v := range rrow {
+				if v < ext.minV {
+					ext.minV, ext.minX, ext.minY = v, x, y
+				}
+				if v > ext.maxV {
+					ext.maxV, ext.maxX, ext.maxY = v, x, y
+				}
 			}
-			if v > ext.maxV {
-				ext.maxV, ext.maxX, ext.maxY = v, x, y
+		} else {
+			for x := 0; ; x++ {
+				num := float64(crow[x])
+				wndMean2 := 0.0
+				for k := 0; k < cn; k++ {
+					t := float64(s[k])
+					wndMean2 += float64(t * t)
+					num -= float64(t * mean[k])
+				}
+				// Compare the float32 value actually stored in the result
+				// map, matching OpenCV minMaxLoc scanning rounded CV_32F.
+				v := normOne(num, wndMean2, float64(s2), invArea, eps, templNorm)
+				rrow[x] = v
+				if v < ext.minV {
+					ext.minV, ext.minX, ext.minY = v, x, y
+				}
+				if v > ext.maxV {
+					ext.maxV, ext.maxX, ext.maxY = v, x, y
+				}
+				if x+1 >= rw {
+					break
+				}
+				for k := 0; k < cn; k++ {
+					s[k] += int64(colSum[(x+tw)*cs+k] - colSum[x*cs+k])
+				}
+				s2 += colSum2[x+tw] - colSum2[x]
 			}
-			if x+1 >= rw {
-				break
-			}
-			for k := 0; k < cn; k++ {
-				s[k] += colSum[(x+tw)*cn+k] - colSum[x*cn+k]
-			}
-			s2 += colSum2[x+tw] - colSum2[x]
 		}
 		if y+1 >= y1 {
 			break
 		}
-		sub := img[y*istride:]
-		add := img[(y+th)*istride:]
-		for x := 0; x < iw; x++ {
-			for k := 0; k < cn; k++ {
-				a := float64(add[x*step+k])
-				b := float64(sub[x*step+k])
-				colSum[x*cn+k] += a - b
-				colSum2[x] += a*a - b*b
-			}
-		}
+		colSlideGo(colSum, colSum2, img[y*istride:], img[(y+th)*istride:], iw, cn, cs, step)
 	}
 	return ext
 }
 
 func normalizeParallelGo(img []uint8, istride, iw int, tpl []uint8, tstride, tw, th, cn, step, rw, rh, threads int,
-	corrF []float32, corrD []float64, result []float32) (float32, int, int, float32, int, int) {
+	corr []float32, result []float32) (float32, int, int, float32, int, int) {
 	invArea := 1 / (float64(tw) * float64(th))
 	var mean [4]float64
 	templNorm := 0.0
 	for k := 0; k < cn; k++ {
-		s, s2 := 0.0, 0.0
+		var s, s2 int64 // template statistics are exact integers
 		for y := 0; y < th; y++ {
 			row := tpl[y*tstride+k:]
 			for x := 0; x < tw; x++ {
-				v := float64(row[x*step])
+				v := int64(row[x*step])
 				s += v
 				s2 += v * v
 			}
 		}
-		mean[k] = s * invArea
-		templNorm += s2*invArea - mean[k]*mean[k]
+		mean[k] = float64(s) * invArea
+		templNorm += float64(float64(s2)*invArea) - float64(mean[k]*mean[k])
 	}
-	if templNorm < 2.220446049250313e-16 { // DBL_EPSILON: flat template
+	if templNorm < 0x1p-52 { // DBL_EPSILON: flat template
 		for i := range result[:rw*rh] {
 			result[i] = 1
 		}
 		return 1, 0, 0, 1, 0, 0
 	}
-	templNorm = math.Sqrt(templNorm * float64(tw) * float64(th))
+	templNorm = math.Sqrt(templNorm * (float64(tw) * float64(th)))
 
 	nb := threads
 	if maxb := rh / max(th, 32); maxb >= 1 && nb > maxb {
@@ -483,7 +817,7 @@ func normalizeParallelGo(img []uint8, istride, iw int, tpl []uint8, tstride, tw,
 	ext := make([]goExtrema, nb)
 	runParallel(nb, func(w int) {
 		ext[w] = normalizeBandGo(img, istride, iw, cn, step, tw, th, rw,
-			bandY[w], bandY[w+1], &mean, templNorm, corrF, corrD, result)
+			bandY[w], bandY[w+1], &mean, templNorm, corr, result)
 	})
 	r := ext[0]
 	for b := 1; b < nb; b++ { // strict compares keep first occurrence
@@ -508,9 +842,10 @@ func matchU8Go(img []uint8, istride, iw, ih int, tpl []uint8, tstride, tw, th, c
 	rw, rh := iw-tw+1, ih-th+1
 	res := result
 	if res == nil {
-		res = make([]float32, rw*rh)
+		res = getF32(rw * rh)
+		defer putF32(res)
 	}
 	p := newGoPlan(tw, th, rw, rh)
 	crossCorrGo(img, istride, tpl, tstride, step, cn, tw, th, rw, rh, threads, p, res)
-	return normalizeParallelGo(img, istride, iw, tpl, tstride, tw, th, cn, step, rw, rh, threads, res, nil, res)
+	return normalizeParallelGo(img, istride, iw, tpl, tstride, tw, th, cn, step, rw, rh, threads, res, res)
 }

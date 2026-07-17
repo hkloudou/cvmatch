@@ -188,14 +188,62 @@ static void run_parallel(int n, void (*fn)(void *, int), void *ctx) {
 /* Iterative radix-2 complex FFT, natural order in and out.
  * tw holds forward twiddles: tw[half + j] = exp(-2*pi*i*j/(2*half)). */
 
+/* Deterministic cos/sin of pi*j/half (0 <= j < half, half a power of two):
+ * exact dyadic range reduction plus fdlibm-style minimax kernels in plain
+ * sequenced double ops — no libm trig. The Go core runs the identical op
+ * sequence, so both cores' twiddle tables (and therefore their outputs)
+ * are bit-identical on every platform regardless of the system libm. */
+static void sincospi_frac(int j, int half, float *cs, float *sn) {
+  int m = 2 * j;      /* pi*j/half = k*(pi/2) + u*(pi/2), u in [0,1) */
+  int k = m / half;   /* 0 or 1 */
+  int rem = m - k * half;
+  double u = (double)rem / (double)half; /* exact: half is a power of two */
+  int swap = 0;
+  if (u > 0.5) { /* co-function fold, exact dyadic subtraction */
+    u = 1.0 - u;
+    swap = 1;
+  }
+  double y = u * 1.57079632679489661923; /* u*(pi/2), one rounding */
+  double z = y * y;
+  double r = z * (4.16666666666666019037e-02 +
+                  z * (-1.38888888888741095749e-03 +
+                       z * (2.48015872894767294178e-05 +
+                            z * (-2.75573143513906633035e-07 +
+                                 z * (2.08757232129817482790e-09 +
+                                      z * -1.13596475577881948265e-11)))));
+  double hz = 0.5 * z;
+  double w = 1.0 - hz;
+  double c = w + (((1.0 - w) - hz) + z * r);
+  double r2 = 8.33333333332248946124e-03 +
+              z * (-1.98412698298579493134e-04 +
+                   z * (2.75573137070700676789e-06 +
+                        z * (-2.50507602534068634195e-08 +
+                             z * 1.58969099521155010221e-10)));
+  double v = z * y;
+  double s = y + v * (-1.66666666666666324348e-01 + z * r2);
+  if (swap) {
+    double t = c;
+    c = s;
+    s = t;
+  }
+  if (k) { /* rotate by pi/2 */
+    double t = c;
+    c = -s;
+    s = t;
+  }
+  *cs = (float)c;
+  *sn = (float)s;
+}
+
 static cf *make_twiddles(int n) {
   cf *tw = (cf *)malloc((size_t)n * sizeof(cf));
   if (!tw) return NULL;
   for (int half = 1; half < n; half <<= 1) {
-    double step = -3.14159265358979323846 / (double)half;
     for (int j = 0; j < half; j++) {
-      tw[half + j].re = (float)cos(step * j);
-      tw[half + j].im = (float)sin(step * j);
+      float c, s;
+      sincospi_frac(j, half, &c, &s);
+      tw[half + j].re = c;
+      tw[half + j].im = -s; /* forward twiddle: exp(-i*pi*j/half) */
     }
   }
   tw[0].re = 1.0f;
