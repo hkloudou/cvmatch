@@ -7,30 +7,30 @@ main branch's `docs/genchart.py`. Do not edit by hand.
 `Match`, milliseconds. Native C++ is the best of 7 end-to-end runs,
 single-threaded because that is how OpenCV's `matchTemplate` runs;
 the cvmatch columns are `go test -benchtime 5x` averages from
-`-cpu 1,4` — asm = the `-tags cvmatch_asm` build, no-asm = the
-default build. Both architectures run the identical comparison.
+`-cpu 1,4` — asm = the default build, no-asm = the
+`-tags purego` build. Both architectures run the identical comparison.
 
 **amd64** — GitHub Actions ubuntu-latest (4-vCPU AMD EPYC 9V74 80-Core Processor, linux/amd64):
 
 | scene | native C++ | asm 1T | asm 4T | no-asm 1T | no-asm 4T |
 |---|---|---|---|---|---|
-| Window 1600×1000 · button 96×32 | 184.8 | 50.7 | **22.8** | 177.4 | 91.5 |
-| Window 1600×1000 · icon 24×24 | 149.0 | 38.1 | **19.6** | 147.1 | 73.5 |
-| Window 1600×1000 · panel 300×200 | 160.9 | 49.9 | **38.1** | 196.8 | 128.7 |
-| Noise 1280×720 · sub 96×96 | 120.3 | 34.7 | **23.5** | 141.7 | 87.1 |
-| Noise 1920×1080 · sub 128×128 | 286.1 | 61.0 | **38.4** | 254.7 | 140.2 |
-| Noise 1920×1080 · sub 32×32 | 193.2 | 50.2 | **26.0** | 199.6 | 98.5 |
-| Noise 640×480 · varying alpha, 4ch | 30.2 | 12.5 | **9.0** | 50.8 | 32.0 |
-| Window 3840×2160 · button 96×32 | 861.0 | 222.5 | **107.5** | 925.2 | 451.5 |
-| Noise 3840×2160 · sub 256×256 | 1226.9 | 295.4 | **172.6** | 1240.6 | 666.0 |
-| fruits 512×480 · sub 80×80 | 51.5 | **6.3** | 7.7 | 23.2 | 18.5 |
-| baboon 512×512 · sub 64×64 | 33.0 | **6.6** | 7.5 | 24.5 | 18.8 |
-| building 868×600 · sub 100×100 | 75.3 | 18.7 | **18.3** | 75.5 | 55.1 |
-| graf1 800×640 · sub 120×120 | 90.4 | 18.6 | **18.1** | 76.6 | 55.4 |
-| starry_night 752×600 · sub 128×128 | 66.6 | **17.4** | **17.4** | 73.2 | 55.5 |
+| Window 1600×1000 · button 96×32 | 185.7 | 43.3 | **23.5** | 178.1 | 92.4 |
+| Window 1600×1000 · icon 24×24 | 148.4 | 37.9 | **19.1** | 148.5 | 73.6 |
+| Window 1600×1000 · panel 300×200 | 160.7 | 48.8 | **37.1** | 196.8 | 131.6 |
+| Noise 1280×720 · sub 96×96 | 120.0 | 33.7 | **23.1** | 142.2 | 86.4 |
+| Noise 1920×1080 · sub 128×128 | 284.7 | 60.9 | **35.7** | 256.0 | 142.2 |
+| Noise 1920×1080 · sub 32×32 | 192.5 | 50.4 | **26.2** | 197.3 | 97.4 |
+| Noise 640×480 · varying alpha, 4ch | 29.8 | 12.5 | **8.6** | 51.1 | 31.5 |
+| Window 3840×2160 · button 96×32 | 858.6 | 222.7 | **109.9** | 927.8 | 452.8 |
+| Noise 3840×2160 · sub 256×256 | 1216.2 | 296.1 | **168.7** | 1242.5 | 664.9 |
+| fruits 512×480 · sub 80×80 | 51.4 | **6.5** | 7.6 | 23.3 | 18.3 |
+| baboon 512×512 · sub 64×64 | 32.8 | **6.4** | 7.3 | 24.7 | 18.5 |
+| building 868×600 · sub 100×100 | 75.0 | 18.3 | **16.9** | 75.6 | 55.1 |
+| graf1 800×640 · sub 120×120 | 90.5 | 18.4 | **17.3** | 76.2 | 55.2 |
+| starry_night 752×600 · sub 128×128 | 66.4 | 17.5 | **17.4** | 73.1 | 54.9 |
 
-`MatchGray` at 1080p/128 for scale: asm 21.9 / 11.5 ms,
-no-asm 97.9 / 58.9 ms (1T / 4T). Native C++ has no gray
+`MatchGray` at 1080p/128 for scale: asm 20.6 / 12.2 ms,
+no-asm 98.3 / 54.1 ms (1T / 4T). Native C++ has no gray
 row in this suite — a fair baseline would need cvtColor + 1-channel
 matchTemplate timed end-to-end, which was not measured; treat MatchGray
 numbers as cvmatch-internal.
@@ -41,34 +41,34 @@ amd64 rows above:
 
 | scene | native C++ | asm 1T | asm 4T | no-asm 1T | no-asm 4T |
 |---|---|---|---|---|---|
-| Window 1600×1000 · button 96×32 | 223.3 | 89.0 | **27.6** | 190.7 | 57.6 |
-| Window 1600×1000 · icon 24×24 | 178.4 | 74.9 | **21.1** | 159.5 | 43.0 |
-| Window 1600×1000 · panel 300×200 | 213.3 | 100.6 | **52.0** | 216.8 | 96.2 |
-| Noise 1280×720 · sub 96×96 | 138.1 | 71.7 | **32.0** | 157.1 | 61.1 |
-| Noise 1920×1080 · sub 128×128 | 357.2 | 128.1 | **50.5** | 284.4 | 105.4 |
-| Noise 1920×1080 · sub 32×32 | 235.2 | 98.5 | **28.6** | 212.5 | 58.0 |
-| Noise 640×480 · varying alpha, 4ch | 33.4 | 25.9 | **12.6** | 56.3 | 24.4 |
-| Window 3840×2160 · button 96×32 | 1093.0 | 456.1 | **124.8** | 982.6 | 264.2 |
-| Noise 3840×2160 · sub 256×256 | 1575.3 | 626.7 | **225.3** | 1394.7 | 483.7 |
-| fruits 512×480 · sub 80×80 | 57.9 | 11.9 | **7.6** | 25.4 | 14.0 |
-| baboon 512×512 · sub 64×64 | 36.7 | 12.1 | **7.8** | 27.1 | 14.3 |
-| building 868×600 · sub 100×100 | 85.8 | 38.8 | **24.7** | 85.8 | 43.1 |
-| graf1 800×640 · sub 120×120 | 107.5 | 39.3 | **23.9** | 85.9 | 44.1 |
-| starry_night 752×600 · sub 128×128 | 77.1 | 37.6 | **24.4** | 82.8 | 44.4 |
+| Window 1600×1000 · button 96×32 | 231.9 | 92.4 | **28.5** | 194.6 | 59.4 |
+| Window 1600×1000 · icon 24×24 | 185.5 | 77.4 | **23.2** | 161.5 | 43.7 |
+| Window 1600×1000 · panel 300×200 | 221.1 | 105.9 | **56.3** | 223.1 | 102.6 |
+| Noise 1280×720 · sub 96×96 | 141.7 | 75.7 | **32.9** | 161.6 | 63.3 |
+| Noise 1920×1080 · sub 128×128 | 364.9 | 136.4 | **57.5** | 290.9 | 107.7 |
+| Noise 1920×1080 · sub 32×32 | 241.4 | 102.9 | **29.3** | 215.7 | 60.5 |
+| Noise 640×480 · varying alpha, 4ch | 35.1 | 26.6 | **13.0** | 56.7 | 25.2 |
+| Window 3840×2160 · button 96×32 | 1117.4 | 470.2 | **132.1** | 1002.1 | 270.8 |
+| Noise 3840×2160 · sub 256×256 | 1633.8 | 662.0 | **235.8** | 1428.8 | 499.0 |
+| fruits 512×480 · sub 80×80 | 59.5 | 12.3 | **8.0** | 25.8 | 14.1 |
+| baboon 512×512 · sub 64×64 | 38.9 | 12.9 | **8.2** | 26.8 | 14.2 |
+| building 868×600 · sub 100×100 | 89.3 | 40.8 | **25.6** | 87.9 | 44.5 |
+| graf1 800×640 · sub 120×120 | 111.3 | 40.6 | **26.0** | 88.1 | 45.6 |
+| starry_night 752×600 · sub 128×128 | 79.7 | 39.2 | **25.5** | 84.5 | 45.3 |
 
-`MatchGray` at 1080p/128 on arm64: asm 46.7 / 17.8 ms, no-asm 106.4 / 39.7 ms (1T / 4T).
+`MatchGray` at 1080p/128 on arm64: asm 48.3 / 18.5 ms, no-asm 108.2 / 40.6 ms (1T / 4T).
 
 **Measured summary (single-threaded, like-for-like):** the asm build runs
-3.5–4.2x faster than the default no-asm build on amd64
+3.6–4.2x faster than the default no-asm build on amd64
 (2.1–2.2x on arm64), and beats native OpenCV C++ by
-2.4–8.2x on amd64 and 1.3–4.9x on arm64.
+2.4–7.9x on amd64 and 1.3–4.8x on arm64.
 
 Internal multi-threading (4 workers, bit-identical output at any worker
-count) further improves cvmatch by up to 2.2x on the multi-tile
+count) further improves cvmatch by up to 2.0x on the multi-tile
 scenes — the 4T columns above. It is a product feature, not part of the
 vs-native comparison: OpenCV's matchTemplate does not thread, so the
 headline numbers are 1T vs 1T.
 
 Peak process memory for one 1080p/128 match (VmHWM, fresh process,
 default build): native OpenCV 155 MB, `Match` 48 MB,
-`MatchGray` 34 MB, idle Go baseline 12 MB.
+`MatchGray` 38 MB, idle Go baseline 12 MB.
