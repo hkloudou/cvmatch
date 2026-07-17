@@ -319,8 +319,8 @@ def matrix_markdown():
     if r_amd and r_arm and r_nat:
         lines += [
             "",
-            f"**Measured summary (single-threaded, like-for-like):** the asm build runs",
-            f"{min(r_amd):.1f}–{max(r_amd):.1f}x faster than the default no-asm build on amd64",
+            f"**Measured summary (single-threaded, like-for-like):** the default asm build",
+            f"runs {min(r_amd):.1f}–{max(r_amd):.1f}x faster than the -tags purego build on amd64",
             f"({min(r_arm):.1f}–{max(r_arm):.1f}x on arm64), and beats native OpenCV C++ by",
             f"{min(r_nat):.1f}–{max(r_nat):.1f}x on amd64"
             + (f" and {min(r_natA):.1f}–{max(r_natA):.1f}x on arm64." if r_natA else "."),
