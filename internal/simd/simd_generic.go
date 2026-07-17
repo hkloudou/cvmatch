@@ -20,3 +20,8 @@ func FFTColsBfly(p, q []complex64, w complex64) {
 func MulConj(spec, tspec []complex64) {
 	panic("cvmatch: SIMD kernel on unsupported platform")
 }
+
+func NormRow(rrow []float32, crow []float32, wt *float64, stride, n, cn int,
+	mean *[4]float64, invArea, eps, templNorm float64) {
+	panic("cvmatch: SIMD kernel on unsupported platform")
+}

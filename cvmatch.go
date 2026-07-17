@@ -5,7 +5,9 @@
 // C99 file used through cgo (the fast path), and a pure-Go port selected
 // automatically when cgo is unavailable (CGO_ENABLED=0, cross-compilation
 // without a C toolchain). The Impl constant reports which one is active;
-// both produce the same output (covered by tests).
+// both produce bit-identical output (asserted exactly by the tests: the
+// cores run the same single-rounded IEEE op sequence, including a shared
+// deterministic twiddle generator, independent of the system libm).
 //
 // Match is numerically aligned with OpenCV's matchTemplate + minMaxLoc on
 // CV_8UC4 input (the classic ImageToMatRGBA-style pipeline), while
