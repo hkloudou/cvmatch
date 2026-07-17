@@ -21,68 +21,25 @@ const maxThreadsGo = 16
 // (block spectra include their zero padding, column sums are cleared in
 // colBuildGo, the internal result map is stored before it is read), so
 // dirty reuse is safe and steady-state matching allocates nothing.
+type slicePool[T any] struct{ p sync.Pool }
+
+func (sp *slicePool[T]) get(n int) []T {
+	if v, _ := sp.p.Get().(*[]T); v != nil && cap(*v) >= n {
+		return (*v)[:n]
+	}
+	return make([]T, n)
+}
+
+func (sp *slicePool[T]) put(s []T) { sp.p.Put(&s) }
+
 var (
-	cplxPool sync.Pool // *[]complex64
-	f32Pool  sync.Pool // *[]float32
-	f64Pool  sync.Pool // *[]float64
-	i32Pool  sync.Pool // *[]int32
-	i64Pool  sync.Pool // *[]int64
-	bytePool sync.Pool // *[]uint8
+	cplxPool slicePool[complex64]
+	f32Pool  slicePool[float32]
+	f64Pool  slicePool[float64]
+	i32Pool  slicePool[int32]
+	i64Pool  slicePool[int64]
+	bytePool slicePool[uint8]
 )
-
-func getCplx(n int) []complex64 {
-	if v, _ := cplxPool.Get().(*[]complex64); v != nil && cap(*v) >= n {
-		return (*v)[:n]
-	}
-	return make([]complex64, n)
-}
-
-func putCplx(s []complex64) { cplxPool.Put(&s) }
-
-func getF32(n int) []float32 {
-	if v, _ := f32Pool.Get().(*[]float32); v != nil && cap(*v) >= n {
-		return (*v)[:n]
-	}
-	return make([]float32, n)
-}
-
-func putF32(s []float32) { f32Pool.Put(&s) }
-
-func getI32(n int) []int32 {
-	if v, _ := i32Pool.Get().(*[]int32); v != nil && cap(*v) >= n {
-		return (*v)[:n]
-	}
-	return make([]int32, n)
-}
-
-func putI32(s []int32) { i32Pool.Put(&s) }
-
-func getI64(n int) []int64 {
-	if v, _ := i64Pool.Get().(*[]int64); v != nil && cap(*v) >= n {
-		return (*v)[:n]
-	}
-	return make([]int64, n)
-}
-
-func putI64(s []int64) { i64Pool.Put(&s) }
-
-func getBytes(n int) []uint8 {
-	if v, _ := bytePool.Get().(*[]uint8); v != nil && cap(*v) >= n {
-		return (*v)[:n]
-	}
-	return make([]uint8, n)
-}
-
-func putBytes(s []uint8) { bytePool.Put(&s) }
-
-func getF64(n int) []float64 {
-	if v, _ := f64Pool.Get().(*[]float64); v != nil && cap(*v) >= n {
-		return (*v)[:n]
-	}
-	return make([]float64, n)
-}
-
-func putF64(s []float64) { f64Pool.Put(&s) }
 
 func nextPow2(v int) int {
 	n := 1
@@ -480,8 +437,8 @@ func blockInverseEmitGo(p *goPlan, spec, z []complex64, res []float32, rw, x0, y
 // arithmetic is identical for any worker count.
 func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, th, rw, rh, threads int, p *goPlan, result []float32) {
 	specN := p.dftH * p.hw
-	tspec := getCplx(cn * specN)
-	z0 := getCplx(p.dftW)
+	tspec := cplxPool.get(cn * specN)
+	z0 := cplxPool.get(p.dftW)
 	scale := 1 / (float32(p.dftW) * float32(p.dftH))
 	for k := 0; k < cn; k++ {
 		ts := tspec[k*specN : (k+1)*specN]
@@ -490,7 +447,7 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 			ts[i] = complex(real(ts[i])*scale, imag(ts[i])*scale)
 		}
 	}
-	putCplx(z0)
+	cplxPool.put(z0)
 	ntx := (rw + p.blockW - 1) / p.blockW
 	nty := (rh + p.blockH - 1) / p.blockH
 	ntiles := ntx * nty
@@ -499,8 +456,8 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 		nw = ntiles
 	}
 	runParallel(nw, func(w int) {
-		spec := getCplx(specN)
-		z := getCplx(p.dftW)
+		spec := cplxPool.get(specN)
+		z := cplxPool.get(p.dftW)
 		for t := w; t < ntiles; t += nw {
 			x0, y0 := (t%ntx)*p.blockW, (t/ntx)*p.blockH
 			bw, bh := min(p.blockW, rw-x0), min(p.blockH, rh-y0)
@@ -510,10 +467,10 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 				blockInverseEmitGo(p, spec, z, result, rw, x0, y0, bw, bh, k > 0)
 			}
 		}
-		putCplx(spec)
-		putCplx(z)
+		cplxPool.put(spec)
+		cplxPool.put(z)
 	})
-	putCplx(tspec)
+	cplxPool.put(tspec)
 }
 
 // ------------------------------------------------- normalization + scan --
@@ -615,8 +572,9 @@ func colSlideGo(colSum []int32, colSum2 []int64, rsub, radd []uint8, iw, cn, cs,
 	}
 }
 
-// normChunkGo is the result-row chunk used when spilling window sums for
-// the SIMD normalize kernel; matches the C core's CVM_NORM_CHUNK.
+// normChunkGo is the result-row chunk for the normalize scan: window sums
+// are spilled per chunk so the buffer stays L1-resident; matches the C
+// core's CVM_NORM_CHUNK.
 const normChunkGo = 256
 
 // normOne evaluates the TM_CCOEFF_NORMED tail for one element. The float64
@@ -661,18 +619,16 @@ func normalizeBandGo(img []uint8, istride, iw int, cn, step, tw, th, rw, y0, y1 
 	if step == 4 && (cn == 3 || cn == 4) {
 		cs = 4
 	}
-	colSum := getI32(iw * cs)
-	colSum2 := getI64(iw)
-	defer putI32(colSum)
-	defer putI64(colSum2)
+	colSum := i32Pool.get(iw * cs)
+	colSum2 := i64Pool.get(iw)
+	defer i32Pool.put(colSum)
+	defer i64Pool.put(colSum2)
 	colBuildGo(colSum, colSum2, img, istride, iw, cn, cs, step, y0, th)
 
-	useKernel := simd.Enabled && (cn == 1 || cn == 3 || cn == 4)
-	var wt []float64
-	if useKernel {
-		wt = getF64((cn + 1) * normChunkGo)
-		defer putF64(wt)
-	}
+	wt := f64Pool.get((cn + 1) * normChunkGo)
+	defer f64Pool.put(wt)
+	q2 := wt[cn*normChunkGo:]
+	useKernel := simd.Enabled && cn != 2
 
 	ext := goExtrema{minV: math.MaxFloat32, maxV: -math.MaxFloat32, minY: y0, maxY: y0}
 	const eps = 10.0 * 0x1p-23 // 10*FLT_EPSILON, exactly as the C core
@@ -689,85 +645,55 @@ func normalizeBandGo(img []uint8, istride, iw int, cn, step, tw, th, rw, y0, y1 
 		rrow := result[y*rw : y*rw+rw]
 		crow := corr[y*rw : y*rw+rw]
 
-		if useKernel {
-			// Chunked: spill the (exact integer) window sums as float64
-			// lanes and evaluate the tail vectorized; conversion is
-			// lossless, so values equal the fused scalar path bit for bit.
-			for x0 := 0; x0 < rw; x0 += normChunkGo {
-				len := min(normChunkGo, rw-x0)
-				q2 := wt[cn*normChunkGo:]
-				for i := 0; ; i++ {
-					for k := 0; k < cn; k++ {
-						wt[k*normChunkGo+i] = float64(s[k])
-					}
-					q2[i] = float64(s2)
-					x := x0 + i
-					if i+1 >= len {
-						if x+1 < rw { // carry the slide into the next chunk
-							for k := 0; k < cn; k++ {
-								s[k] += int64(colSum[(x+tw)*cs+k] - colSum[x*cs+k])
-							}
-							s2 += colSum2[x+tw] - colSum2[x]
-						}
-						break
-					}
+		// The row runs in chunks: the (exact integer) window sums are spilled
+		// as float64 lanes — a lossless conversion, so chunking never changes
+		// a value — and each chunk's tail math is evaluated from the lanes,
+		// vectorized when the kernel covers this channel count.
+		for x0 := 0; x0 < rw; x0 += normChunkGo {
+			clen := min(normChunkGo, rw-x0)
+			for i := 0; ; i++ {
+				for k := 0; k < cn; k++ {
+					wt[k*normChunkGo+i] = float64(s[k])
+				}
+				q2[i] = float64(s2)
+				x := x0 + i
+				if x+1 < rw { // slide (also carries into the next chunk)
 					for k := 0; k < cn; k++ {
 						s[k] += int64(colSum[(x+tw)*cs+k] - colSum[x*cs+k])
 					}
 					s2 += colSum2[x+tw] - colSum2[x]
 				}
-				vlen := len &^ 3
+				if i+1 >= clen {
+					break
+				}
+			}
+			vlen := 0
+			if useKernel {
+				vlen = clen &^ 3
 				if vlen > 0 {
 					simd.NormRow(rrow[x0:x0+vlen], crow[x0:x0+vlen], &wt[0],
 						normChunkGo, vlen, cn, mean, invArea, eps, templNorm)
 				}
-				for i := vlen; i < len; i++ {
-					num := float64(crow[x0+i])
-					wndMean2 := 0.0
-					for k := 0; k < cn; k++ {
-						t := wt[k*normChunkGo+i]
-						wndMean2 += float64(t * t)
-						num -= float64(t * mean[k])
-					}
-					rrow[x0+i] = normOne(num, wndMean2, q2[i], invArea, eps, templNorm)
-				}
 			}
-			// Row min/max scan of the stored float32 values: ascending x
-			// with strict compares keeps first-occurrence tie semantics.
-			for x, v := range rrow {
-				if v < ext.minV {
-					ext.minV, ext.minX, ext.minY = v, x, y
-				}
-				if v > ext.maxV {
-					ext.maxV, ext.maxX, ext.maxY = v, x, y
-				}
-			}
-		} else {
-			for x := 0; ; x++ {
-				num := float64(crow[x])
+			for i := vlen; i < clen; i++ {
+				num := float64(crow[x0+i])
 				wndMean2 := 0.0
 				for k := 0; k < cn; k++ {
-					t := float64(s[k])
+					t := wt[k*normChunkGo+i]
 					wndMean2 += float64(t * t)
 					num -= float64(t * mean[k])
 				}
-				// Compare the float32 value actually stored in the result
-				// map, matching OpenCV minMaxLoc scanning rounded CV_32F.
-				v := normOne(num, wndMean2, float64(s2), invArea, eps, templNorm)
-				rrow[x] = v
-				if v < ext.minV {
-					ext.minV, ext.minX, ext.minY = v, x, y
-				}
-				if v > ext.maxV {
-					ext.maxV, ext.maxX, ext.maxY = v, x, y
-				}
-				if x+1 >= rw {
-					break
-				}
-				for k := 0; k < cn; k++ {
-					s[k] += int64(colSum[(x+tw)*cs+k] - colSum[x*cs+k])
-				}
-				s2 += colSum2[x+tw] - colSum2[x]
+				rrow[x0+i] = normOne(num, wndMean2, q2[i], invArea, eps, templNorm)
+			}
+		}
+		// Row min/max scan of the stored float32 values: ascending x with
+		// strict compares keeps OpenCV's first-occurrence tie semantics.
+		for x, v := range rrow {
+			if v < ext.minV {
+				ext.minV, ext.minX, ext.minY = v, x, y
+			}
+			if v > ext.maxV {
+				ext.maxV, ext.maxX, ext.maxY = v, x, y
 			}
 		}
 		if y+1 >= y1 {
@@ -842,8 +768,8 @@ func matchU8Go(img []uint8, istride, iw, ih int, tpl []uint8, tstride, tw, th, c
 	rw, rh := iw-tw+1, ih-th+1
 	res := result
 	if res == nil {
-		res = getF32(rw * rh)
-		defer putF32(res)
+		res = f32Pool.get(rw * rh)
+		defer f32Pool.put(res)
 	}
 	p := newGoPlan(tw, th, rw, rh)
 	crossCorrGo(img, istride, tpl, tstride, step, cn, tw, th, rw, rh, threads, p, res)

@@ -99,8 +99,7 @@ func All(testdata string) []Scene {
 	// Dense noise (no flat regions), several image/template size ratios.
 	p720, s720 := makeNoise(1280, 720, 96, 96, 431, 285)
 	add("noise720p_sub96", p720, s720, 431, 285, true)
-	p, s := p720, s720
-	p, s = makeNoise(1920, 1080, 128, 128, 977, 604)
+	p, s := makeNoise(1920, 1080, 128, 128, 977, 604)
 	add("noise1080p_sub128", p, s, 977, 604, false)
 	p, s = makeNoise(1920, 1080, 32, 32, 977, 604)
 	add("noise1080p_sub32", p, s, 977, 604, false)
