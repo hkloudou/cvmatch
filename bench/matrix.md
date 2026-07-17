@@ -10,27 +10,27 @@ the cvmatch columns are `go test -benchtime 5x` averages from
 `-cpu 1,4` — asm = the default build, no-asm = the
 `-tags purego` build. Both architectures run the identical comparison.
 
-**amd64** — GitHub Actions ubuntu-latest (4-vCPU AMD EPYC 9V74 80-Core Processor, linux/amd64):
+**amd64** — GitHub Actions ubuntu-latest (4-vCPU AMD EPYC 7763 64-Core Processor, linux/amd64):
 
-| scene | native C++ | asm 1T | asm 4T | no-asm 1T | no-asm 4T |
-|---|---|---|---|---|---|
-| Window 1600×1000 · button 96×32 | 185.0 | 43.6 | **22.7** | 178.5 | 93.0 |
-| Window 1600×1000 · icon 24×24 | 148.7 | 37.9 | **19.7** | 148.8 | 73.4 |
-| Window 1600×1000 · panel 300×200 | 160.4 | 49.8 | **38.0** | 197.1 | 129.0 |
-| Noise 1280×720 · sub 96×96 | 120.6 | 34.6 | **23.2** | 142.1 | 87.0 |
-| Noise 1920×1080 · sub 128×128 | 285.6 | 62.1 | **36.8** | 257.8 | 140.0 |
-| Noise 1920×1080 · sub 32×32 | 192.7 | 51.3 | **25.8** | 198.4 | 98.2 |
-| Noise 640×480 · varying alpha, 4ch | 29.9 | 12.7 | **9.2** | 50.8 | 31.4 |
-| Window 3840×2160 · button 96×32 | 861.1 | 224.9 | **108.6** | 927.3 | 453.5 |
-| Noise 3840×2160 · sub 256×256 | 1224.3 | 297.3 | **176.5** | 1252.5 | 665.7 |
-| fruits 512×480 · sub 80×80 | 51.2 | **6.2** | 7.5 | 23.4 | 18.0 |
-| baboon 512×512 · sub 64×64 | 33.4 | **6.4** | 7.1 | 25.0 | 19.0 |
-| building 868×600 · sub 100×100 | 75.7 | 18.7 | **18.4** | 76.2 | 55.3 |
-| graf1 800×640 · sub 120×120 | 90.6 | **19.0** | 19.3 | 76.4 | 56.0 |
-| starry_night 752×600 · sub 128×128 | 66.5 | **17.7** | 19.4 | 73.7 | 55.2 |
+| scene | native C++ | asm 1T | asm 4T | no-asm 1T | no-asm 4T | max\|Δ\| |
+|---|---|---|---|---|---|---|---|---|
+| Window 1600×1000 · button 96×32 | 189.0 | 45.3 | **24.9** | 179.8 | 90.9 | 3.9e-04 |
+| Window 1600×1000 · icon 24×24 | 151.6 | 38.9 | **20.9** | 148.4 | 78.3 | 7.3e-05 |
+| Window 1600×1000 · panel 300×200 | 161.7 | 46.9 | **29.9** | 181.4 | 97.6 | 1.5e-05 |
+| Noise 1280×720 · sub 96×96 | 121.3 | 26.2 | **14.0** | 106.2 | 53.1 | 2.1e-06 |
+| Noise 1920×1080 · sub 128×128 | 283.9 | 61.7 | **33.7** | 223.4 | 118.7 | 1.9e-06 |
+| Noise 1920×1080 · sub 32×32 | 200.5 | 50.4 | **25.5** | 196.1 | 98.6 | 2.9e-06 |
+| Noise 640×480 · varying alpha, 4ch | 28.7 | 10.5 | **6.5** | 38.4 | 23.2 | 1.6e-06 |
+| Window 3840×2160 · button 96×32 | 870.0 | 211.6 | **107.1** | 852.8 | 425.4 | 6.2e-04 |
+| Noise 3840×2160 · sub 256×256 | 1210.4 | 244.7 | **137.2** | 961.7 | 488.6 | 1.9e-06 |
+| fruits 512×480 · sub 80×80 | 49.8 | **7.0** | 7.1 | 23.9 | 16.2 | 1.9e-05 |
+| baboon 512×512 · sub 64×64 | 31.6 | **7.1** | **7.1** | 25.5 | 17.0 | 1.3e-05 |
+| building 868×600 · sub 100×100 | 73.8 | 16.0 | **8.8** | 61.7 | 33.3 | 5.2e-05 |
+| graf1 800×640 · sub 120×120 | 89.3 | 17.9 | **10.2** | 64.1 | 36.6 | 4.0e-06 |
+| starry_night 752×600 · sub 128×128 | 64.7 | 16.8 | **10.1** | 61.8 | 35.6 | 4.6e-06 |
 
-`MatchGray` at 1080p/128 for scale: asm 21.0 / 13.3 ms,
-no-asm 97.9 / 58.5 ms (1T / 4T). Native C++ has no gray
+`MatchGray` at 1080p/128 for scale: asm 19.6 / 10.8 ms,
+no-asm 87.3 / 48.0 ms (1T / 4T). Native C++ has no gray
 row in this suite — a fair baseline would need cvtColor + 1-channel
 matchTemplate timed end-to-end, which was not measured; treat MatchGray
 numbers as cvmatch-internal.
@@ -39,36 +39,39 @@ numbers as cvmatch-internal.
 same OpenCV 4.12 static build, bit-identical cvmatch output to the
 amd64 rows above:
 
-| scene | native C++ | asm 1T | asm 4T | no-asm 1T | no-asm 4T |
-|---|---|---|---|---|---|
-| Window 1600×1000 · button 96×32 | 227.3 | 90.2 | **28.3** | 192.7 | 58.7 |
-| Window 1600×1000 · icon 24×24 | 180.8 | 76.0 | **22.3** | 160.8 | 43.9 |
-| Window 1600×1000 · panel 300×200 | 215.3 | 102.9 | **50.8** | 219.6 | 97.9 |
-| Noise 1280×720 · sub 96×96 | 140.0 | 72.9 | **33.0** | 159.9 | 62.1 |
-| Noise 1920×1080 · sub 128×128 | 360.4 | 130.4 | **51.2** | 288.3 | 107.0 |
-| Noise 1920×1080 · sub 32×32 | 238.2 | 100.8 | **29.3** | 214.4 | 59.3 |
-| Noise 640×480 · varying alpha, 4ch | 34.2 | 26.1 | **12.7** | 56.6 | 24.9 |
-| Window 3840×2160 · button 96×32 | 1099.8 | 461.1 | **131.3** | 992.7 | 268.9 |
-| Noise 3840×2160 · sub 256×256 | 1595.1 | 632.1 | **230.6** | 1409.9 | 493.2 |
-| fruits 512×480 · sub 80×80 | 58.4 | 11.9 | **8.6** | 25.8 | 14.0 |
-| baboon 512×512 · sub 64×64 | 37.4 | 12.5 | **8.2** | 26.7 | 14.3 |
-| building 868×600 · sub 100×100 | 87.1 | 39.6 | **25.2** | 86.6 | 44.2 |
-| graf1 800×640 · sub 120×120 | 108.9 | 39.6 | **25.0** | 87.1 | 45.0 |
-| starry_night 752×600 · sub 128×128 | 78.0 | 37.7 | **25.6** | 83.9 | 45.1 |
+| scene | native C++ | asm 1T | asm 4T | no-asm 1T | no-asm 4T | max\|Δ\| |
+|---|---|---|---|---|---|---|---|---|
+| Window 1600×1000 · button 96×32 | 222.6 | 85.7 | **24.2** | 186.5 | 50.4 | 3.9e-04 |
+| Window 1600×1000 · icon 24×24 | 174.9 | 70.9 | **21.9** | 152.7 | 44.5 | 7.3e-05 |
+| Window 1600×1000 · panel 300×200 | 209.8 | 88.6 | **31.7** | 190.0 | 59.3 | 1.4e-05 |
+| Noise 1280×720 · sub 96×96 | 135.7 | 50.7 | **14.2** | 108.2 | 29.0 | 2.3e-06 |
+| Noise 1920×1080 · sub 128×128 | 352.6 | 108.6 | **35.8** | 239.2 | 76.1 | 2.1e-06 |
+| Noise 1920×1080 · sub 32×32 | 232.6 | 93.5 | **25.8** | 202.8 | 54.7 | 2.3e-06 |
+| Noise 640×480 · varying alpha, 4ch | 33.3 | 19.2 | **6.6** | 42.4 | 13.6 | 1.6e-06 |
+| Window 3840×2160 · button 96×32 | 1083.3 | 395.9 | **110.1** | 865.7 | 229.6 | 6.2e-04 |
+| Noise 3840×2160 · sub 256×256 | 1558.0 | 462.7 | **152.6** | 1021.1 | 324.1 | 2.4e-06 |
+| fruits 512×480 · sub 80×80 | 57.5 | 12.1 | **6.7** | 26.0 | 11.2 | 1.3e-05 |
+| baboon 512×512 · sub 64×64 | 36.7 | 12.5 | **6.7** | 27.0 | 11.5 | 1.2e-05 |
+| building 868×600 · sub 100×100 | 84.6 | 30.5 | **9.2** | 65.9 | 18.8 | 4.4e-05 |
+| graf1 800×640 · sub 120×120 | 106.3 | 31.9 | **10.4** | 69.9 | 21.6 | 3.5e-06 |
+| starry_night 752×600 · sub 128×128 | 76.3 | 30.4 | **10.8** | 66.7 | 21.5 | 5.0e-06 |
 
-`MatchGray` at 1080p/128 on arm64: asm 47.5 / 18.1 ms, no-asm 107.6 / 40.3 ms (1T / 4T).
+`MatchGray` at 1080p/128 on arm64: asm 40.0 / 14.2 ms, no-asm 91.1 / 30.9 ms (1T / 4T).
 
 **Measured summary (single-threaded, like-for-like):** the default asm build
-runs 3.8–4.2x faster than the -tags purego build on amd64
+runs 3.4–4.1x faster than the -tags purego build on amd64
 (2.1–2.2x on arm64), and beats native OpenCV C++ by
-2.4–8.3x on amd64 and 1.3–4.9x on arm64.
+2.7–7.1x on amd64 and 1.7–4.8x on arm64.
 
 Internal multi-threading (4 workers, bit-identical output at any worker
-count) further improves cvmatch by up to 2.1x on the multi-tile
+count) further improves cvmatch by up to 2.0x on the multi-tile
 scenes — the 4T columns above. It is a product feature, not part of the
 vs-native comparison: OpenCV's matchTemplate does not thread, so the
 headline numbers are 1T vs 1T.
 
 Peak process memory for one 1080p/128 match (VmHWM, fresh process,
-default build): native OpenCV 155 MB, `Match` 48 MB,
-`MatchGray` 34 MB, idle Go baseline 12 MB.
+default build): native OpenCV 155 MB, `Match` 34 MB,
+`MatchGray` 24 MB, idle Go baseline 12 MB.
+
+**Tolerance drift vs native OpenCV 4.12.0:** worst per-element
+|Δ| this refresh 6.2e-04 (window4k_button96x32, arm64); element gate 1e-3, owner budget 5e-2.
