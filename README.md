@@ -10,7 +10,9 @@ cores ship in the package:
   code including threading, AVX2 kernels and multi-versioning; compiles
   in ~1 s during `go build`.
 - **pure-Go core** (`CGO_ENABLED=0`, or no C toolchain): a port of the same
-  algorithm, selected automatically, so plain cross-compilation works.
+  algorithm with its own hand-written AVX2 kernels (Go assembly, no cgo),
+  selected automatically, so plain cross-compilation works. On amd64 it now
+  measures *faster* than the cgo core across the benchmark matrix.
 
 `cvmatch.Impl` reports which core is active (`"cgo"` / `"purego"`). The two
 cores produce **bit-identical output** — same response map bytes, same
@@ -323,9 +325,13 @@ numbers as cvmatch-internal.
 - The **pure-Go core now also beats native OpenCV single-threaded on
   every scene** (from ~1.7x on varying-alpha to ~4x on fruits) — its
   amd64 assembly kernels execute the same op sequence the C core does; on
-  architectures without kernels (arm64 etc.) it falls back to scalar Go
-  and loses its SIMD edge. Against the cgo core it stays ~1.05–1.6x
-  behind; if you can use cgo, the cgo core is still the fast path.
+  architectures without kernels (arm64 etc., until their NEON twins land)
+  it falls back to scalar Go and loses its SIMD edge. With the full amd64
+  kernel set (FFT stages and fused column-stage pairs, pack/untangle/
+  combine/emit, sliding column sums, the normalize tail, the min/max scan
+  and RGBA→gray) it measures **ahead of the cgo core** on this matrix —
+  cgo is no longer the fast path on amd64, it is the reference
+  implementation.
 - The Go rows allocate almost nothing in cgo mode (32 B/op for `Match`);
   the pure-Go core recycles its scratch through pools, so steady-state
   matching allocates ~0 too (a few MB/op appear on the largest scenes
@@ -336,7 +342,6 @@ numbers as cvmatch-internal.
 | artifact | size |
 |---|---|
 | static OpenCV archives the C++ baseline links (`libopencv_core.a` + `libopencv_imgproc.a` + zlib) | 16.1 MB |
-| `libcvmatch.a` | **~97 KB** (grew from 35 KB when the hot loops gained explicit AVX2 kernels) |
 | minimal `Match` binary, `-ldflags "-s -w"` | **1.57 MB** (a comparable OpenCV-linked Go binary measured 5.82 MB before that comparison was retired) |
 
 Peak whole-process memory for one 1920×1080 / 128×128 match (VmHWM, fresh
@@ -579,12 +584,17 @@ Ranked levers — several landed in the AVX2-kernel round, the rest remain:
 2. **A better FFT kernel — the SIMD half landed.** The hot loops now run
    explicit AVX2 kernels (interleaved-complex butterflies, broadcast-twiddle
    column passes) with a swap-pair bit reversal and flattened small stages;
-   that was worth roughly a third of the correlation time. The remaining
-   half is algorithmic: split-radix cuts operation counts ~31% at these
-   sizes (radix-4 only ~15%) — but unlike the SIMD work it *changes the
-   rounding path*, so it moves outputs within the float32 envelope instead
-   of preserving them bit-for-bit, and it stays unimplemented while the
-   bit-identical-cores contract is worth more than the constant.
+   that was worth roughly a third of the correlation time. The pure-Go
+   core's kernel round went further: its column FFT consumes *fused stage
+   pairs* (a closed quad of rows makes one memory round trip for two
+   butterfly layers — legal bit-exactly because butterflies chain the same
+   values registers or not), and its row FFT folds the half=1/2 stages
+   into the same asm pass. The remaining half is algorithmic: split-radix
+   cuts operation counts ~31% at these sizes (radix-4 only ~15%) — but
+   unlike the SIMD work it *changes the rounding path*, so it moves
+   outputs within the float32 envelope instead of preserving them
+   bit-for-bit, and it stays unimplemented while the bit-identical-cores
+   contract is worth more than the constant.
 3. **Mixed-radix (2·3·5) DFT sizes** would cut power-of-two padding waste (up
    to 2x per dimension worst case; exactly zero in lucky cases — 897+127
    lands on 1024 precisely). Same caveat as split-radix: different rounding
@@ -603,8 +613,11 @@ Ranked levers — several landed in the AVX2-kernel round, the rest remain:
    double-add chains (~20 cycles/pixel), not on sqrt or DRAM. Exactly the
    predicted fix landed: the integer window sums are spilled per chunk
    (order-free because exact) and the sqrt/divide/guard tail runs as a
-   branchless AVX2 kernel over cache-resident lanes. The residual is the
-   scalar integer slide itself; prefix-sum SIMD lanes remain possible.
+   branchless AVX2 kernel over cache-resident lanes. The pure-Go core also
+   runs the per-row column-sum slide and the fused min/max scan (with
+   OpenCV's first-occurrence ties, via a lexicographic (value, index)
+   lane tournament) as kernels. The residual is the window-sum spill's
+   sequential prefix; SIMD prefix-sum lanes remain possible.
 6. **Plumbing — mostly implemented:** per-size twiddle/swap-pair tables are
    now cached for the process lifetime and the pure-Go core pools all
    scratch. Remaining: skipping the normalized write-back when the caller
@@ -710,7 +723,13 @@ Same math, different engineering:
 - `impl_purego.go` — the pure-Go port of the same core; `impl_cgo.go` /
   `impl_nocgo.go` select between them by build tag.
 - `internal/simd/` — the pure-Go core's amd64 assembly kernels (AVX2,
-  runtime-detected) with the generic fallback declarations.
+  runtime-detected; FFT stage cascades and fused column-stage quads,
+  byte→complex packing, spectrum untangle/combine, result emit, sliding
+  column sums, the normalize tail, first-occurrence min/max scan and
+  RGBA→gray) with the generic fallback declarations. Every kernel
+  executes the scalar loop's exact op sequence — asserted bit-for-bit by
+  `TestSIMDMatchesScalar` and the kernel unit tests. arm64 NEON twins are
+  the next planned step.
 - `cvmatch.go` — public API and zero-copy image conversion.
 - `scenes/` — deterministic benchmark/parity scenes shared by the main
   module's benchmarks and the native comparison in `bench/`.
@@ -728,16 +747,16 @@ Same math, different engineering:
   `benchdata.json`, `genchart.py` renders the SVGs and rewrites the README
   matrix. The `bench-charts` workflow runs both on every push to `main`
   and commits the refresh.
-- `make lib` — builds the standalone `libcvmatch.a` for non-Go consumers.
 
 ## Requirements and releases
 
-None beyond Go. With cgo enabled (default) any C99 compiler gives the fast
-C core — Linux, macOS, Windows (mingw); AVX2 multi-versioning engages
+None beyond Go. With cgo enabled (default) any C99 compiler gives the C
+core — Linux, macOS, Windows (mingw); AVX2 multi-versioning engages
 automatically on x86-64 glibc and falls back to portable code elsewhere.
 With `CGO_ENABLED=0` (or no C toolchain at all, e.g. cross-compiling) the
-pure-Go core is selected automatically — same results, slower (see the
-matrix), zero setup.
+pure-Go core is selected automatically — same results, zero setup, and on
+amd64 its assembly kernels make it the faster of the two cores (see the
+matrix).
 
 Versions are tagged from `main` via the *Tag release* workflow
 (`.github/workflows/tag.yml`); CI runs the full test + parity + benchmark

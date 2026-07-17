@@ -2,12 +2,14 @@
 // matching — no OpenCV, no third-party static libraries, no dependencies.
 //
 // Two interchangeable cores ship in the package: a single self-contained
-// C99 file used through cgo (the fast path), and a pure-Go port selected
-// automatically when cgo is unavailable (CGO_ENABLED=0, cross-compilation
-// without a C toolchain). The Impl constant reports which one is active;
-// both produce bit-identical output (asserted exactly by the tests: the
-// cores run the same single-rounded IEEE op sequence, including a shared
-// deterministic twiddle generator, independent of the system libm).
+// C99 file used through cgo, and a pure-Go port with hand-written AVX2
+// kernels selected automatically when cgo is unavailable (CGO_ENABLED=0,
+// cross-compilation without a C toolchain) — on amd64 the pure-Go core
+// now benchmarks ahead of the C one. The Impl constant reports which one
+// is active; both produce bit-identical output (asserted exactly by the
+// tests: the cores run the same single-rounded IEEE op sequence,
+// including a shared deterministic twiddle generator, independent of the
+// system libm).
 //
 // Match is numerically aligned with OpenCV's matchTemplate + minMaxLoc on
 // CV_8UC4 input (the classic ImageToMatRGBA-style pipeline), while
@@ -20,6 +22,8 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+
+	"github.com/hkloudou/cvmatch/internal/simd"
 )
 
 // Threads overrides the number of workers a single Match/MatchMap/MatchGray
@@ -178,10 +182,17 @@ func toGray(img image.Image) (pix []uint8, stride, w, h int, owned bool) {
 // Integer arithmetic — the result is exact regardless of evaluation order.
 func rgbToGray(pix []uint8, stride, w, h int) []uint8 {
 	out := bytePool.get(w * h)
+	vw := 0
+	if simd.Enabled {
+		vw = w &^ 7
+	}
 	for y := 0; y < h; y++ {
 		src := pix[y*stride : y*stride+w*4]
 		dst := out[y*w : y*w+w]
-		for x := 0; x < w; x++ {
+		if vw > 0 {
+			simd.RGBAToGray(dst[:vw], src)
+		}
+		for x := vw; x < w; x++ {
 			r, g, b := uint32(src[x*4]), uint32(src[x*4+1]), uint32(src[x*4+2])
 			dst[x] = uint8((4899*r + 9617*g + 1868*b + 8192) >> 14)
 		}
