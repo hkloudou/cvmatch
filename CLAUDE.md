@@ -184,3 +184,14 @@ the no-cgo sense.
   when ci.yml is dispatched), the arm64 leg gained the same native
   OpenCV baseline as amd64 (identical comparison dimensions, one unified
   chart), and every measured number in the README is generated.
+- Phase 6 closed the structural optimization space: the scalar fallback
+  adopted the kernels' fused FFT shape; in-tile parallelism (row-pair
+  distribution + width-chunked column-stage passes + chunked conjugate
+  multiply) took single-tile scenes from ~1.0x to 1.2-1.5x at 4T on the
+  reference machines. Remaining known levers and why they stay unpicked:
+  SIMD prefix-sum spill lanes (low single-digit %), output-pruned
+  inverse column FFT (<=15% niche, needs a +-0 laundering proof),
+  further NEON micro-tuning (diminishing); split-radix / mixed-radix /
+  NTT are forbidden by the bit-identity contract (recorded in the README
+  headroom section). Treat new optimization ideas as welcome but hold
+  them to the same measure-on-reference, bit-anchored standard.

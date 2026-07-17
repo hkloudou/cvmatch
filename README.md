@@ -562,11 +562,12 @@ Ranked levers — several landed in the SIMD-kernel rounds, the rest remain:
    — bit-exact *only because* the window statistics are exact integers
    (< 2^53, every add exact, hence order-independent); the same trick on
    float inputs would not be. Extrema merge band-in-order to keep OpenCV's
-   first-occurrence tie rule. The known residual: single-tile scenes (small
-   photos, the panel) only parallelize normalization — the finer bit-exact
-   axes (independent row-FFT pairs, width-chunked column butterflies) are
-   still on the table, and until they land, strip-parallel OpenCV can close
-   most of its gap on such scenes (see fairness rules).
+   first-occurrence tie rule. The finer bit-exact axes landed too:
+   single-tile scenes now split their independent row-FFT pairs and
+   width-chunked column-stage passes across the spare workers (measured
+   1.2-1.5x at 4T on the panel and the photos, from ~1.0x before) — the
+   residual there is the per-pass barrier cost and the sequential
+   bit-reversal row swaps, both small.
 2. **A better FFT kernel — the SIMD half landed.** The hot loops run
    explicit assembly kernels (interleaved-complex butterflies,
    broadcast-twiddle column passes) with a swap-pair bit reversal; the
