@@ -292,6 +292,26 @@ build:
 
 | scene | native C++ | asm 1T | asm 4T | pure-Go 1T | pure-Go 4T |
 |---|---|---|---|---|---|
+| Window 1600×1000 · button 96×32 | 183.6 | 43.3 | **28.8** | 192.4 | 101.7 |
+| Window 1600×1000 · icon 24×24 | 149.3 | 38.0 | **19.2** | 163.8 | 82.5 |
+| Window 1600×1000 · panel 300×200 | 158.4 | 49.5 | **46.1** | 209.4 | 198.1 |
+| Noise 1280×720 · sub 96×96 | 115.5 | 33.5 | **24.1** | 151.2 | 90.4 |
+| Noise 1920×1080 · sub 128×128 | 277.5 | 62.8 | **37.7** | 274.2 | 153.4 |
+| Noise 1920×1080 · sub 32×32 | 195.7 | 50.6 | **25.5** | 217.8 | 111.4 |
+| Noise 640×480 · varying alpha, 4ch | 28.3 | 12.5 | **8.2** | 54.7 | 36.4 |
+| Window 3840×2160 · button 96×32 | 862.5 | 229.7 | **112.1** | 1007.6 | 507.2 |
+| Noise 3840×2160 · sub 256×256 | 1184.6 | 295.9 | **170.0** | 1321.0 | 731.4 |
+| fruits 512×480 · sub 80×80 | 49.3 | 6.2 | **5.9** | 24.8 | 23.1 |
+| baboon 512×512 · sub 64×64 | 31.5 | 6.4 | **5.8** | 26.2 | 24.1 |
+| building 868×600 · sub 100×100 | 73.5 | 18.5 | **17.8** | 79.9 | 76.3 |
+| graf1 800×640 · sub 120×120 | 88.8 | 18.4 | **18.3** | 80.6 | 78.3 |
+| starry_night 752×600 · sub 128×128 | 63.8 | **17.4** | 17.6 | 81.6 | 75.4 |
+
+`MatchGray` at 1080p/128 for scale: asm 20.5 / 12.7 ms,
+pure Go 103.2 / 56.8 ms (1T / 4T). Native C++ has no gray
+row in this suite — a fair baseline would need cvtColor + 1-channel
+matchTemplate timed end-to-end, which was not measured; treat MatchGray
+numbers as cvmatch-internal.
 
 **arm64** — the same `Match` matrix from the arm64 CI leg (GitHub Actions ubuntu-24.04-arm (4-vCPU Neoverse-N2, linux/arm64)),
 NEON kernels vs the default build, bit-identical output to the
@@ -299,6 +319,22 @@ amd64 rows above:
 
 | scene | asm 1T | asm 4T | pure-Go 1T | pure-Go 4T |
 |---|---|---|---|---|
+| Window 1600×1000 · button 96×32 | 89.6 | **27.2** | 217.2 | 65.6 |
+| Window 1600×1000 · icon 24×24 | 74.8 | **20.7** | 177.6 | 49.1 |
+| Window 1600×1000 · panel 300×200 | 101.3 | **92.2** | 247.1 | 226.6 |
+| Noise 1280×720 · sub 96×96 | 72.5 | **40.0** | 180.6 | 99.1 |
+| Noise 1920×1080 · sub 128×128 | 130.2 | **50.8** | 323.8 | 121.4 |
+| Noise 1920×1080 · sub 32×32 | 99.0 | **28.9** | 237.7 | 65.0 |
+| Noise 640×480 · varying alpha, 4ch | 26.1 | **13.7** | 63.4 | 34.1 |
+| Window 3840×2160 · button 96×32 | 458.1 | **128.5** | 1118.2 | 298.2 |
+| Noise 3840×2160 · sub 256×256 | 627.7 | **225.3** | 1575.8 | 549.3 |
+| fruits 512×480 · sub 80×80 | 11.8 | **10.8** | 28.2 | 25.0 |
+| baboon 512×512 · sub 64×64 | 12.4 | **10.7** | 29.6 | 25.9 |
+| building 868×600 · sub 100×100 | 39.2 | **35.9** | 96.4 | 90.3 |
+| graf1 800×640 · sub 120×120 | 39.4 | **36.8** | 97.7 | 92.0 |
+| starry_night 752×600 · sub 128×128 | 37.9 | **36.1** | 94.5 | 89.9 |
+
+`MatchGray` at 1080p/128 on arm64: asm 47.3 / 18.6 ms, pure Go 119.6 / 44.7 ms (1T / 4T).
 <!-- benchmatrix:end -->
 
 **Readings, including where cvmatch does *not* win:**
