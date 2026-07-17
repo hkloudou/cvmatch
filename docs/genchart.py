@@ -36,6 +36,8 @@ DATA = json.load(open(ARGS.data))
 SC = DATA["scenes"]
 MEM = DATA.get("mem", {})
 HOST = DATA.get("host", "")
+PARITY = DATA.get("parity", {})  # {scene: {"amd64": worst_abs, "arm64": ...}}
+OPENCV = DATA.get("opencv", "")
 
 # (scene key, chart/table label, panel)
 LAYOUT = [
@@ -246,8 +248,12 @@ def svg(body, height):
             f'viewBox="0 0 {W} {height}" role="img">\n' + "\n".join(body) + "\n</svg>\n")
 
 
-def match_table(lines, keys, header):
-    """One Match matrix table; bold = best cvmatch cell per scene."""
+def match_table(lines, keys, header, parity_arch=None):
+    """One Match matrix table; bold = best cvmatch cell per scene. With
+    parity_arch, a generated max|Δ|-vs-native column tracks tolerance
+    drift per scene (element gate 1e-3)."""
+    if parity_arch and PARITY:
+        header += " max\\|Δ\\| |"
     lines += [header, "|" + "---|" * (header.count("|") - 1)]
     for key, label, _ in LAYOUT:
         s = SC.get(key)
@@ -258,6 +264,9 @@ def match_table(lines, keys, header):
         best = min(go_cells)
         fmt = [f"{cells[0]:.1f}"] if keys[0] == "native" else []
         fmt += [f"**{v:.1f}**" if v == best else f"{v:.1f}" for v in go_cells]
+        if parity_arch and PARITY:
+            w = PARITY.get(key, {}).get(parity_arch)
+            fmt.append(f"{w:.1e}" if w is not None else "—")
         lines.append(f"| {label} | " + " | ".join(fmt) + " |")
 
 
@@ -281,7 +290,7 @@ def matrix_markdown():
         "",
     ]
     header = "| scene | native C++ | asm 1T | asm 4T | no-asm 1T | no-asm 4T |"
-    match_table(lines, ("native", "asm1", "asm4", "go1", "go4"), header)
+    match_table(lines, ("native", "asm1", "asm4", "go1", "go4"), header, parity_arch="amd64")
     g = SC.get("noise1080p_sub128", {})
     if all(k in g for k in ("agray1", "agray4", "gray1", "gray4")):
         lines += [
@@ -300,7 +309,7 @@ def matrix_markdown():
             "amd64 rows above:",
             "",
         ]
-        match_table(lines, ("nativeA", "asmA1", "asmA4", "goA1", "goA4"), header)
+        match_table(lines, ("nativeA", "asmA1", "asmA4", "goA1", "goA4"), header, parity_arch="arm64")
         ga = SC.get("noise1080p_sub128", {})
         if all(k in ga for k in ("agrayA1", "agrayA4", "grayA1", "grayA4")):
             lines += [
@@ -340,6 +349,15 @@ def matrix_markdown():
             "Peak process memory for one 1080p/128 match (VmHWM, fresh process,",
             f"default build): native OpenCV {MEM['native']:.0f} MB, `Match` {MEM['match']:.0f} MB,",
             f"`MatchGray` {MEM['gray']:.0f} MB, idle Go baseline {MEM['baseline']:.0f} MB.",
+        ]
+    drift = [(w, s, a) for s, per in PARITY.items() for a, w in per.items() if w is not None]
+    if drift:
+        w, ws, wa = max(drift)
+        alarm = " **⚠ above the 7e-4 soft alarm — investigate before the next deviation ships.**" if w > 7e-4 else ""
+        lines += [
+            "",
+            f"**Tolerance drift vs native OpenCV{' ' + OPENCV if OPENCV else ''}:** worst per-element",
+            f"|Δ| this refresh {w:.1e} ({ws}, {wa}); element gate 1e-3, owner budget 5e-2.{alarm}",
         ]
     return "\n".join(lines)
 

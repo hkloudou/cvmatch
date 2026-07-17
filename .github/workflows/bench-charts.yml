@@ -62,6 +62,11 @@ jobs:
         run: |
           mkdir -p /tmp/out
           (cd bench && cpp/native_bench cpp/scenes 7) | tee /tmp/out/native.txt
+      - name: Tolerance parity vs native (drift column for the matrix)
+        working-directory: bench
+        run: |
+          cpp/native_bench cpp/scenes 1 dump >/dev/null
+          go run ./cmd/paritystat | tee /tmp/out/parity.txt
       - name: Measure cvmatch (-cpu 1,4, both builds)
         run: |
           go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m | tee /tmp/out/asm.txt
@@ -112,12 +117,15 @@ jobs:
         run: |
           mkdir -p assets/bench
           NATMEM=$(cat /tmp/amd64/native-hwm.txt)
+          OPENCV=$(grep -m1 '^OPENCV_VER=' bench/cpp/build.sh | cut -d'"' -f2)
           python3 docs/collect.py \
             --asm /tmp/amd64/asm.txt --go /tmp/amd64/go.txt \
             --asm-arm64 /tmp/arm64/asm.txt --go-arm64 /tmp/arm64/go.txt \
             --native /tmp/amd64/native.txt --native-arm64 /tmp/arm64/native.txt \
             --mem /tmp/amd64/memprobe.txt \
             ${NATMEM:+--native-mem "$NATMEM"} \
+            --parity /tmp/amd64/parity.txt --parity-arm64 /tmp/arm64/parity.txt \
+            ${OPENCV:+--opencv "$OPENCV"} \
             --host "$(cat /tmp/amd64/host.txt)" --host-arm64 "$(cat /tmp/arm64/host.txt)" \
             -o assets/bench/benchdata.json
           python3 docs/genchart.py --data assets/bench/benchdata.json --out assets/bench

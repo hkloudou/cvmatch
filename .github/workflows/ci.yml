@@ -12,10 +12,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
           cache: false
+      - name: Golden constants change only via `make regolden` + a "Goldens:" trailer
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch -q origin "${{ github.base_ref }}"
+          if ! git diff --quiet "origin/${{ github.base_ref }}"...HEAD -- golden_hashes_test.go; then
+            git log --format=%B "origin/${{ github.base_ref }}"..HEAD | grep -q 'Goldens:' || {
+              echo 'golden_hashes_test.go changed without a "Goldens:" trailer in the commit log.'
+              echo 'Re-record deliberately: make regolden REASON="..." and explain the change.'
+              exit 1
+            }
+          fi
       - name: Unit tests — default build (SIMD kernels + asm-vs-scalar parity, golden anchors)
         run: go test -v ./...
       - name: Unit tests — no-asm build (-tags purego, scalar safe mode)

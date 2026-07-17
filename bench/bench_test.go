@@ -57,10 +57,15 @@ func TestFullMapParityWithNativeCpp(t *testing.T) {
 	}
 }
 
-// TestNativeValues prints and cross-checks the maxVal that native OpenCV
-// C++ and cvmatch produce on every scene, including the low-score
-// degraded/absent ones where the peak is far from 1.0. Values must agree
-// within the float32 rounding envelope.
+// TestNativeValues cross-checks the peak that native OpenCV C++ and
+// cvmatch report on every scene, including the low-score degraded/absent
+// ones. Two gates: the peak VALUE must agree within 1e-4 (peak windows
+// have the largest denominators, so their error is structurally the
+// smallest in the map — measured worst 1.6e-6), and the peak LOCATION
+// must be native's first-occurrence argmax, unless the near-tie clause
+// fires: native's score at cvmatch's location is within 2e-3 of native's
+// max (each side's map may independently wiggle the 1e-3 element gate, so
+// two peaks closer than that can legitimately swap order).
 func TestNativeValues(t *testing.T) {
 	checked := 0
 	for _, s := range scenes.All("testdata") {
@@ -72,15 +77,26 @@ func TestNativeValues(t *testing.T) {
 		cppMax, cppI := float32(-2), 0
 		for i := 0; i < (len(data)-12)/4; i++ {
 			v := math.Float32frombits(binary.LittleEndian.Uint32(data[12+i*4:]))
-			if v > cppMax {
+			if v > cppMax { // strict: first occurrence, OpenCV's minMaxLoc order
 				cppMax, cppI = v, i
 			}
 		}
 		_, _, _, maxV, maxX, maxY := cvmatch.Match(s.Parent, s.Sub)
 		d := math.Abs(float64(maxV - cppMax))
-		t.Logf("%-22s  C++ max=%.6f @(%d,%d)   cvmatch[%s] max=%.6f @(%d,%d)   |diff|=%.2e",
-			s.Name, cppMax, cppI%ww, cppI/ww, cvmatch.Impl, maxV, maxX, maxY, d)
-		if d > 1.5e-3 {
+		loc := "ok"
+		if maxX != cppI%ww || maxY != cppI/ww {
+			nativeAtCv := math.Float32frombits(binary.LittleEndian.Uint32(data[12+(maxY*ww+maxX)*4:]))
+			if gap := float64(cppMax) - float64(nativeAtCv); gap <= 2e-3 {
+				loc = "tie"
+			} else {
+				loc = "MISMATCH"
+				t.Errorf("%s: peak location (%d,%d) vs native (%d,%d) — native gap %.2e exceeds the tie clause",
+					s.Name, maxX, maxY, cppI%ww, cppI/ww, gap)
+			}
+		}
+		t.Logf("%-22s  C++ max=%.6f @(%d,%d)   cvmatch[%s] max=%.6f @(%d,%d)   |diff|=%.2e loc=%s",
+			s.Name, cppMax, cppI%ww, cppI/ww, cvmatch.Impl, maxV, maxX, maxY, d, loc)
+		if d > 1e-4 {
 			t.Errorf("%s: maxVal diverges from native C++: %v vs %v", s.Name, maxV, cppMax)
 		}
 		checked++
