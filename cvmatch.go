@@ -73,8 +73,8 @@ func threads() int {
 //
 // Match panics if an image is empty or if sub is larger than parent.
 func Match(parent, sub image.Image) (float32, int, int, float32, int, int) {
-	pPix, pStride, pw, ph := toRGBA(parent)
-	sPix, sStride, sw, sh := toRGBA(sub)
+	pPix, pStride, pw, ph, pOwned := toRGBA(parent)
+	sPix, sStride, sw, sh, sOwned := toRGBA(sub)
 	// A channel that is constant within each image (almost always the alpha
 	// plane of screenshots) contributes exactly zero to the CCOEFF_NORMED
 	// numerator, denominator and template norm, so skipping it changes
@@ -83,7 +83,14 @@ func Match(parent, sub image.Image) (float32, int, int, float32, int, int) {
 	if alphaConst(pPix, pStride, pw, ph) && alphaConst(sPix, sStride, sw, sh) {
 		cn = 3
 	}
-	return matchU8(pPix, pStride, pw, ph, sPix, sStride, sw, sh, cn, 4, threads(), nil)
+	r1, r2, r3, r4, r5, r6 := matchU8(pPix, pStride, pw, ph, sPix, sStride, sw, sh, cn, 4, threads(), nil)
+	if pOwned {
+		bytePool.put(pPix)
+	}
+	if sOwned {
+		bytePool.put(sPix)
+	}
+	return r1, r2, r3, r4, r5, r6
 }
 
 // MatchMap runs the same computation as Match but returns the full
@@ -91,8 +98,8 @@ func Match(parent, sub image.Image) (float32, int, int, float32, int, int) {
 // equivalent to OpenCV's matchTemplate output. Useful for finding every
 // occurrence above a threshold instead of only the best one.
 func MatchMap(parent, sub image.Image) (res []float32, w, h int) {
-	pPix, pStride, pw, ph := toRGBA(parent)
-	sPix, sStride, sw, sh := toRGBA(sub)
+	pPix, pStride, pw, ph, pOwned := toRGBA(parent)
+	sPix, sStride, sw, sh, sOwned := toRGBA(sub)
 	cn := 4
 	if alphaConst(pPix, pStride, pw, ph) && alphaConst(sPix, sStride, sw, sh) {
 		cn = 3
@@ -100,6 +107,12 @@ func MatchMap(parent, sub image.Image) (res []float32, w, h int) {
 	w, h = pw-sw+1, ph-sh+1
 	res = make([]float32, w*h)
 	matchU8(pPix, pStride, pw, ph, sPix, sStride, sw, sh, cn, 4, threads(), res)
+	if pOwned {
+		bytePool.put(pPix)
+	}
+	if sOwned {
+		bytePool.put(sPix)
+	}
 	return res, w, h
 }
 
@@ -107,6 +120,11 @@ func MatchMap(parent, sub image.Image) (res []float32, w, h int) {
 // (OpenCV BT.601 RGB2GRAY weights; the Y plane is used directly for YCbCr
 // images) before matching. For RGB screenshots the response map is very
 // close to the 4-channel one but costs roughly a quarter of the work.
+//
+// Inputs other than *image.Gray, *image.YCbCr, *image.RGBA and
+// *image.NRGBA fall back to Go's stdlib conversion, whose BT.601
+// fixed-point rounding differs from OpenCV's by at most 1 gray level on
+// some pixels.
 func MatchGray(parent, sub image.Image) (float32, int, int, float32, int, int) {
 	pPix, pStride, pw, ph, pOwned := toGray(parent)
 	sPix, sStride, sw, sh, sOwned := toGray(sub)
@@ -162,16 +180,18 @@ func bounds(img image.Image) image.Rectangle {
 
 // toRGBA returns interleaved RGBA pixels plus stride. A *image.RGBA is used
 // in place with zero copies (sub-images included — the core honors the
-// stride); everything else is redrawn, matching ImageToMatRGBA semantics.
-func toRGBA(img image.Image) (pix []uint8, stride, w, h int) {
+// stride); everything else is redrawn into a pooled buffer, matching
+// ImageToMatRGBA semantics (owned reports it so the caller can recycle it;
+// draw.Src overwrites every byte, satisfying the dirty-pool contract).
+func toRGBA(img image.Image) (pix []uint8, stride, w, h int, owned bool) {
 	b := bounds(img)
 	w, h = b.Dx(), b.Dy()
 	if m, ok := img.(*image.RGBA); ok {
-		return m.Pix[m.PixOffset(b.Min.X, b.Min.Y):], m.Stride, w, h
+		return m.Pix[m.PixOffset(b.Min.X, b.Min.Y):], m.Stride, w, h, false
 	}
-	rgba := image.NewRGBA(image.Rect(0, 0, w, h))
+	rgba := &image.RGBA{Pix: bytePool.get(w * h * 4), Stride: w * 4, Rect: image.Rect(0, 0, w, h)}
 	draw.Draw(rgba, rgba.Bounds(), img, b.Min, draw.Src)
-	return rgba.Pix, rgba.Stride, w, h
+	return rgba.Pix, rgba.Stride, w, h, true
 }
 
 // toGray returns single-channel 8-bit pixels plus stride. *image.Gray and
@@ -191,9 +211,9 @@ func toGray(img image.Image) (pix []uint8, stride, w, h int, owned bool) {
 	case *image.NRGBA:
 		return rgbToGray(m.Pix[m.PixOffset(b.Min.X, b.Min.Y):], m.Stride, w, h), w, w, h, true
 	}
-	gray := image.NewGray(image.Rect(0, 0, w, h))
+	gray := &image.Gray{Pix: bytePool.get(w * h), Stride: w, Rect: image.Rect(0, 0, w, h)}
 	draw.Draw(gray, gray.Bounds(), img, b.Min, draw.Src)
-	return gray.Pix, gray.Stride, w, h, false
+	return gray.Pix, gray.Stride, w, h, true
 }
 
 // rgbToGray converts interleaved 4-byte pixels using OpenCV's RGB2GRAY

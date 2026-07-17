@@ -21,6 +21,11 @@ const maxThreads = 16
 // (block spectra include their zero padding, column sums are cleared in
 // colBuildGo, the internal result map is stored before it is read), so
 // dirty reuse is safe and steady-state matching allocates nothing.
+//
+// Peak-RSS note: the benchmarked memory metric (VmHWM) is a monotone
+// high-water mark — trimming pools, forcing GC or FreeOSMemory can never
+// lower it; only reducing the peak of concurrently-live bytes can.
+// sync.Pool's victim cache already sheds idle retention on its own.
 type slicePool[T any] struct{ p sync.Pool }
 
 func (sp *slicePool[T]) get(n int) []T {
@@ -972,11 +977,12 @@ func normalizeBandGo(img []uint8, istride, iw int, cn, step, tw, th, rw, y0, y1 
 	return ext
 }
 
-func normalizeParallelGo(img []uint8, istride, iw int, tpl []uint8, tstride, tw, th, cn, step, rw, rh, threads int,
-	corr []float32, result []float32) (float32, int, int, float32, int, int) {
+// templStats computes the per-channel template means and the raw (pre-sqrt)
+// variance sum. Integer accumulation is exact; the float sequence is the
+// pinned normalization order. It reads only the template, so matchU8 runs it
+// before the correlation to short-circuit flat templates.
+func templStats(tpl []uint8, tstride, tw, th, cn, step int) (mean [4]float64, templNorm float64) {
 	invArea := 1 / (float64(tw) * float64(th))
-	var mean [4]float64
-	templNorm := 0.0
 	for k := 0; k < cn; k++ {
 		var s, s2 int64 // template statistics are exact integers
 		for y := 0; y < th; y++ {
@@ -990,12 +996,12 @@ func normalizeParallelGo(img []uint8, istride, iw int, tpl []uint8, tstride, tw,
 		mean[k] = float64(s) * invArea
 		templNorm += float64(float64(s2)*invArea) - float64(mean[k]*mean[k])
 	}
-	if templNorm < 0x1p-52 { // DBL_EPSILON: flat template
-		for i := range result[:rw*rh] {
-			result[i] = 1
-		}
-		return 1, 0, 0, 1, 0, 0
-	}
+	return mean, templNorm
+}
+
+func normalizeParallelGo(img []uint8, istride, iw, tw, th, cn, step, rw, rh, threads int,
+	mean *[4]float64, templNorm float64,
+	corr []float32, result []float32) (float32, int, int, float32, int, int) {
 	templNorm = math.Sqrt(templNorm * (float64(tw) * float64(th)))
 
 	nb := threads
@@ -1011,7 +1017,7 @@ func normalizeParallelGo(img []uint8, istride, iw int, tpl []uint8, tstride, tw,
 	ext := make([]goExtrema, nb)
 	runParallel(nb, func(w int) {
 		ext[w] = normalizeBandGo(img, istride, iw, cn, step, tw, th, rw,
-			bandY[w], bandY[w+1], &mean, templNorm, corr, result)
+			bandY[w], bandY[w+1], mean, templNorm, corr, result)
 	})
 	r := ext[0]
 	for b := 1; b < nb; b++ { // strict compares keep first occurrence
@@ -1034,6 +1040,15 @@ func matchU8(img []uint8, istride, iw, ih int, tpl []uint8, tstride, tw, th, cn,
 	}
 	threads = clampThreads(threads)
 	rw, rh := iw-tw+1, ih-th+1
+	mean, templNorm := templStats(tpl, tstride, tw, th, cn, step)
+	if templNorm < 0x1p-52 { // DBL_EPSILON: flat template scores 1 everywhere
+		if result != nil {
+			for i := range result[:rw*rh] {
+				result[i] = 1
+			}
+		}
+		return 1, 0, 0, 1, 0, 0
+	}
 	res := result
 	if res == nil {
 		res = f32Pool.get(rw * rh)
@@ -1041,5 +1056,5 @@ func matchU8(img []uint8, istride, iw, ih int, tpl []uint8, tstride, tw, th, cn,
 	}
 	p := newGoPlan(tw, th, rw, rh)
 	crossCorrGo(img, istride, tpl, tstride, step, cn, tw, th, rw, rh, threads, p, res)
-	return normalizeParallelGo(img, istride, iw, tpl, tstride, tw, th, cn, step, rw, rh, threads, res, res)
+	return normalizeParallelGo(img, istride, iw, tw, th, cn, step, rw, rh, threads, &mean, templNorm, res, res)
 }
