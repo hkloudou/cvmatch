@@ -69,6 +69,9 @@ specified op sequence shared by the scalar code and the asm kernels:
     suite worst IMPROVED 6.2e-4 → 4.7e-4 (window scenes; the 7.3 f32
     tail still dominates the drift, the FFT contribution stays ~1e-5
     class).
+  - 7.2b radix-4 rows: the packed row FFTs join the same engine (the
+    radix-2 machinery is deleted outright); suite worst 5.5e-4
+    (window4k, still the 7.3 tail), locations and the tie unchanged.
 - **Golden constants change only via the deliberate re-record flow**
   (`make regolden`, Phase 7.0): native tolerance parity must pass BEFORE
   recording, the commit log carries a `Goldens:` reason trailer, and the
@@ -268,16 +271,17 @@ the ranges.
   a LOSS on asm and was discarded) and 7.2a radix-4 columns under the
   owner's full delegation (2026-07-26: "你可以都做对吧,你自己决定。我只
   验收结果"): the FMA leg died on day one (fma-in-pipeline in the
-  verdict ledger), so the column passes run the no-FMA radix-4 engine
-  (colsR4Go + FFTColsR4/FFTColsHead kernels; the retired radix-2 column
-  passes and their FFTCols4/FFTColsBfly kernels were deleted). The odd
-  stage moved to a twiddle-free bottom head. Local interleaved 20x e2e:
-  asm geomean +2.2% (no scene regressed), purego +5.2% (uniform) — the
-  purego win is also arm64's. Rows stay on the radix-2 fftGo/FFTStages
-  pair: 7.2b (row flip to fftR4, which already exists in-tree) is the
-  remaining optional leg, to be judged the same way after 7.2a's
-  reference verdict; re-judge sweep-fusion (PR #21 PARKED) only after
-  that.
+  verdict ledger), so the whole FFT — columns in 7.2a (PR #23,
+  reference purego +4.8% 14/14, asm +1.7%), rows in 7.2b — runs the
+  no-FMA radix-4 engine (fftR4/fftR4Scalar + colsR4Go with the
+  FFTStagesR4/FFTColsR4/FFTColsHead kernels). Every radix-2 remnant is
+  deleted: fftGo, bfly/bflyV/twdir, makeTwiddles, the FFTStages and
+  FFTCols4/FFTColsBfly kernels, the fftTab.tw family. The odd stage
+  runs as a twiddle-free bottom head in both axes. 7.2b local
+  interleaved 20x e2e: asm geomean +3.2% (min scene median 0.991),
+  purego +5.7% uniform — the purego wins are also arm64's. Next:
+  re-judge sweep-fusion (PR #21 PARKED) against the post-7.2 profile,
+  and consider retuning the argmin FFT weights for radix-4 costs.
 
 - Phase 8: the owner deleted the arm64 NEON backend outright ("全面删除
   arm64 的汇编") — ~4.8k lines (generated stream + `_gen` clang/objdump

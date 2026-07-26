@@ -10,13 +10,6 @@ package simd
 // other architecture (arm64 included, by owner decision — the NEON twin
 // kernels were deleted for code-size reasons) runs the scalar loops.
 
-// FFTStages runs the complete radix-2 butterfly cascade (every stage,
-// half=1 upward) over bit-reversed data; len(a) must be a power of two
-// >= 8. The caller only performs the swap-pair permutation.
-//
-//go:noescape
-func FFTStages(a []complex64, tw []complex64, inverse bool)
-
 // FFTStagesR4 runs the complete radix-4 cascade over one bit-reversed
 // row (len a power of two >= 8): the odd-log2 head stage (pure adds),
 // the h=1 in-register stage (lanes 1..3 through the w=(1,0) multiply

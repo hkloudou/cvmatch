@@ -11,10 +11,6 @@ package simd
 // eliminate out of default builds entirely.
 const Enabled = false
 
-func FFTStages(a []complex64, tw []complex64, inverse bool) {
-	panic("cvmatch: SIMD kernel on unsupported platform")
-}
-
 func FFTStagesR4(a []complex64, tri []complex64, inverse bool) {
 	panic("cvmatch: SIMD kernel on unsupported platform")
 }
