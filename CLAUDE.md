@@ -255,10 +255,14 @@ the ranges.
   7.1 argmin already absorbs edge waste on 12/14 scenes; the shrunk
   template spectrum is a free stride-2^s row gather of tspec ×2^s via
   the exact decimation identity — the naive rebuild variant measured as
-  a LOSS on asm and was discarded). Remaining program: 7.2 radix-4+FMA
+  a LOSS on asm and was discarded). Remaining program: 7.2 radix-4
   under the owner's full delegation (2026-07-26: "你可以都做对吧,你自己
-  决定。我只验收结果") with the decision rule: ship if reference asm
-  ≥+5% and purego ≥−15%, else fall back to the no-FMA radix-4 variant.
+  决定。我只验收结果"). The FMA leg died on day one (see
+  fma-in-pipeline in the verdict ledger), so 7.2 is the no-FMA radix-4:
+  scalar engine landed (fftR4, 1-D +12~18% vs the fused-pairs scalar),
+  next the column-pass twin, then the AVX2 kernels bit-matching it,
+  then one pipeline flip + regolden. Ship on the reference A/B: purego
+  clearly positive AND asm non-negative, else close and pin the verdict.
 
 - Phase 8: the owner deleted the arm64 NEON backend outright ("全面删除
   arm64 的汇编") — ~4.8k lines (generated stream + `_gen` clang/objdump
@@ -271,9 +275,16 @@ the ranges.
 
 ## Phase 7 design-study verdict ledger (adjudicated 2026-07-17)
 
-- **fma-everywhere**: PARKED (subsumed) — radix-4 ships the same FMA
-  payload in one golden re-record; the `fma32` round-to-odd helper +
-  directed tests are harvested as 7.2's first commit.
+- **fma-everywhere / fma-in-pipeline**: DEAD BY SCALAR COST (measured
+  2026-07-26) — hardware f32 FMA in asm forces the correctly-rounded
+  fma32 scalar twin into the purego/arm64 leg (self-determinism), and
+  the radix-4+fma32 scalar measured **3.8x slower** than the plain
+  radix-4 scalar (27.4µs vs 5.7µs at n=512 1-D; fma32 is ~10 sequenced
+  f64 ops per fusion). No asm gain can buy back a 3-4x purego FFT
+  regression under the owner's two-build positioning. The fma32 helper
+  + oracle tests stay in-tree (commit be911ae) as the framework's
+  reference implementation should the contract ever change. Same kill
+  class as NTT: do not re-propose absent new math.
 - **direct-int-corr**: PARKED (no demonstrated workload) — correctness
   clean, but 0% on the published suite (the smallest bench template,
   24x24, already loses to the AVX2 FFT baseline by its own arithmetic);
