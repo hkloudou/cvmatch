@@ -21,6 +21,4 @@ regolden:
 	go test -race -count=1 . && go test -tags purego -race -count=1 .
 	GOOS=linux GOARCH=arm64 go test -c -o /tmp/cvmatch-regolden.arm64 . \
 		&& qemu-aarch64-static /tmp/cvmatch-regolden.arm64
-	GOOS=linux GOARCH=arm64 go test -tags purego -c -o /tmp/cvmatch-regolden-purego.arm64 . \
-		&& qemu-aarch64-static /tmp/cvmatch-regolden-purego.arm64
 	@echo 'Recorded and cross-arch proven. Commit with a "Goldens:" trailer.'

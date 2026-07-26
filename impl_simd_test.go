@@ -1,4 +1,4 @@
-//go:build !purego && (amd64 || arm64) && gc
+//go:build !purego && amd64 && gc
 
 package cvmatch
 

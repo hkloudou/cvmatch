@@ -27,7 +27,7 @@ invariants and workflows that every change must follow.
 Until 2026-07-17 this framework additionally required bit-identity to
 OpenCV itself; that requirement is retired (goal 4), the self-determinism
 rules below remain. Any transformation must keep ONE fixed, exactly
-specified op sequence shared by the scalar code and both asm backends:
+specified op sequence shared by the scalar code and the asm kernels:
 
 - **FMA is allowed** (it was banned only to mirror OpenCV's non-fused
   rounding), with one sharp caveat for float32 lanes:
@@ -35,9 +35,11 @@ specified op sequence shared by the scalar code and both asm backends:
   and does NOT always equal single-precision `VFMADDPS`/`fmla.4s`
   (counterexample: a=0x1.000006p0, b=1.5, c=2^-60). Scalar f32 fusion must
   go through a proven correctly-rounded `fma32` helper (round-to-odd
-  repair of the f64 FMA), and scalar + both asm backends must fuse the
+  repair of the f64 FMA), and the scalar code and the asm must fuse the
   **same** products (state the fusion points in the kernel contract; the
-  asm↔scalar parity test then enforces the pairing bit-for-bit).
+  asm↔scalar parity test then enforces the pairing bit-for-bit) — and
+  the scalar sequence is what arm64 runs, so its cost there is the
+  arm64 cost.
   f64 `math.FMA` needs no repair. Soft-float targets (386, riscv64, wasm)
   are slow but bit-identical — acceptable for fallback targets.
 - **Forbidden instructions** (vendor-defined output bits break
@@ -57,7 +59,7 @@ specified op sequence shared by the scalar code and both asm backends:
 - **Golden constants change only via the deliberate re-record flow**
   (`make regolden`, Phase 7.0): native tolerance parity must pass BEFORE
   recording, the commit log carries a `Goldens:` reason trailer, and the
-  full cross-arch matrix (both builds, race, both qemu legs) reproves
+  full matrix (both builds, race, the arm64 qemu leg) reproves
   self-identity on the new constants.
 - Exact IEEE identities may be used: addition commutes bitwise;
   `x-y ≡ x+(-y)` with negation by sign-bit xor; multiplication by exact
@@ -83,35 +85,27 @@ specified op sequence shared by the scalar code and both asm backends:
 
 ## SIMD kernel workflow (`internal/simd`)
 
-- The kernels are **default-on** (amd64/arm64 + gc); `-tags purego`
-  (community-standard tag) opts out to 100% high-level Go with
-  `simd.Enabled` a constant false so every kernel call site
-  dead-code-eliminates. The kernels measure several-fold end to end
-  (exact ranges live in the generated summary); both modes must stay
-  bit-identical and both run in CI on both arches.
+- The kernels are **default-on** (amd64 + gc only — the arm64 NEON
+  twins were deleted by owner decision 2026-07-17; arm64 runs the scalar
+  loops in every build mode); `-tags purego` (community-standard tag)
+  opts out to 100% high-level Go with `simd.Enabled` a constant false so
+  every kernel call site dead-code-eliminates. Both modes must stay
+  bit-identical; the arm64 CI leg reproves the golden anchors on real
+  hardware (that is the cross-arch self-determinism proof — scalar Go
+  float code must keep its explicit float32()/float64() conversion
+  barriers, or gc's arm64 contraction would fuse mul-adds and break it).
 - Shared, arch-independent contracts live in `simd_kernels.go`; every
   kernel's doc comment states its exactness argument and bounds contract.
-- The asm is split by domain — amd64: `simd_amd64.s` (CPU detection) +
-  `simd_{fft,pack,norm}_amd64.s`; arm64 sources:
-  `_gen/kernels_{fft,pack,norm}.S` (gen.py concatenates and splices; its
-  output is layout-independent, so reordering sources never churns the
-  generated file). File-scoped `<>` symbols must live in the file that
-  uses them.
+- The asm is split by domain: `simd_amd64.s` (CPU detection) +
+  `simd_{fft,pack,norm}_amd64.s`. File-scoped `<>` symbols must live in
+  the file that uses them.
 - **Comment ratchet**: every kernel body annotates registers at first
   use; every NEW kernel additionally gets a register-map header block
-  (see NormRow in simd_norm_amd64.s / FFTStages in kernels_fft.S for the
-  format), and whenever an existing kernel is touched, its map is added
-  in the same change. Comments in kernels_*.S are free — they never
-  affect the generated WORD stream.
-- **amd64**: hand-written AVX2 in `simd_amd64.s` (runtime-detected;
-  Plan9 syntax, `NOSPLIT`, `VZEROUPPER` on every exit).
-- **arm64**: Go's assembler has no un-fused vector FP ops, so bodies are
-  written as annotated ARM64 assembly in `_gen/kernels_*.S` and spliced
-  into `simd_arm64.s` as WORD streams by `_gen/gen.py` (clang cross-assembles;
-  relocation-free constants only; registers x0-x15/v0-v31, no stack; each
-  body ends in a single `ret`). Regenerate with `go generate ./internal/simd`;
-  CI diffs the regenerated stream, so never edit `simd_arm64.s` by hand.
-- Unimplemented shapes (e.g. packed-RGB step 3, cn=2 normalize) must fall
+  (see NormRow in simd_norm_amd64.s for the format), and whenever an
+  existing kernel is touched, its map is added in the same change.
+- Hand-written AVX2, Plan9 syntax, `NOSPLIT`, `VZEROUPPER` on every
+  exit; runtime-detected via CPUID+XGETBV.
+- Unimplemented shapes (e.g. packed-RGB step 3) must fall
   back to the scalar Go loops — gate call sites accordingly, and add a test
   for every fallback shape.
 - Bounds discipline: wide loads may never read past a slice even when the
@@ -126,9 +120,7 @@ go test -count=1 .                    # default build (kernels + asm-vs-scalar p
 go test -tags purego -count=1 .       # no-asm safe mode (golden anchors, scalar)
 go test -race -count=1 . && go test -tags purego -race -count=1 .
 GOOS=linux GOARCH=arm64 go test -c -o /tmp/t.arm64 . \
-  && qemu-aarch64-static /tmp/t.arm64      # NEON suite under emulation
-GOOS=linux GOARCH=arm64 go test -tags purego -c -o /tmp/tg.arm64 . \
-  && qemu-aarch64-static /tmp/tg.arm64     # arm64 no-asm build too
+  && qemu-aarch64-static /tmp/t.arm64      # arm64 scalar suite under emulation
 # TestGoldenOutputs passing on both architectures in both modes IS the
 # bit-identity proof (the constants pin every output bit)
 for t in linux/386 linux/riscv64 windows/amd64 wasip1/wasm darwin/arm64; do
@@ -184,30 +176,21 @@ element-wise against a native OpenCV C++ binary.
   README benchmatrix block and its summary paragraph). Never hand-write
   a measured value into prose — reference the generated block instead.
 
-## Charts pipeline
+## Measured-matrix pipeline
 
-`bench-charts.yml` (weekly cron + dispatch): two parallel `bench` matrix
-jobs — one per architecture, identical steps — each measure native
-OpenCV (prebuilt static 4.12; `build.sh` picks `libs/linux_$GOARCH`)
-plus both cvmatch builds and upload raw output; a `render` job merges
-them via `docs/collect.py` and `docs/genchart.py` and **publishes
-`bench/{benchdata.json, bench-*.svg, mem-*.svg, matrix.md}` to the
-`assets` branch** — main is never touched and the README is never
-rewritten (it references the stable `../../raw/assets/bench/...` URLs
-and links `matrix.md`). Dispatch with `publish=false` to get the
-rendered bundle as a workflow artifact instead (perf iteration).
-`matrix.md` carries the two same-shaped tables plus the derived summary
-paragraph (speedup ranges, memory), so no measured number is ever
-hand-written. **amd64 and arm64 are peer configurations with identical
-comparison dimensions**: one speed chart, one panel per architecture
-(representative scenes; full detail in the tables), each showing native
-OpenCV + {asm, no-asm} × {Match, MatchGray} with ratios vs that
-architecture's native. Keys: `asm*`/`agray*` = default build,
-`go*`/`gray*` = `-tags purego`, `native`, `A` suffix = arm64
-(`nativeA`). Colors are meaning-stable (green = native, blue family =
-Match, orange family = MatchGray; solid = asm, light = no-asm); build
-labels are asm / no-asm — never "pure Go", both builds are pure Go in
-the no-cgo sense.
+`bench-charts.yml` (weekly cron + dispatch): one amd64 job measures
+native OpenCV (prebuilt static 4.12), both cvmatch builds, the parity
+drift lines and peak RSS, renders via `docs/collect.py` (which also
+writes `matrix.md` — markdown tables only, no charts by owner decision
+2026-07-26), and **publishes `bench/{benchdata.json, matrix.md}` to the
+`assets` branch** — main is never touched; the README links the stable
+assets URLs. Dispatch with `publish=false` for a workflow artifact
+instead (perf iteration). The comparison is the **amd64 three-way**:
+native OpenCV + {asm, no-asm} × {Match, MatchGray}, 1T vs 1T, plus the
+4T columns as the disclosed threading fact; arm64 runs the scalar path
+and is correctness-tested in ci.yml, never benchmarked. No measured
+number is ever hand-written — the generated summary paragraph carries
+the ranges.
 
 ## History (context for future work)
 
@@ -251,14 +234,29 @@ the no-cgo sense.
   self-determinism stays non-negotiable (goals 4-5). A tolerance parity
   gate + deliberate golden re-record flow must land before the first
   deviating optimization ships. Ideas still answer to the same standard:
-  A/B on the reference machines, above the noise floor. Program order:
-  7.0 verification framework → 7.1 tile-geometry argmin (prototype
-  measured ~1.15-1.2x geomean 1T amd64) → 7.2 radix-4+FMA (gated on
-  post-7.1 pprof share ≥70% AND owner sign-off on the purego chart
-  regression it implies) → 7.3 normalize-f32 (independent of 7.2) →
-   7.4 conditional per-edge-tile DFT sizing. A no-record lever (deeper
-  column-stage fusion, 16-row groups — pure loop reorder, bit-identical
-  under any contract) may be prototyped at any time.
+  A/B on the reference machines, above the noise floor. Shipped so far:
+  7.0 verification framework + 7.1 tile-geometry argmin (PR #18 —
+  reference A/B: amd64 native-normalized geomean +7%, arm64 +18%
+  absolute on its homogeneous runners; Match VmHWM 48→35 MB) and 7.3
+  normalize-f32 (PR #19 — exact-integer cross/idiff feeding a float32
+  tail; one NormRow kernel for every cn plus the SpillStats1 cn=1 spill
+  kernel; reference A/B: Match native-normalized geomean +6.7%, improved
+  14/14 scenes, gray flat within noise, purego +7%; per-cn stats caps
+  after a codex finding). Remaining program: 7.2 radix-4+FMA (still
+  gated on post-7.1 pprof share ≥70% AND owner sign-off on the purego
+  chart regression it implies) → 7.4 conditional per-edge-tile DFT
+  sizing. A no-record lever (deeper column-stage fusion, 16-row groups —
+  pure loop reorder, bit-identical under any contract) may be
+  prototyped at any time.
+
+- Phase 8: the owner deleted the arm64 NEON backend outright ("全面删除
+  arm64 的汇编") — ~4.8k lines (generated stream + `_gen` clang/objdump
+  generator + plumbing) removed; arm64 degrades to the scalar loops in
+  every build mode and keeps only the correctness CI leg (goldens on
+  real arm64 hardware = the cross-arch self-determinism proof). The
+  benchmark story is the amd64 three-way: native OpenCV vs asm vs
+  no-asm. Consequence for 7.2: a radix-4+FMA rewrite now needs only ONE
+  asm backend, but the scalar fma32 cost lands directly on arm64.
 
 ## Phase 7 design-study verdict ledger (adjudicated 2026-07-17)
 

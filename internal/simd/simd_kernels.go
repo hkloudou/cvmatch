@@ -1,13 +1,14 @@
-//go:build (amd64 || arm64) && gc && !purego
+//go:build amd64 && gc && !purego
 
 package simd
 
-// Kernel declarations shared by the amd64 (AVX2) and arm64 (NEON)
-// implementations. Each vector lane executes exactly the scalar op
-// sequence of the generic Go loops (individual IEEE single-rounded
-// multiplies and adds — never a fused multiply-add), so results are
-// bit-identical to the scalar code on every input; the asm is a pure
-// speedup, not a numeric variant.
+// Kernel declarations for the amd64 (AVX2) implementation. Each vector
+// lane executes exactly the scalar op sequence of the generic Go loops
+// (individual IEEE single-rounded multiplies and adds — never a fused
+// multiply-add), so results are bit-identical to the scalar code on
+// every input; the asm is a pure speedup, not a numeric variant. Every
+// other architecture (arm64 included, by owner decision — the NEON twin
+// kernels were deleted for code-size reasons) runs the scalar loops.
 
 // FFTStages runs the complete radix-2 butterfly cascade (every stage,
 // half=1 upward) over bit-reversed data; len(a) must be a power of two

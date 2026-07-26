@@ -1,11 +1,11 @@
-//go:build purego || (!amd64 && !arm64) || !gc
+//go:build purego || !amd64 || !gc
 
 package simd
 
-// Builds without assembly kernels — the default. The kernels compile in
-// only with `-tags cvmatch_asm` on amd64/arm64 under the gc toolchain;
-// everything else (including every default build) runs the scalar Go
-// loops, which produce bit-identical output.
+// Builds without assembly kernels: -tags purego opts out anywhere, and
+// every non-amd64 architecture (arm64 included) lands here in every
+// build mode. The scalar Go loops produce bit-identical output — the
+// golden anchors reprove it on the arm64 CI leg.
 
 // Enabled is a constant false here, so kernel call sites dead-code
 // eliminate out of default builds entirely.
