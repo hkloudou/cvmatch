@@ -156,6 +156,26 @@ func SlideCols1(colSum []int32, colSum2 []int64, rsub, radd []uint8)
 //go:noescape
 func SlideCols4(colSum []int32, colSum2 []int64, rsub, radd []uint8, cn int)
 
+// SpillStats4 runs the cn=3/4 normalize spill over len(wt) elements (a
+// multiple of 4) in the RGBA column-sum layout (4 int32 lanes per
+// pixel; callers gate cs == 4 and cn·255²·th < 2^31 — th ≤ 11008 for
+// cn=3, ≤ 8256 for cn=4, so the |Δ colSum2| feeding the area·d2
+// product stays a 32-bit value; the per-cn stats caps already bound
+// every window sum below 2^31). Element i spills
+// lane0 = f32(f64(Σk sk·tk)), lane1 = f32(f64(area·s2 − Σk sk²)) and
+// lane2 = f32(f64(s2)) exactly as the scalar cn=3/4 loops do: the
+// quad-entry idiff is exact scalar arithmetic, per-lane values are
+// prefix sums of slide deltas whose factors all stay below 2^31
+// (exact VPMULDQ products), cn=3 forces the alpha delta to zero, and
+// the wide conversions use hi·2^32+lo with one rounded add — the
+// correctly rounded float64(v) for every non-negative v < 2^63, which
+// the caps guarantee. s[0..3] advance in place; the advanced s2
+// returns. Bit-identical to the scalar loops on every gated input.
+//
+//go:noescape
+func SpillStats4(wt []float32, stride int, lo, hi []int32, lo2, hi2 []int64,
+	s *[4]int64, tsum *[4]int64, s2, area int64, four bool) int64
+
 // SpillStats1 runs the single-channel normalize spill over len(wt)
 // elements (a multiple of 4): element i gets the three float32 lanes
 // s0, idiff = area·s2 − s0² and s2 — each through the same

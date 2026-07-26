@@ -120,7 +120,11 @@ specified op sequence shared by the scalar code and the asm kernels:
   (see NormRow in simd_norm_amd64.s for the format), and whenever an
   existing kernel is touched, its map is added in the same change.
 - Hand-written AVX2, Plan9 syntax, `NOSPLIT`, `VZEROUPPER` on every
-  exit; runtime-detected via CPUID+XGETBV.
+  exit; runtime-detected via CPUID+XGETBV. Never emit a legacy-SSE
+  encoding inside a kernel whose YMM uppers are live — VEX-encode
+  scalar work too (VCVTSI2SDQ/VMOVSS, not CVTSQ2SD/MOVSS): the
+  SpillStats4 bring-up measured the transition/merge penalty at ~9x
+  end-to-end.
 - Unimplemented shapes (e.g. packed-RGB step 3) must fall
   back to the scalar Go loops — gate call sites accordingly, and add a test
   for every fallback shape.

@@ -823,9 +823,17 @@ func normalizeBandGo(img []uint8, istride, iw int, cn, step, tw, th, rw, y0, y1 
 			case 3:
 				lo, hi := colSum[x0*cs:], colSum[(x0+tw)*cs:]
 				lo2, hi2 := colSum2[x0:], colSum2[x0+tw:]
+				i := 0
+				// The kernel's area*d2 product needs |d2| = |Δ colSum2|
+				// < 2^31, i.e. cn·255²·th < 2^31 → th ≤ 11008 for cn=3.
+				if vns := ns &^ 3; simd.Enabled && cs == 4 && th <= 11008 && vns > 0 {
+					s2 = simd.SpillStats4(wt[:vns], normChunkGo,
+						lo, hi, lo2, hi2, &s, tsum, s2, area, false)
+					i = vns
+				}
 				s0, s1, c2, t2 := s[0], s[1], s[2], s2
 				t0, t1, tq := tsum[0], tsum[1], tsum[2]
-				for i := 0; i < ns; i++ {
+				for ; i < ns; i++ {
 					wt[i] = float32(float64(s0*t0 + s1*t1 + c2*tq))
 					wt[normChunkGo+i] = float32(float64(area*t2 - s0*s0 - s1*s1 - c2*c2))
 					wt[2*normChunkGo+i] = float32(float64(t2))
@@ -839,9 +847,16 @@ func normalizeBandGo(img []uint8, istride, iw int, cn, step, tw, th, rw, y0, y1 
 			case 4:
 				lo, hi := colSum[x0*cs:], colSum[(x0+tw)*cs:]
 				lo2, hi2 := colSum2[x0:], colSum2[x0+tw:]
+				i := 0
+				// cn=4: 4·255²·th < 2^31 → th ≤ 8256.
+				if vns := ns &^ 3; simd.Enabled && th <= 8256 && vns > 0 {
+					s2 = simd.SpillStats4(wt[:vns], normChunkGo,
+						lo, hi, lo2, hi2, &s, tsum, s2, area, true)
+					i = vns
+				}
 				s0, s1, c2, s3, t2 := s[0], s[1], s[2], s[3], s2
 				t0, t1, tq, t3 := tsum[0], tsum[1], tsum[2], tsum[3]
-				for i := 0; i < ns; i++ {
+				for ; i < ns; i++ {
 					wt[i] = float32(float64(s0*t0 + s1*t1 + c2*tq + s3*t3))
 					wt[normChunkGo+i] = float32(float64(area*t2 - s0*s0 - s1*s1 - c2*c2 - s3*s3))
 					wt[2*normChunkGo+i] = float32(float64(t2))
