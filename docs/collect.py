@@ -152,11 +152,14 @@ def matrix_markdown(data):
             "numbers as cvmatch-internal.",
         ]
     # Derived claims, regenerated with the data so prose never goes stale.
-    r_amd = [s["go1"] / s["asm1"] for s in sc.values() if "go1" in s and "asm1" in s]
-    r_nat = [s["native"] / s["asm1"] for s in sc.values() if "native" in s and "asm1" in s]
-    r_natgo = [s["native"] / s["go1"] for s in sc.values() if "native" in s and "go1" in s]
+    # Only scenes carrying all three contenders feed the like-for-like
+    # ranges, so a partial re-measurement can never mix scene sets.
+    full = [s for s in sc.values() if all(k in s for k in ("native", "asm1", "go1"))]
+    r_amd = [s["go1"] / s["asm1"] for s in full]
+    r_nat = [s["native"] / s["asm1"] for s in full]
+    r_natgo = [s["native"] / s["go1"] for s in full]
     r_thr = [s["asm1"] / s["asm4"] for s in sc.values() if "asm1" in s and "asm4" in s]
-    if r_amd and r_nat and r_natgo:
+    if full:
         lines += [
             "",
             f"**Measured summary (single-threaded, like-for-like):** the default asm build",
