@@ -1,10 +1,10 @@
 {
- "host": "GitHub Actions ubuntu-latest (4-vCPU AMD EPYC 7763 64-Core Processor, linux/amd64)",
+ "host": "GitHub Actions ubuntu-latest (4-vCPU Intel(R) Xeon(R) 6973P-C, linux/amd64)",
  "mem": {
   "baseline": 12.1,
   "gray": 24.5,
   "match": 34.4,
-  "native": 154.7
+  "native": 154.9
  },
  "opencv": "4.12.0",
  "parity": {
@@ -42,10 +42,10 @@
    "amd64": 1.951e-05
   },
   "photo_graf1": {
-   "amd64": 4.023e-06
+   "amd64": 4.143e-06
   },
   "photo_starry_night": {
-   "amd64": 4.785e-06
+   "amd64": 5.445e-06
   },
   "window1600_button96x32": {
    "amd64": 0.0003893
@@ -62,167 +62,167 @@
  },
  "scenes": {
   "absent_patch": {
-   "native": 211.7
+   "native": 185.5
   },
   "degraded_button": {
-   "native": 179.2
+   "native": 174.3
   },
   "half_degraded_noise": {
-   "native": 115.4
+   "native": 104.3
   },
   "noise1080p_sub128": {
-   "agray1": 20.4,
-   "agray4": 12.1,
-   "asm1": 57.7,
-   "asm4": 31.4,
-   "go1": 211.4,
-   "go4": 110.8,
-   "gray1": 81.5,
-   "gray4": 45.2,
-   "native": 282.7
+   "agray1": 18.6,
+   "agray4": 11.3,
+   "asm1": 54.3,
+   "asm4": 30.0,
+   "go1": 150.9,
+   "go4": 78.1,
+   "gray1": 58.3,
+   "gray4": 35.3,
+   "native": 268.4
   },
   "noise1080p_sub32": {
-   "agray1": 18.9,
-   "agray4": 10.2,
-   "asm1": 51.8,
-   "asm4": 25.4,
-   "go1": 182.4,
-   "go4": 90.5,
-   "gray1": 73.4,
-   "gray4": 38.9,
-   "native": 194.9
+   "agray1": 17.1,
+   "agray4": 8.3,
+   "asm1": 44.0,
+   "asm4": 22.2,
+   "go1": 129.6,
+   "go4": 65.2,
+   "gray1": 53.3,
+   "gray4": 28.9,
+   "native": 211.2
   },
   "noise4k_sub256": {
-   "agray1": 85.3,
-   "agray4": 48.5,
-   "asm1": 229.9,
-   "asm4": 131.6,
-   "go1": 917.1,
-   "go4": 468.5,
-   "gray1": 349.0,
-   "gray4": 185.1,
-   "native": 1186.5
+   "agray1": 90.0,
+   "agray4": 47.6,
+   "asm1": 254.1,
+   "asm4": 132.7,
+   "go1": 685.0,
+   "go4": 340.0,
+   "gray1": 252.4,
+   "gray4": 135.9,
+   "native": 1103.2
   },
   "noise640_alpha": {
-   "agray1": 3.0,
+   "agray1": 3.2,
    "agray4": 2.2,
-   "asm1": 10.1,
-   "asm4": 6.4,
-   "go1": 37.2,
-   "go4": 22.4,
-   "gray1": 11.4,
-   "gray4": 7.6,
-   "native": 28.4
+   "asm1": 8.6,
+   "asm4": 5.4,
+   "go1": 29.1,
+   "go4": 17.3,
+   "gray1": 8.2,
+   "gray4": 5.7,
+   "native": 24.3
   },
   "noise720p_sub96": {
-   "agray1": 9.1,
-   "agray4": 5.1,
-   "asm1": 25.0,
-   "asm4": 13.7,
-   "go1": 97.5,
-   "go4": 48.6,
-   "gray1": 37.2,
-   "gray4": 20.0,
-   "native": 115.9
+   "agray1": 8.5,
+   "agray4": 4.5,
+   "asm1": 22.1,
+   "asm4": 11.6,
+   "go1": 68.1,
+   "go4": 35.3,
+   "gray1": 26.6,
+   "gray4": 14.9,
+   "native": 100.8
   },
   "photo_baboon": {
    "agray1": 2.5,
-   "agray4": 2.7,
-   "asm1": 7.0,
-   "asm4": 6.9,
-   "go1": 24.5,
-   "go4": 16.0,
-   "gray1": 9.4,
-   "gray4": 6.7,
-   "native": 31.7
+   "agray4": 3.2,
+   "asm1": 6.4,
+   "asm4": 7.5,
+   "go1": 17.7,
+   "go4": 13.3,
+   "gray1": 7.0,
+   "gray4": 5.6,
+   "native": 25.6
   },
   "photo_building": {
    "agray1": 5.5,
-   "agray4": 3.2,
-   "asm1": 15.7,
-   "asm4": 11.7,
-   "go1": 59.6,
-   "go4": 30.9,
-   "gray1": 22.3,
-   "gray4": 12.1,
-   "native": 73.4
+   "agray4": 2.8,
+   "asm1": 13.1,
+   "asm4": 8.8,
+   "go1": 42.3,
+   "go4": 21.9,
+   "gray1": 16.7,
+   "gray4": 9.5,
+   "native": 73.3
   },
   "photo_fruits": {
-   "agray1": 2.4,
-   "agray4": 2.8,
-   "asm1": 6.9,
-   "asm4": 6.7,
-   "go1": 23.1,
-   "go4": 15.9,
-   "gray1": 9.0,
-   "gray4": 6.5,
-   "native": 49.9
+   "agray1": 2.5,
+   "agray4": 3.0,
+   "asm1": 6.0,
+   "asm4": 7.2,
+   "go1": 17.5,
+   "go4": 12.9,
+   "gray1": 6.5,
+   "gray4": 5.4,
+   "native": 41.1
   },
   "photo_graf1": {
-   "agray1": 5.7,
-   "agray4": 3.5,
-   "asm1": 16.2,
-   "asm4": 10.1,
-   "go1": 61.9,
-   "go4": 33.5,
-   "gray1": 23.0,
-   "gray4": 12.6,
-   "native": 89.1
+   "agray1": 5.0,
+   "agray4": 3.3,
+   "asm1": 14.0,
+   "asm4": 9.0,
+   "go1": 40.3,
+   "go4": 23.4,
+   "gray1": 15.6,
+   "gray4": 9.3,
+   "native": 77.3
   },
   "photo_starry_night": {
-   "agray1": 5.3,
-   "agray4": 3.5,
-   "asm1": 15.0,
-   "asm4": 9.6,
-   "go1": 59.2,
-   "go4": 32.6,
-   "gray1": 21.7,
-   "gray4": 13.2,
-   "native": 64.3
+   "agray1": 4.9,
+   "agray4": 3.4,
+   "asm1": 13.2,
+   "asm4": 8.9,
+   "go1": 39.5,
+   "go4": 27.8,
+   "gray1": 15.0,
+   "gray4": 10.1,
+   "native": 54.8
   },
   "window1600_button96x32": {
-   "agray1": 16.5,
-   "agray4": 8.9,
-   "asm1": 43.7,
-   "asm4": 22.7,
-   "go1": 167.2,
-   "go4": 82.9,
-   "gray1": 64.9,
-   "gray4": 34.3,
-   "native": 183.6
+   "agray1": 14.5,
+   "agray4": 8.5,
+   "asm1": 43.8,
+   "asm4": 22.5,
+   "go1": 130.2,
+   "go4": 63.2,
+   "gray1": 48.9,
+   "gray4": 25.3,
+   "native": 165.3
   },
   "window1600_icon24x24": {
-   "agray1": 14.7,
-   "agray4": 7.6,
-   "asm1": 37.3,
-   "asm4": 20.2,
-   "go1": 137.5,
-   "go4": 70.6,
-   "gray1": 55.1,
-   "gray4": 29.3,
-   "native": 148.7
+   "agray1": 13.1,
+   "agray4": 7.0,
+   "asm1": 35.3,
+   "asm4": 17.8,
+   "go1": 103.8,
+   "go4": 53.4,
+   "gray1": 39.4,
+   "gray4": 21.6,
+   "native": 148.9
   },
   "window1600_panel300x200": {
-   "agray1": 16.4,
-   "agray4": 10.6,
-   "asm1": 45.6,
-   "asm4": 29.6,
-   "go1": 172.0,
-   "go4": 92.5,
-   "gray1": 64.3,
-   "gray4": 35.4,
-   "native": 158.1
+   "agray1": 16.5,
+   "agray4": 11.2,
+   "asm1": 48.2,
+   "asm4": 32.2,
+   "go1": 126.6,
+   "go4": 69.0,
+   "gray1": 46.0,
+   "gray4": 28.0,
+   "native": 158.2
   },
   "window4k_button96x32": {
-   "agray1": 77.5,
-   "agray4": 37.8,
-   "asm1": 200.2,
-   "asm4": 103.2,
-   "go1": 806.2,
-   "go4": 388.9,
-   "gray1": 311.7,
-   "gray4": 161.9,
-   "native": 859.9
+   "agray1": 69.9,
+   "agray4": 36.5,
+   "asm1": 203.4,
+   "asm4": 97.1,
+   "go1": 573.2,
+   "go4": 280.5,
+   "gray1": 223.5,
+   "gray4": 119.2,
+   "native": 788.3
   }
  }
 }

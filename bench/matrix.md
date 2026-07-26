@@ -11,38 +11,40 @@ the cvmatch columns are `go test -benchtime 5x` averages from
 `-tags purego` build. max|Δ| is the worst per-element deviation vs
 native (element gate 1e-3).
 
-**amd64** — GitHub Actions ubuntu-latest (4-vCPU AMD EPYC 7763 64-Core Processor, linux/amd64):
+**amd64** — GitHub Actions ubuntu-latest (4-vCPU Intel(R) Xeon(R) 6973P-C, linux/amd64):
 
 | scene | native C++ | asm 1T | asm 4T | no-asm 1T | no-asm 4T | max\|Δ\| |
 |---|---|---|---|---|---|---|
-| Window 1600×1000 · button 96×32 | 183.6 | 43.7 | **22.7** | 167.2 | 82.9 | 3.9e-04 |
-| Window 1600×1000 · icon 24×24 | 148.7 | 37.3 | **20.2** | 137.5 | 70.6 | 7.3e-05 |
-| Window 1600×1000 · panel 300×200 | 158.1 | 45.6 | **29.6** | 172.0 | 92.5 | 1.7e-05 |
-| Noise 1280×720 · sub 96×96 | 115.9 | 25.0 | **13.7** | 97.5 | 48.6 | 2.3e-06 |
-| Noise 1920×1080 · sub 128×128 | 282.7 | 57.7 | **31.4** | 211.4 | 110.8 | 2.0e-06 |
-| Noise 1920×1080 · sub 32×32 | 194.9 | 51.8 | **25.4** | 182.4 | 90.5 | 3.0e-06 |
-| Noise 640×480 · varying alpha, 4ch | 28.4 | 10.1 | **6.4** | 37.2 | 22.4 | 1.8e-06 |
-| Window 3840×2160 · button 96×32 | 859.9 | 200.2 | **103.2** | 806.2 | 388.9 | 6.2e-04 |
-| Noise 3840×2160 · sub 256×256 | 1186.5 | 229.9 | **131.6** | 917.1 | 468.5 | 2.0e-06 |
-| fruits 512×480 · sub 80×80 | 49.9 | 6.9 | **6.7** | 23.1 | 15.9 | 2.0e-05 |
-| baboon 512×512 · sub 64×64 | 31.7 | 7.0 | **6.9** | 24.5 | 16.0 | 1.2e-05 |
-| building 868×600 · sub 100×100 | 73.4 | 15.7 | **11.7** | 59.6 | 30.9 | 5.4e-05 |
-| graf1 800×640 · sub 120×120 | 89.1 | 16.2 | **10.1** | 61.9 | 33.5 | 4.0e-06 |
-| starry_night 752×600 · sub 128×128 | 64.3 | 15.0 | **9.6** | 59.2 | 32.6 | 4.8e-06 |
+| Window 1600×1000 · button 96×32 | 165.3 | 43.8 | **22.5** | 130.2 | 63.2 | 3.9e-04 |
+| Window 1600×1000 · icon 24×24 | 148.9 | 35.3 | **17.8** | 103.8 | 53.4 | 7.3e-05 |
+| Window 1600×1000 · panel 300×200 | 158.2 | 48.2 | **32.2** | 126.6 | 69.0 | 1.7e-05 |
+| Noise 1280×720 · sub 96×96 | 100.8 | 22.1 | **11.6** | 68.1 | 35.3 | 2.3e-06 |
+| Noise 1920×1080 · sub 128×128 | 268.4 | 54.3 | **30.0** | 150.9 | 78.1 | 2.0e-06 |
+| Noise 1920×1080 · sub 32×32 | 211.2 | 44.0 | **22.2** | 129.6 | 65.2 | 3.0e-06 |
+| Noise 640×480 · varying alpha, 4ch | 24.3 | 8.6 | **5.4** | 29.1 | 17.3 | 1.8e-06 |
+| Window 3840×2160 · button 96×32 | 788.3 | 203.4 | **97.1** | 573.2 | 280.5 | 6.2e-04 |
+| Noise 3840×2160 · sub 256×256 | 1103.2 | 254.1 | **132.7** | 685.0 | 340.0 | 2.0e-06 |
+| fruits 512×480 · sub 80×80 | 41.1 | **6.0** | 7.2 | 17.5 | 12.9 | 2.0e-05 |
+| baboon 512×512 · sub 64×64 | 25.6 | **6.4** | 7.5 | 17.7 | 13.3 | 1.2e-05 |
+| building 868×600 · sub 100×100 | 73.3 | 13.1 | **8.8** | 42.3 | 21.9 | 5.4e-05 |
+| graf1 800×640 · sub 120×120 | 77.3 | 14.0 | **9.0** | 40.3 | 23.4 | 4.1e-06 |
+| starry_night 752×600 · sub 128×128 | 54.8 | 13.2 | **8.9** | 39.5 | 27.8 | 5.4e-06 |
 
-`MatchGray` at 1080p/128 for scale: asm 20.4 / 12.1 ms,
-no-asm 81.5 / 45.2 ms (1T / 4T). Native C++ has no gray
+`MatchGray` at 1080p/128 for scale: asm 18.6 / 11.3 ms,
+no-asm 58.3 / 35.3 ms (1T / 4T). Native C++ has no gray
 row in this suite — a fair baseline would need cvtColor + 1-channel
 matchTemplate timed end-to-end, which was not measured; treat MatchGray
 numbers as cvmatch-internal.
 
-**Measured summary (single-threaded, like-for-like):** the default asm build
-runs 3.3–4.0x faster than the -tags purego build and beats
-native OpenCV C++ by 2.8–7.2x; the no-asm build ranges
-0.76–2.16x vs native on the same scenes.
+**Measured summary (single-threaded, like-for-like):** the default asm
+build beats native OpenCV C++ by 2.8–6.9x and runs
+2.6–3.4x faster than the -tags purego build — the
+proof that the amd64 assembly layer earns its keep. The no-asm build
+is the algorithm-only comparison (what every non-amd64 platform
+runs): 0.84–2.35x vs native on the same scenes.
 
 Internal multi-threading (4 workers, bit-identical output at any worker
-count) further improves cvmatch by up to 2.0x on the multi-tile
+count) further improves cvmatch by up to 2.1x on the multi-tile
 scenes — the 4T columns above. It is a product feature, not part of the
 vs-native comparison: OpenCV's matchTemplate does not thread, so the
 headline numbers are 1T vs 1T.
