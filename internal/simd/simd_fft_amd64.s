@@ -347,7 +347,6 @@ sr4_h1_loop:
 	ADDQ      $4, R10
 	CMPQ      R10, SI
 	JLT       sr4_h1_loop
-
 	MOVQ $4, R8                 // next radix-4 stage: h = 4
 
 	// ---- radix-4 stage loop (h = 2 via XMM, h >= 4 via YMM) ---------
@@ -357,15 +356,12 @@ sr4_stage:
 	CMPQ CX, SI                 // 4h <= n ?
 	JGT  sr4_done
 
-	XORQ R9, R9                 // base = 0
+	// j-chunks outer, groups inner: the three twiddle chunks prep once
+	// per j-chunk instead of once per (group, j-chunk) — small-h stages
+	// have many groups, and per-group reloading measurably drags the
+	// small-dftW scenes. Pure scheduling; per-element ops unchanged.
 	CMPQ R8, $2
-	JEQ  sr4_h2_groups
-
-sr4_groups:
-	LEAQ (DI)(R9*8), R11        // A = a + base
-	LEAQ (R11)(R8*8), R12       // C = A + h
-	LEAQ (R12)(R8*8), R13       // B = A + 2h
-	LEAQ (R13)(R8*8), R14       // D = A + 3h
+	JEQ  sr4_h2_start
 	XORQ R10, R10               // j = 0
 
 sr4_j:
@@ -384,11 +380,17 @@ sr4_j:
 	VMOVSHDUP Y4, Y5
 	VMOVSLDUP Y4, Y4
 	VXORPS    Y15, Y5, Y5
+	LEAQ (DI)(R10*8), R11       // A = a + j
+	LEAQ (R11)(R8*8), R12       // C = A + h
+	LEAQ (R12)(R8*8), R13       // B = A + 2h
+	LEAQ (R13)(R8*8), R14       // D = A + 3h
+	XORQ R9, R9                 // group offset = 0
 
-	VMOVUPS (R11)(R10*8), Y6    // A
-	VMOVUPS (R12)(R10*8), Y7    // C-input
-	VMOVUPS (R13)(R10*8), Y8    // B-input
-	VMOVUPS (R14)(R10*8), Y9    // D-input
+sr4_groups:
+	VMOVUPS (R11)(R9*8), Y6     // A
+	VMOVUPS (R12)(R9*8), Y7     // C-input
+	VMOVUPS (R13)(R9*8), Y8     // B-input
+	VMOVUPS (R14)(R9*8), Y9     // D-input
 	VPERMILPS $0xB1, Y8, Y10
 	VMULPS    Y0, Y8, Y11
 	VMULPS    Y1, Y10, Y10
@@ -411,20 +413,22 @@ sr4_j:
 	VSUBPS    Y7, Y11, Y8       // out2 = s0-s2
 	VADDPS    Y10, Y12, Y7      // out1 = s1+rot
 	VSUBPS    Y10, Y12, Y9      // out3 = s1-rot
-	VMOVUPS   Y6, (R11)(R10*8)
-	VMOVUPS   Y7, (R12)(R10*8)
-	VMOVUPS   Y8, (R13)(R10*8)
-	VMOVUPS   Y9, (R14)(R10*8)
-	ADDQ      $4, R10
+	VMOVUPS   Y6, (R11)(R9*8)
+	VMOVUPS   Y7, (R12)(R9*8)
+	VMOVUPS   Y8, (R13)(R9*8)
+	VMOVUPS   Y9, (R14)(R9*8)
+	LEAQ      (R9)(R8*4), R9    // next group: += 4h
+	CMPQ      R9, SI
+	JLT       sr4_groups
+	ADDQ      $4, R10           // next j-chunk
 	CMPQ      R10, R8
 	JLT       sr4_j
-
-	LEAQ (R9)(R8*4), R9         // base += 4h
-	CMPQ R9, SI
-	JLT  sr4_groups
-	JMP  sr4_next
+	JMP       sr4_next
 
 	// h=2: quarters are 2 complexes apart — one XMM iteration per group
+sr4_h2_start:
+	XORQ R9, R9
+
 sr4_h2_groups:
 	VMOVUPS   (DX), X0          // w1[0..1]
 	VMOVSHDUP X0, X1
