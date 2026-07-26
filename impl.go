@@ -464,7 +464,12 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 			ts := tspec[k*specN : (k+1)*specN]
 			blockForwardGo(tpl[k:], tstride, step, 0, 0, tw, th, p, ts, z, tteam)
 			runParallel(tteam, func(u int) {
-				for i := u * specN / tteam; i < (u+1)*specN/tteam; i++ {
+				lo, hi := u*specN/tteam, (u+1)*specN/tteam
+				if simd.Enabled {
+					simd.ScaleCplx(ts[lo:hi], scale)
+					return
+				}
+				for i := lo; i < hi; i++ {
 					ts[i] = complex(real(ts[i])*scale, imag(ts[i])*scale)
 				}
 			})

@@ -41,6 +41,13 @@ func FFTColsR4(r0, r1, r2, r3 []complex64, w1, w2, w3 complex64, inverse bool)
 //go:noescape
 func FFTColsHead(p, q []complex64)
 
+// ScaleCplx multiplies every float32 component of a by s — one
+// correctly rounded VMULPS per lane, bit-identical to the scalar
+// complex(re*s, im*s) loop on every input.
+//
+//go:noescape
+func ScaleCplx(a []complex64, s float32)
+
 // MulConj computes spec *= conj(tspec) element-wise.
 //
 //go:noescape

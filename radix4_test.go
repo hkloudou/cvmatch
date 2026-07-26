@@ -5,6 +5,8 @@ import (
 	"math/cmplx"
 	"math/rand"
 	"testing"
+
+	"github.com/hkloudou/cvmatch/internal/simd"
 )
 
 // naiveDFT is the float64 O(n^2) oracle.
@@ -121,6 +123,33 @@ func TestFFTStagesR4MatchesScalar(t *testing.T) {
 					math.Float32bits(imag(kern[i])) != math.Float32bits(imag(want[i])) {
 					t.Fatalf("n=%d inverse=%v elem %d: kernel %v scalar %v (bit mismatch)",
 						n, inverse, i, kern[i], want[i])
+				}
+			}
+		}
+	}
+}
+
+// ScaleCplx must equal the scalar complex(re*s, im*s) loop bit-for-bit,
+// including odd lengths (kernel tail) and subnormal inputs. On purego
+// builds both paths are the same code.
+func TestScaleCplxMatchesScalar(t *testing.T) {
+	for _, n := range []int{1, 3, 7, 8, 33, 1024} {
+		for _, s := range []float32{1.0 / 262144, 0.999, 3.0e-42} {
+			x := randSlab(n, int64(n)*17)
+			x[0] = complex(math.Float32frombits(1), -0) // subnormal + -0 lanes
+			kern := append([]complex64(nil), x...)
+			if simd.Enabled {
+				simd.ScaleCplx(kern, s)
+			} else {
+				for i := range kern {
+					kern[i] = complex(real(kern[i])*s, imag(kern[i])*s)
+				}
+			}
+			for i := range x {
+				w := complex(real(x[i])*s, imag(x[i])*s)
+				if math.Float32bits(real(kern[i])) != math.Float32bits(real(w)) ||
+					math.Float32bits(imag(kern[i])) != math.Float32bits(imag(w)) {
+					t.Fatalf("n=%d s=%g elem %d: kernel %v want %v", n, s, i, kern[i], w)
 				}
 			}
 		}
