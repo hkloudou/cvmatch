@@ -167,6 +167,12 @@ element-wise against a native OpenCV C++ binary.
   scalar/asm ratio shifts between runner microarchitectures (XEON vs
   EPYC measured 3.3-3.9x vs 4.1-4.2x for identical code), so judging an
   optimization requires an A/B on the same host, not two refreshes.
+- **A passing native null certifies the pair, not every segment.** The
+  cvmatch segments run minutes after the native segment, and one
+  segment can carry its own turbulence (PR #26's first pair: clean
+  null, yet −15% uniform swings on a gray asm column whose code was
+  untouched). When a pair column contradicts a rigorous same-host 20x
+  interleave, the interleave arbitrates; re-dispatch the pair.
 - **`bench-charts.yml` is the only benchmark pipeline** (weekly cron +
   `workflow_dispatch`, runnable on any ref; results publish to the
   `assets` branch, or stay a workflow artifact with `publish=false`).
@@ -303,6 +309,39 @@ the ranges.
   benchmark story is the amd64 three-way: native OpenCV vs asm vs
   no-asm. Consequence for 7.2: a radix-4+FMA rewrite now needs only ONE
   asm backend, but the scalar fma32 cost lands directly on arm64.
+
+- Phase 9 (post-7.2 headroom, owner directive "看看还有没有优化空间"):
+  three slices, each gated by a null-controlled reference pair.
+  **ScaleCplx** (PR #25): the per-call template-spectrum scale through
+  VMULPS — asm geomean +3.6% (12/14; fruits +15%, baboon +12%), gray
+  +6.7%. **SpillStats4** (PR #26): the cn=3/4 normalize spill (~17% of
+  Match timed work) as a pixel-major kernel — four int64 channel sums
+  sliding in one YMM, exact VPMULDQ cross/Σsk², per-cn th gates
+  (11008/8256) keeping every product exact, hi·2^32+lo conversions;
+  reference pair (null x1.002) Match asm geomean **+11.6%, 14/14**,
+  purego x0.998 (the expected kernel-only null); it also birthed the
+  VEX-encoding rule above (~9x legacy-SSE penalty) and the
+  segment-turbulence rule in the benchmarking section. **Swap-sweep
+  removal** (PR #27): the column engine's physical bit-reversal
+  rotation (memmove ~6.7% of timed work, plus a whole extra slab sweep
+  per direction) deleted by brev-slot placement — forward row-pair
+  writers store spec rows at bit-reversed slots for free, the inverse
+  cascade conjugates every row access through the involution (rmap),
+  MulConj untouched; zero numeric change, goldens unchanged (no
+  re-record). Reference pair (null x0.980, first pair discarded on a
+  x0.794 null — different runner generations): Match asm **+3.2%
+  geomean 13/14**, purego +2.1% 13/14, gray purego +3.2% 14/14, gray
+  asm +1.1% — all four columns positive, strongest on big-tile scenes
+  (starry +6.7%, building +6.0%, 4k +4.0% asm) and ~flat on the
+  small-tile window scenes, exactly the traffic-elimination shape.
+  Phase 9 closed after this: the post-SpillStats4 profile (noise1080p,
+  timed region) prices every remaining lever under the reference noise
+  floor — FFT kernels ~45% (engine closed by the 7.2 ledger),
+  SpillStats4 ~16% (serial slide chain + wide converts, little left
+  inside), pad-row memclr ~7% (dirty-tracking complexity above its
+  value), and the memmove line is deleted outright by PR #27.
+  Published headline after SpillStats4: beats native 3.8-10.2x, asm
+  3.8-4.9x over purego (generated ranges, runner dependent).
 
 ## Phase 7 design-study verdict ledger (adjudicated 2026-07-17)
 

@@ -6,9 +6,22 @@ import "github.com/hkloudou/cvmatch/internal/simd"
 // to every column of a row-major [n x width] slab exactly the op
 // sequence fftR4 applies to a 1-D vector — TestColsR4MatchesRowEngine
 // pins that bit-for-bit — while keeping fftColsGo's scheduling shape:
-// row-swap bit reversal, one memory sweep per pass, team width-chunks
-// with runParallel as the inter-pass barrier. This IS the pipeline's
-// column engine (blockForwardGo/blockInverseEmitGo call it).
+// one memory sweep per pass, team width-chunks with runParallel as the
+// inter-pass barrier. This IS the pipeline's column engine
+// (blockForwardGo/blockInverseEmitGo call it).
+//
+// Unlike the row engine there is no physical bit-reversal here (Phase
+// 9: the row-swap sweeps were ~7% of timed work on big tiles). The
+// cascade wants logical row L at slot brev[L]; forward callers get that
+// for free by *writing* their rows at brev slots (natural cascade
+// indexing, rmap == nil, output lands natural). The inverse consumes
+// MulConj's natural layout unmoved by conjugating every row access with
+// the involution instead (rmap = brev): logical slot s is read/written
+// at physical row rmap[s], which leaves the spatial row y at slot
+// brev[y] for the emit to read back through one lookup. Both modes run
+// the identical op sequence on identical values — pure storage
+// relabeling, bit-identical output, asm kernels untouched (they only
+// ever see row slices).
 //
 // Arithmetic note vs the retired radix-2 column passes: they ran the
 // odd stage as a twiddled pass at the top (half = n/2); this schedule
@@ -19,10 +32,14 @@ import "github.com/hkloudou/cvmatch/internal/simd"
 
 // colsR4Head is the odd-log2 head stage: rows (2i, 2i+1) combine as
 // (a+b, a-b) per column — plain single-rounded adds, no twiddles.
-func colsR4Head(d []complex64, n, width, c0, c1 int) {
+func colsR4Head(d []complex64, n, width, c0, c1 int, rmap []int32) {
 	for r := 0; r < n; r += 2 {
-		p := d[r*width+c0 : r*width+c1]
-		q := d[(r+1)*width+c0 : (r+1)*width+c1]
+		i0, i1 := r, r+1
+		if rmap != nil {
+			i0, i1 = int(rmap[i0]), int(rmap[i1])
+		}
+		p := d[i0*width+c0 : i0*width+c1]
+		q := d[i1*width+c0 : i1*width+c1]
 		if simd.Enabled {
 			simd.FFTColsHead(p, q)
 			continue
@@ -39,7 +56,7 @@ func colsR4Head(d []complex64, n, width, c0, c1 int) {
 // [c0, c1). Input roles follow the bit-reversal layout: the q=1
 // sub-transform lives at row offset 2h, q=2 at offset h (see the
 // contract in radix4.go).
-func colsR4Pass(d []complex64, n, width int, w1, w2, w3 []complex64, inverse bool, h, c0, c1 int) {
+func colsR4Pass(d []complex64, n, width int, w1, w2, w3 []complex64, inverse bool, h, c0, c1 int, rmap []int32) {
 	for base := 0; base < n; base += 4 * h {
 		for j := 0; j < h; j++ {
 			bw, cw, dw := w1[j], w2[j], w3[j]
@@ -49,10 +66,14 @@ func colsR4Pass(d []complex64, n, width int, w1, w2, w3 []complex64, inverse boo
 				dw = complex(real(dw), -imag(dw))
 			}
 			r := base + j
-			pA := d[r*width+c0 : r*width+c1]
-			pC := d[(r+h)*width+c0 : (r+h)*width+c1]
-			pB := d[(r+2*h)*width+c0 : (r+2*h)*width+c1]
-			pD := d[(r+3*h)*width+c0 : (r+3*h)*width+c1]
+			i0, i1, i2, i3 := r, r+h, r+2*h, r+3*h
+			if rmap != nil {
+				i0, i1, i2, i3 = int(rmap[i0]), int(rmap[i1]), int(rmap[i2]), int(rmap[i3])
+			}
+			pA := d[i0*width+c0 : i0*width+c1]
+			pC := d[i1*width+c0 : i1*width+c1]
+			pB := d[i2*width+c0 : i2*width+c1]
+			pD := d[i3*width+c0 : i3*width+c1]
 			if simd.Enabled {
 				simd.FFTColsR4(pA, pC, pB, pD, bw, cw, dw, inverse)
 				continue
@@ -82,19 +103,15 @@ func colsR4Pass(d []complex64, n, width int, w1, w2, w3 []complex64, inverse boo
 }
 
 // colsR4Go transforms the columns of the row-major [n x width] slab in
-// place. tmp must hold at least width elements (the row-swap scratch).
-func colsR4Go(d []complex64, n, width int, tri []complex64, pairs []int32, inverse bool, tmp []complex64, team int) {
-	for k := 0; k+1 < len(pairs); k += 2 {
-		i, j := int(pairs[k]), int(pairs[k+1])
-		ri := d[i*width : i*width+width]
-		rj := d[j*width : j*width+width]
-		copy(tmp[:width], ri)
-		copy(ri, rj)
-		copy(rj, tmp[:width])
-	}
+// place, never moving a row: with rmap == nil the cascade indexes rows
+// directly (callers must have placed logical row L at slot brev[L];
+// output lands natural), with rmap = brev every access is conjugated by
+// the involution (input natural; the transform of logical slot s lands
+// at physical row brev[s]).
+func colsR4Go(d []complex64, n, width int, tri []complex64, inverse bool, rmap []int32, team int) {
 	h := 1
 	if oddLog2(n) {
-		colRange(team, width, func(c0, c1 int) { colsR4Head(d, n, width, c0, c1) })
+		colRange(team, width, func(c0, c1 int) { colsR4Head(d, n, width, c0, c1, rmap) })
 		h = 2
 	}
 	for ; 4*h <= n; h *= 4 {
@@ -102,7 +119,7 @@ func colsR4Go(d []complex64, n, width int, tri []complex64, pairs []int32, inver
 		tri = tri[3*h:]
 		hh := h
 		colRange(team, width, func(c0, c1 int) {
-			colsR4Pass(d, n, width, w1, w2, w3, inverse, hh, c0, c1)
+			colsR4Pass(d, n, width, w1, w2, w3, inverse, hh, c0, c1, rmap)
 		})
 	}
 }
