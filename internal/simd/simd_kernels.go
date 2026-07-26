@@ -32,6 +32,26 @@ func FFTColsBfly(p, q []complex64, w complex64)
 //go:noescape
 func FFTCols4(r0, r1, r2, r3 []complex64, w1, w2a, w2b complex64)
 
+// FFTColsR4 applies one radix-4 column stage to the row quad
+// (r0, r1, r2, r3) = rows (r, r+h, r+2h, r+3h): per element exactly the
+// scalar colsR4Pass sequence — tb = r2*w1, tc = r1*w2, td = r3*w3 with
+// the shared two-products-one-addsub multiply idiom (twiddles arrive
+// already direction-adjusted), plain-add combines, and the -+i rotation
+// as an exact swap + sign-bit xor picked by inverse. No FMA anywhere
+// (7.2 contract: the fma32 scalar twin measured 3.8x slower, so fusion
+// is banned to keep asm<->purego bit-identity). All rows share r0's
+// length; the kernel finishes sub-vector tails itself.
+//
+//go:noescape
+func FFTColsR4(r0, r1, r2, r3 []complex64, w1, w2, w3 complex64, inverse bool)
+
+// FFTColsHead is the odd-log2 head stage on a row pair: p,q = p+q, p-q.
+// Plain single-rounded adds, no twiddles — exactly the scalar
+// colsR4Head loop.
+//
+//go:noescape
+func FFTColsHead(p, q []complex64)
+
 // MulConj computes spec *= conj(tspec) element-wise.
 //
 //go:noescape

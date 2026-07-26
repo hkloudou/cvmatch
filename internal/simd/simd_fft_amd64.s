@@ -327,3 +327,168 @@ mc_tail_loop:
 mc_done:
 	VZEROUPPER
 	RET
+
+// func FFTColsR4(r0, r1, r2, r3 []complex64, w1, w2, w3 complex64, inverse bool)
+// One radix-4 column stage on rows (r, r+h, r+2h, r+3h): per element
+// exactly the scalar colsR4Pass sequence — tb = r2*w1, tc = r1*w2,
+// td = r3*w3 (each the shared mul idiom, twiddles pre-adjusted for
+// direction by the caller), plain-add combine, and the +-i rotation as
+// an exact swap + sign-bit xor selected by inverse. All rows share
+// r0's length.
+// Register map (FFTColsR4):
+//   DI=r0  DX=r1  BX=r2  R8=r3  SI=len  CX=len&^3  R10=index  AX=inverse
+//   Y0/Y1=w1 re/im  Y2/Y3=w2 re/im  Y4/Y5=w3 re/im  Y15=rotation mask
+//   loop: Y6=A  Y7=C->s0  Y8=B->s1  Y9=D->s2  Y10=scratch/swap/s3->rot
+//   Y11=tb->out2  Y12=tc->out1  Y13=td->out3
+TEXT ·FFTColsR4(SB), NOSPLIT, $0-121
+	MOVQ         r0_base+0(FP), DI
+	MOVQ         r0_len+8(FP), SI
+	MOVQ         r1_base+24(FP), DX
+	MOVQ         r2_base+48(FP), BX
+	MOVQ         r3_base+72(FP), R8
+	VBROADCASTSS w1_real+96(FP), Y0
+	VBROADCASTSS w1_imag+100(FP), Y1
+	VBROADCASTSS w2_real+104(FP), Y2
+	VBROADCASTSS w2_imag+108(FP), Y3
+	VBROADCASTSS w3_real+112(FP), Y4
+	VBROADCASTSS w3_imag+116(FP), Y5
+	MOVBLZX      inverse+120(FP), AX
+	// rotation sign mask: forward negates the imag lane (-i*s3),
+	// inverse negates the real lane (+i*s3); xor is an exact sign flip
+	MOVQ         $0x8000000000000000, R11
+	TESTB        AX, AX
+	JZ           r4_mask
+	MOVQ         $0x0000000080000000, R11
+
+r4_mask:
+	MOVQ         R11, X15
+	VPBROADCASTQ X15, Y15
+	MOVQ         SI, CX
+	ANDQ         $-4, CX
+	XORQ         R10, R10
+	CMPQ         CX, $0
+	JEQ          r4_tail
+
+r4_main:
+	VMOVUPS   (DI)(R10*8), Y6   // A  = row r
+	VMOVUPS   (DX)(R10*8), Y7   // C  = row r+h   (q=2 input)
+	VMOVUPS   (BX)(R10*8), Y8   // B  = row r+2h  (q=1 input)
+	VMOVUPS   (R8)(R10*8), Y9   // D  = row r+3h  (q=3 input)
+	VPERMILPS $0xB1, Y8, Y10
+	VMULPS    Y0, Y8, Y11       // t1 = B*w1r
+	VMULPS    Y1, Y10, Y10      // t2 = swap(B)*w1i
+	VADDSUBPS Y10, Y11, Y11     // tb = B*w1
+	VPERMILPS $0xB1, Y7, Y10
+	VMULPS    Y2, Y7, Y12
+	VMULPS    Y3, Y10, Y10
+	VADDSUBPS Y10, Y12, Y12     // tc = C*w2
+	VPERMILPS $0xB1, Y9, Y10
+	VMULPS    Y4, Y9, Y13
+	VMULPS    Y5, Y10, Y10
+	VADDSUBPS Y10, Y13, Y13     // td = D*w3
+	VADDPS    Y12, Y6, Y7       // s0 = A + tc
+	VSUBPS    Y12, Y6, Y8       // s1 = A - tc
+	VADDPS    Y13, Y11, Y9      // s2 = tb + td
+	VSUBPS    Y13, Y11, Y10     // s3 = tb - td
+	VPERMILPS $0xB1, Y10, Y10   // swap(s3)
+	VXORPS    Y15, Y10, Y10     // rot = -+i*s3
+	VADDPS    Y9, Y7, Y6        // out0 = s0 + s2
+	VSUBPS    Y9, Y7, Y11       // out2 = s0 - s2
+	VADDPS    Y10, Y8, Y12      // out1 = s1 + rot
+	VSUBPS    Y10, Y8, Y13      // out3 = s1 - rot
+	VMOVUPS   Y6, (DI)(R10*8)
+	VMOVUPS   Y12, (DX)(R10*8)
+	VMOVUPS   Y11, (BX)(R10*8)
+	VMOVUPS   Y13, (R8)(R10*8)
+	ADDQ      $4, R10
+	CMPQ      R10, CX
+	JLT       r4_main
+
+r4_tail:
+	CMPQ R10, SI
+	JGE  r4_done
+
+r4_tail_loop:
+	VMOVSD    (DI)(R10*8), X6
+	VMOVSD    (DX)(R10*8), X7
+	VMOVSD    (BX)(R10*8), X8
+	VMOVSD    (R8)(R10*8), X9
+	VPERMILPS $0xB1, X8, X10
+	VMULPS    X0, X8, X11
+	VMULPS    X1, X10, X10
+	VADDSUBPS X10, X11, X11
+	VPERMILPS $0xB1, X7, X10
+	VMULPS    X2, X7, X12
+	VMULPS    X3, X10, X10
+	VADDSUBPS X10, X12, X12
+	VPERMILPS $0xB1, X9, X10
+	VMULPS    X4, X9, X13
+	VMULPS    X5, X10, X10
+	VADDSUBPS X10, X13, X13
+	VADDPS    X12, X6, X7
+	VSUBPS    X12, X6, X8
+	VADDPS    X13, X11, X9
+	VSUBPS    X13, X11, X10
+	VPERMILPS $0xB1, X10, X10
+	VXORPS    X15, X10, X10
+	VADDPS    X9, X7, X6
+	VSUBPS    X9, X7, X11
+	VADDPS    X10, X8, X12
+	VSUBPS    X10, X8, X13
+	VMOVSD    X6, (DI)(R10*8)
+	VMOVSD    X12, (DX)(R10*8)
+	VMOVSD    X11, (BX)(R10*8)
+	VMOVSD    X13, (R8)(R10*8)
+	INCQ      R10
+	CMPQ      R10, SI
+	JLT       r4_tail_loop
+
+r4_done:
+	VZEROUPPER
+	RET
+
+// func FFTColsHead(p, q []complex64)
+// The odd-log2 head stage on a row pair: p,q = p+q, p-q. Plain
+// single-rounded adds, no twiddles — exactly the scalar colsR4Head.
+// Register map (FFTColsHead):
+//   DI=p  DX=q  SI=len  CX=len&^3  R10=index
+//   loop: Y1=p  Y2=q  Y3=sum  Y4=diff (X forms in the tail)
+TEXT ·FFTColsHead(SB), NOSPLIT, $0-48
+	MOVQ p_base+0(FP), DI
+	MOVQ p_len+8(FP), SI
+	MOVQ q_base+24(FP), DX
+	MOVQ SI, CX
+	ANDQ $-4, CX
+	XORQ R10, R10
+	CMPQ CX, $0
+	JEQ  hd_tail
+
+hd_main:
+	VMOVUPS (DI)(R10*8), Y1
+	VMOVUPS (DX)(R10*8), Y2
+	VADDPS  Y2, Y1, Y3
+	VSUBPS  Y2, Y1, Y4
+	VMOVUPS Y3, (DI)(R10*8)
+	VMOVUPS Y4, (DX)(R10*8)
+	ADDQ    $4, R10
+	CMPQ    R10, CX
+	JLT     hd_main
+
+hd_tail:
+	CMPQ R10, SI
+	JGE  hd_done
+
+hd_tail_loop:
+	VMOVSD (DI)(R10*8), X1
+	VMOVSD (DX)(R10*8), X2
+	VADDPS X2, X1, X3
+	VSUBPS X2, X1, X4
+	VMOVSD X3, (DI)(R10*8)
+	VMOVSD X4, (DX)(R10*8)
+	INCQ   R10
+	CMPQ   R10, SI
+	JLT    hd_tail_loop
+
+hd_done:
+	VZEROUPPER
+	RET

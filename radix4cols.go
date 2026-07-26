@@ -1,5 +1,7 @@
 package cvmatch
 
+import "github.com/hkloudou/cvmatch/internal/simd"
+
 // Column-pass twin of the radix-4 engine (Phase 7.2). colsR4Go applies
 // to every column of a row-major [n x width] slab exactly the op
 // sequence fftR4 applies to a 1-D vector — TestColsR4MatchesRowEngine
@@ -20,6 +22,10 @@ func colsR4Head(d []complex64, n, width, c0, c1 int) {
 	for r := 0; r < n; r += 2 {
 		p := d[r*width+c0 : r*width+c1]
 		q := d[(r+1)*width+c0 : (r+1)*width+c1]
+		if simd.Enabled {
+			simd.FFTColsHead(p, q)
+			continue
+		}
 		for c := range p {
 			u, v := p[c], q[c]
 			p[c] = complex(real(u)+real(v), imag(u)+imag(v))
@@ -46,6 +52,10 @@ func colsR4Pass(d []complex64, n, width int, w1, w2, w3 []complex64, inverse boo
 			pC := d[(r+h)*width+c0 : (r+h)*width+c1]
 			pB := d[(r+2*h)*width+c0 : (r+2*h)*width+c1]
 			pD := d[(r+3*h)*width+c0 : (r+3*h)*width+c1]
+			if simd.Enabled {
+				simd.FFTColsR4(pA, pC, pB, pD, bw, cw, dw, inverse)
+				continue
+			}
 			for c := range pA {
 				av := pA[c]
 				tb := mulPlain(pB[c], bw)
