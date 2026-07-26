@@ -139,3 +139,31 @@ func itoa(n int) string {
 	}
 	return "1024"
 }
+
+// On builds with the kernels enabled, fftR4 routes through FFTStagesR4;
+// it must reproduce the scalar cascade bit-for-bit at every size and
+// direction (on purego builds both paths are the same code and the test
+// is a tautology, which is fine).
+func TestFFTStagesR4MatchesScalar(t *testing.T) {
+	for n := 8; n <= 4096; n *= 2 {
+		ft := fftTables(n)
+		for _, inverse := range []bool{false, true} {
+			x := randSlab(n, int64(3*n)+11)
+			kern := append([]complex64(nil), x...)
+			fftR4(kern, ft.colTri(), ft.pairs, inverse)
+			want := append([]complex64(nil), x...)
+			for k := 0; k+1 < len(ft.pairs); k += 2 {
+				i, j := ft.pairs[k], ft.pairs[k+1]
+				want[i], want[j] = want[j], want[i]
+			}
+			fftR4Scalar(want, ft.colTri(), inverse)
+			for i := range kern {
+				if math.Float32bits(real(kern[i])) != math.Float32bits(real(want[i])) ||
+					math.Float32bits(imag(kern[i])) != math.Float32bits(imag(want[i])) {
+					t.Fatalf("n=%d inverse=%v elem %d: kernel %v scalar %v (bit mismatch)",
+						n, inverse, i, kern[i], want[i])
+				}
+			}
+		}
+	}
+}

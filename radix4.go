@@ -1,6 +1,10 @@
 package cvmatch
 
-import "math/bits"
+import (
+	"math/bits"
+
+	"github.com/hkloudou/cvmatch/internal/simd"
+)
 
 // Radix-4 FFT engine (Phase 7.2), no-FMA — decided by measurement: the
 // FMA variant needs the fma32 scalar twin for self-determinism, and
@@ -90,6 +94,17 @@ func fftR4(a []complex64, tri []complex64, pairs []int32, inverse bool) {
 		i, j := pairs[k], pairs[k+1]
 		a[i], a[j] = a[j], a[i]
 	}
+	if n >= 8 && simd.Enabled {
+		simd.FFTStagesR4(a, tri, inverse)
+		return
+	}
+	fftR4Scalar(a, tri, inverse)
+}
+
+// fftR4Scalar is the engine's scalar cascade (post-swap); the kernel
+// parity test pins FFTStagesR4 to it bit-for-bit.
+func fftR4Scalar(a []complex64, tri []complex64, inverse bool) {
+	n := len(a)
 	h := 1
 	if oddLog2(n) {
 		for i := 0; i < n; i += 2 {
