@@ -323,20 +323,20 @@ the ranges.
 - **rsqrt-approx**: REJECTED (breaks determinism) — estimate-instruction
   bits are vendor-defined even within amd64; sub-noise gain; the
   instructions are on the forbidden list above.
-- **column-FFT octet fusion (3 stages/sweep)**: PARKED PENDING 7.2
-  (PR #21, closed unmerged) — local 20x interleave said x1.030 geomean,
-  but the reference machines arbitrated it away: suite geomean
-  x0.995/x0.983 across two dispatch pairs, and the per-scene signal
-  split into a consistent 1080p-slab win (+3~9%) vs a consistent
-  4k-slab LOSS (−2~−5%) — the L3-vs-DRAM regime boundary that a fixed
-  `n·width·8 > 1MB` gate cannot encode portably (the same scenes
-  measured +7% on the local EPYC container: gate constants tuned
-  off-reference do not transfer). Retained: judge sweep-fusion again
-  only as a radix-4 epilogue after 7.2 lands, with a two-sided gate if
-  the reference machines still show column-pass dominance. Use the
-  purego columns of any dispatch-pair A/B as a null control — pair 2 of
-  this study showed +9~34% on byte-identical purego code and was
-  discarded.
+- **column-FFT octet fusion (3 stages/sweep)**: CLOSED (2026-07-26,
+  post-7.2 re-judgment) — the PARKED precondition was "column-pass
+  dominance on the reference machines"; the post-radix-4 profile shows
+  columns at ~23% of timed work on noise1080p (rows ~22%, normalize
+  ~24% — no dominant lever), so the fusion's best case is low-single-
+  digit geomean behind the same non-portable gate that killed PR #21
+  (suite x0.995/x0.983 on reference, 1080p-slab wins vs 4k-slab losses
+  across the L3/DRAM boundary). Do not rebuild. Method knowledge kept:
+  use the purego columns (or native itself) of any dispatch-pair A/B
+  as a null control; discard pairs that fail it.
+- **argmin FFT-weight retune for radix-4**: CLOSED, nothing to do —
+  radix-4 scales both FFT axes' model terms uniformly so relative
+  weights are unchanged; a +19% linear-term scan (16→19·specN) flipped
+  no pinned plan.
 - **split-radix**: DEAD ON MERIT — ~6% FFT-op delta vs radix-4 is
   sub-noise end-to-end, for 2.5-3x kernel surface and a broken
   pass/barrier structure. Sits next to NTT: do not re-propose without
