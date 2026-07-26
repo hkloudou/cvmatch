@@ -23,6 +23,10 @@ func FFTColsHead(p, q []complex64) {
 	panic("cvmatch: SIMD kernel on unsupported platform")
 }
 
+func ScaleCplx(a []complex64, s float32) {
+	panic("cvmatch: SIMD kernel on unsupported platform")
+}
+
 func MulConj(spec, tspec []complex64) {
 	panic("cvmatch: SIMD kernel on unsupported platform")
 }

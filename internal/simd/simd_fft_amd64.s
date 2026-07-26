@@ -489,3 +489,44 @@ sr4_next:
 sr4_done:
 	VZEROUPPER
 	RET
+
+// func ScaleCplx(a []complex64, s float32)
+// Multiplies every float32 component by s — one correctly rounded
+// VMULPS per lane, exactly the scalar complex(re*s, im*s) loop.
+// Register map (ScaleCplx):
+//   DI=a  SI=float lanes  CX=lanes&^7  R10=index  Y0/X0=s broadcast
+//   loop: Y1/X1=data
+TEXT ·ScaleCplx(SB), NOSPLIT, $0-28
+	MOVQ         a_base+0(FP), DI
+	MOVQ         a_len+8(FP), SI
+	VBROADCASTSS s+24(FP), Y0
+	SHLQ         $1, SI         // complex count -> float32 lane count
+	MOVQ         SI, CX
+	ANDQ         $-8, CX
+	XORQ         R10, R10
+	CMPQ         CX, $0
+	JEQ          sc_tail
+
+sc_main:
+	VMOVUPS (DI)(R10*4), Y1
+	VMULPS  Y0, Y1, Y1
+	VMOVUPS Y1, (DI)(R10*4)
+	ADDQ    $8, R10
+	CMPQ    R10, CX
+	JLT     sc_main
+
+sc_tail:
+	CMPQ R10, SI
+	JGE  sc_done
+
+sc_tail_loop:
+	VMOVSD (DI)(R10*4), X1      // one complex (two lanes)
+	VMULPS X0, X1, X1
+	VMOVSD X1, (DI)(R10*4)
+	ADDQ   $2, R10
+	CMPQ   R10, SI
+	JLT    sc_tail_loop
+
+sc_done:
+	VZEROUPPER
+	RET
