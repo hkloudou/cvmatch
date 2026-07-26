@@ -132,13 +132,19 @@ func sincospiFrac(j, half int) (float32, float32) {
 	return float32(c), float32(s)
 }
 
-// makeSwapPairs lists the bit-reversal swaps (i, br[i]) with i < br[i];
-// iterating pairs avoids the branchy per-element compare. Pure data
-// movement — results are unaffected.
-func makeSwapPairs(n int) []int32 {
-	pairs := make([]int32, 0, n)
+// makeBitrev builds the bit-reversal table (an involution) and the
+// compacted swap list (i, brev[i]) with i < brev[i]. The row FFTs apply
+// the pairs as physical element swaps inside their scratch row; the
+// column engine never swaps — forward writers place spec rows at brev
+// slots and the inverse cascade indexes rows through brev (Phase 9: the
+// physical row-swap sweeps were ~7% of timed work on big tiles). Pure
+// data movement either way — results are unaffected.
+func makeBitrev(n int) (pairs, brev []int32) {
+	brev = make([]int32, n)
+	pairs = make([]int32, 0, n)
 	br := 0
 	for i := 0; i < n; i++ {
+		brev[i] = int32(br)
 		if br > i {
 			pairs = append(pairs, int32(i), int32(br))
 		}
@@ -149,7 +155,7 @@ func makeSwapPairs(n int) []int32 {
 		}
 		br |= bit
 	}
-	return pairs
+	return pairs, brev
 }
 
 // fftTables caches the per-size twiddle/swap-pair tables (immutable once
@@ -164,6 +170,7 @@ type fftTab struct {
 	n     int
 	triT  []complex64 // radix-4 stage triplets; lazily built on uncached sizes
 	pairs []int32
+	brev  []int32
 }
 
 // tri returns the radix-4 triplet table. Cached sizes build it eagerly
@@ -180,12 +187,14 @@ func (t *fftTab) tri() []complex64 {
 
 func fftTables(n int) *fftTab {
 	if n > 4096 {
-		return &fftTab{n: n, pairs: makeSwapPairs(n)}
+		pairs, brev := makeBitrev(n)
+		return &fftTab{n: n, pairs: pairs, brev: brev}
 	}
 	fftTabMu.Lock()
 	t := fftTabs[n]
 	if t == nil {
-		t = &fftTab{n: n, triT: makeTriTwiddles(n), pairs: makeSwapPairs(n)}
+		pairs, brev := makeBitrev(n)
+		t = &fftTab{n: n, triT: makeTriTwiddles(n), pairs: pairs, brev: brev}
 		fftTabs[n] = t
 	}
 	fftTabMu.Unlock()
@@ -213,7 +222,8 @@ type goPlan struct {
 	dftW, dftH, hw int
 	blockW, blockH int
 	triW, triH     []complex64 // radix-4 stage triplets (dftW rows, dftH columns)
-	prW, prH       []int32
+	prW            []int32     // row swap pairs (applied inside the scratch row)
+	brevH          []int32     // column slot map: spec row r lives at slot brevH[r]
 }
 
 // newGoPlan picks the DFT tile geometry by an integer cost-model argmin
@@ -273,7 +283,7 @@ func newGoPlan(tw, th, rw, rh int) *goPlan {
 	if dftH != dftW {
 		tabH = fftTables(dftH)
 	}
-	p.triH, p.prH = tabH.tri(), tabH.pairs
+	p.triH, p.brevH = tabH.tri(), tabH.brev
 	return p
 }
 
@@ -286,8 +296,11 @@ func forwardRowPair(chanBase []uint8, stride, step, x0, y0, loadW, loadH int, p 
 	// The pack kernels implement the strides the public API produces (1 and
 	// 4); other layouts (e.g. packed RGB, step 3) take the scalar loops.
 	usePack := simd.Enabled && (step == 1 || step == 4)
-	sa := spec[r*hw : r*hw+hw]
-	sb := spec[(r+1)*hw : (r+1)*hw+hw]
+	// Spec rows land at bit-reversed slots (free — just a different base
+	// offset), so the forward column cascade runs without a swap sweep.
+	ba, bb := int(p.brevH[r])*hw, int(p.brevH[r+1])*hw
+	sa := spec[ba : ba+hw]
+	sb := spec[bb : bb+hw]
 	ra := chanBase[(y0+r)*stride+x0*step:]
 	if r+1 < loadH {
 		rb := chanBase[(y0+r+1)*stride+x0*step:]
@@ -330,7 +343,10 @@ func forwardRowPair(chanBase []uint8, stride, step, x0, y0, loadW, loadH int, p 
 func blockForwardGo(chanBase []uint8, stride, step, x0, y0, loadW, loadH int, p *goPlan, spec, z []complex64, team int) {
 	hw := p.hw
 	loaded := min(p.dftH, (loadH+1)&^1)
-	clear(spec[loaded*hw : p.dftH*hw])
+	for r := loaded; r < p.dftH; r++ { // zero pad rows, at their brev slots
+		b := int(p.brevH[r]) * hw
+		clear(spec[b : b+hw])
+	}
 	if team <= 1 {
 		for r := 0; r < loadH && r < p.dftH; r += 2 {
 			forwardRowPair(chanBase, stride, step, x0, y0, loadW, loadH, p, spec, z, r)
@@ -347,7 +363,7 @@ func blockForwardGo(chanBase []uint8, stride, step, x0, y0, loadW, loadH int, p 
 			}
 		})
 	}
-	colsR4Go(spec, p.dftH, hw, p.triH, p.prH, false, z, team)
+	colsR4Go(spec, p.dftH, hw, p.triH, false, nil, team)
 }
 
 func mulConjGo(spec, tspec []complex64) {
@@ -370,8 +386,11 @@ func mulConjGo(spec, tspec []complex64) {
 // bit-identical output, exactly like forwardRowPair.
 func inverseRowPair(p *goPlan, spec, z []complex64, res []float32, rw, x0, y0, bw, bh int, add bool, r int) {
 	n, hw := p.dftW, p.hw
-	sa := spec[r*hw : r*hw+hw]
-	sb := spec[(r+1)*hw : (r+1)*hw+hw]
+	// The swap-free inverse cascade leaves spatial row y at slot brevH[y]
+	// (see colsR4Go) — same values, relabeled storage.
+	ba, bb := int(p.brevH[r])*hw, int(p.brevH[r+1])*hw
+	sa := spec[ba : ba+hw]
+	sb := spec[bb : bb+hw]
 	if simd.Enabled {
 		simd.CombineLow(z[:hw], sa, sb)
 		simd.CombineHigh(z, sa, sb, n, hw)
@@ -418,7 +437,7 @@ func inverseRowPair(p *goPlan, spec, z []complex64, res []float32, rw, x0, y0, b
 }
 
 func blockInverseEmitGo(p *goPlan, spec, z []complex64, res []float32, rw, x0, y0, bw, bh int, add bool, team int) {
-	colsR4Go(spec, p.dftH, p.hw, p.triH, p.prH, true, z, team)
+	colsR4Go(spec, p.dftH, p.hw, p.triH, true, p.brevH, team)
 	if team <= 1 {
 		for r := 0; r < bh; r += 2 {
 			inverseRowPair(p, spec, z, res, rw, x0, y0, bw, bh, add, r)
@@ -527,7 +546,7 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 			q := *p
 			q.dftH = dh2
 			tabH := fftTables(dh2)
-			q.triH, q.prH = tabH.tri(), tabH.pairs
+			q.triH, q.brevH = tabH.tri(), tabH.brev
 			p2 = &q
 			tspec2 = cplxPool.get(cn * dh2 * p.hw)
 			defer cplxPool.put(tspec2)

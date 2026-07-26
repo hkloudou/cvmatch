@@ -9,13 +9,13 @@ import (
 // Radix-4 FFT engine (Phase 7.2), no-FMA — decided by measurement: the
 // FMA variant needs the fma32 scalar twin for self-determinism, and
 // that measured 3.8x slower in scalar, killing the purego/arm64 leg.
-// The column passes run this engine (colsR4Go + the FFTColsR4/Head
-// kernels); the packed row FFTs stay on the radix-2 fftGo/FFTStages
-// pair — each scalar<->asm pair is bit-identical on its own, so the
-// engines may differ per axis (7.2b may flip the rows later).
+// Both axes run this one engine: the packed row FFTs through fftR4
+// (swap pairs applied in the scratch row + FFTStagesR4), the column
+// passes through colsR4Go (never swapped — rows are placed at or
+// indexed through brev slots) with the FFTColsR4/Head kernels.
 //
 // Kernel contract (the fixed op sequence the asm must reproduce):
-//   - Input is BIT-reversed (the shared makeSwapPairs table). With plain
+//   - Input is BIT-reversed (the shared makeBitrev table). With plain
 //     bit reversal the four quarter blocks of a radix-4 group hold the
 //     n%4 == 0,2,1,3 subsequences in that order, so the butterfly reads
 //     its q=1 operand at offset 2h and its q=2 operand at offset h.
