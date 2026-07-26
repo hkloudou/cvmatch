@@ -1,9 +1,8 @@
 //go:build gc && !purego
 
 #include "textflag.h"
-// FFT kernels: the radix-2 stage cascade, column-direction butterflies
-// (single stage and fused stage pairs), and the conjugate spectrum
-// multiply.
+// FFT kernels: the radix-4 row cascade, radix-4 column stages with
+// their head pass, and the conjugate spectrum multiply.
 
 // Part of the AVX2 kernel set — bit-identical to the generic Go loops.
 // Shared conventions (see simd_amd64.s for the CPU-detection entry):
@@ -13,106 +12,6 @@
 // products and single rounded add/sub per component (the imaginary sum
 // is commuted; IEEE addition commutes bit-exactly). Never VFMADD*: every
 // multiply and add rounds separately, exactly like the scalar code.
-
-// func fftStagesSIMD(a []complex64, tw []complex64, inverse bool)
-TEXT ·FFTStages(SB), NOSPLIT, $0-49
-	MOVQ    a_base+0(FP), DI
-	MOVQ    a_len+8(FP), SI
-	MOVQ    tw_base+24(FP), DX
-	MOVBLZX inverse+48(FP), AX
-	SHLL    $31, AX             // 0x80000000 when inverse, 0 otherwise
-	MOVD    AX, X0
-	VPBROADCASTD X0, Y15
-
-	// Stages half=1 and half=2 fused in one pass: every 4-complex group
-	// is closed under both stages, so each YMM makes one memory round
-	// trip for two butterfly layers. The twiddles are multiplied exactly
-	// like the generic loop (no 1/-i shortcuts), so the op sequence per
-	// element is untouched.
-	VBROADCASTSS 8(DX), Y12     // re(tw[1])
-	VBROADCASTSS 12(DX), Y13    // im(tw[1])
-	VXORPS       Y15, Y13, Y13  // s*wi
-	VMOVUPS      16(DX), X14    // tw[2], tw[3]
-	VMOVSLDUP    X14, X0        // (w2r, w2r, w3r, w3r)
-	VMOVSHDUP    X14, X14       // (w2i, w2i, w3i, w3i)
-	VINSERTF128  $1, X0, Y0, Y0
-	VINSERTF128  $1, X14, Y14, Y14
-	VXORPS       Y15, Y14, Y14  // s*wi
-	XORQ         R10, R10
-
-fs12_loop:
-	VMOVUPS   (DI)(R10*8), Y1
-
-	// half=1: butterflies (c0,c1) and (c2,c3), twiddle tw[1]
-	VPERMILPS $0xB1, Y1, Y5     // re/im swapped
-	VMULPS    Y12, Y1, Y6       // t1 = c*wr
-	VMULPS    Y13, Y5, Y7       // t2 = swap(c)*s*wi
-	VADDSUBPS Y7, Y6, Y8        // q*w in the odd complex lanes
-	VPERMILPD $0x0F, Y8, Y8     // (qw1, qw1, qw3, qw3)
-	VMOVDDUP  Y1, Y9            // (c0, c0, c2, c2)
-	VADDPS    Y8, Y9, Y10       // p + qw
-	VSUBPS    Y8, Y9, Y11       // p - qw
-	VBLENDPS  $0xCC, Y11, Y10, Y1
-
-	// half=2: butterflies (c0,c2) and (c1,c3), twiddles tw[2], tw[3]
-	VPERMILPS  $0xB1, Y1, Y5
-	VMULPS     Y0, Y1, Y6
-	VMULPS     Y14, Y5, Y7
-	VADDSUBPS  Y7, Y6, Y8       // q*w in the high 128-bit lane
-	VPERM2F128 $0x11, Y8, Y8, Y8 // (qw2, qw3, qw2, qw3)
-	VPERM2F128 $0x00, Y1, Y1, Y9 // (c0, c1, c0, c1)
-	VADDPS     Y8, Y9, Y10
-	VSUBPS     Y8, Y9, Y11
-	VBLENDPS   $0xF0, Y11, Y10, Y1
-	VMOVUPS    Y1, (DI)(R10*8)
-	ADDQ       $4, R10
-	CMPQ       R10, SI
-	JLT        fs12_loop
-
-	MOVQ $4, R8                 // half = 4
-
-half_loop:
-	CMPQ R8, SI
-	JGE  done
-	LEAQ (DX)(R8*8), R9         // w = tw + half
-	XORQ R10, R10               // i = 0
-
-i_loop:
-	LEAQ (DI)(R10*8), R11       // p = a + i
-	LEAQ (R11)(R8*8), R12       // q = p + half
-	MOVQ R9, R14                // wj = w
-	MOVQ R8, R13                // j = half (counts down by 4)
-
-j_loop:
-	VMOVUPS   (R12), Y1         // q: 4 complexes
-	VMOVUPS   (R14), Y2         // w: 4 twiddles
-	VMOVSLDUP Y2, Y3            // wr lanes
-	VMOVSHDUP Y2, Y4            // wi lanes
-	VXORPS    Y15, Y4, Y4       // s*wi (exact sign flip)
-	VPERMILPS $0xB1, Y1, Y5     // q with re/im swapped
-	VMULPS    Y3, Y1, Y6        // t1 = q*wr
-	VMULPS    Y4, Y5, Y7        // t2 = swap(q)*wi
-	VADDSUBPS Y7, Y6, Y8        // v = (t1e-t2e, t1o+t2o)
-	VMOVUPS   (R11), Y9         // p
-	VADDPS    Y8, Y9, Y10       // p + v
-	VSUBPS    Y8, Y9, Y11       // p - v
-	VMOVUPS   Y10, (R11)
-	VMOVUPS   Y11, (R12)
-	ADDQ      $32, R11
-	ADDQ      $32, R12
-	ADDQ      $32, R14
-	SUBQ      $4, R13
-	JNZ       j_loop
-
-	LEAQ (R10)(R8*2), R10       // i += half*2
-	CMPQ R10, SI
-	JLT  i_loop
-	SHLQ $1, R8                 // half <<= 1
-	JMP  half_loop
-
-done:
-	VZEROUPPER
-	RET
 
 // func mulConjSIMD(spec, tspec []complex64)
 // spec[i] = (ar*br + ai*bi) + (ai*br - ar*bi)i, via t1 = a*br,
@@ -331,5 +230,262 @@ hd_tail_loop:
 	JLT    hd_tail_loop
 
 hd_done:
+	VZEROUPPER
+	RET
+
+// Alternating-qword mask for building the h=1 per-128 rotation mask:
+// (0, ~0, 0, ~0) selects the s3 slot of each 128-bit half.
+DATA r4alt<>+0(SB)/8, $0x0000000000000000
+DATA r4alt<>+8(SB)/8, $0xffffffffffffffff
+DATA r4alt<>+16(SB)/8, $0x0000000000000000
+DATA r4alt<>+24(SB)/8, $0xffffffffffffffff
+GLOBL r4alt<>(SB), RODATA, $32
+
+// func FFTStagesR4(a []complex64, tri []complex64, inverse bool)
+// The complete radix-4 cascade over one bit-reversed row (len a power
+// of two >= 8): the odd-log2 head stage (pure adds), the h=1 radix-4
+// stage on in-register groups (lanes 1..3 go through the w=(1,0)
+// multiply idiom, lane 0 stays untouched exactly like the scalar,
+// which never multiplies A), the h=2 XMM stage and the generic h>=4
+// stage — per element exactly the scalar fftR4 sequence: mulPlain via
+// the shared two-products-one-addsub idiom (inverse conjugates the
+// twiddles by an exact wi-lane sign flip), plain-add combines, and the
+// -+i rotation as swap + sign-bit xor. No FMA anywhere (7.2 contract).
+// Register map (FFTStagesR4):
+//   DI=a  SI=len  DX=tri cursor  AX=inverse  R8=h  R9=base  R10=j/idx
+//   R11=A ptr  R12=C ptr (+h)  R13=B ptr (+2h)  R14=D ptr (+3h)
+//   Y15=wi conjugation mask  Y14=full rotation mask  Y13=h1 per-128
+//   rotation mask; loop scratch: Y0/Y1=w1 re/im  Y2/Y3=w2 re/im
+//   Y4/Y5=w3 re/im  Y6=A  Y7=C->tc/s0  Y8=B->tb/s1  Y9=D->td/s2
+//   Y10=swap scratch/s3->rot  Y11/Y12=P,M / out scratch
+TEXT ·FFTStagesR4(SB), NOSPLIT, $0-49
+	MOVQ    a_base+0(FP), DI
+	MOVQ    a_len+8(FP), SI
+	MOVQ    tri_base+24(FP), DX
+	MOVBLZX inverse+48(FP), AX
+
+	// Y15: wi-lane conjugation mask (0x80000000 everywhere when inverse)
+	MOVL AX, R10
+	SHLL $31, R10
+	MOVD R10, X15
+	VPBROADCASTD X15, Y15
+
+	// Y14: rotation mask — forward negates the imag lane of each
+	// complex (-i*s3), inverse the real lane (+i*s3)
+	MOVQ $0x8000000000000000, R11
+	TESTB AX, AX
+	JZ   sr4_masks
+	MOVQ $0x0000000080000000, R11
+
+sr4_masks:
+	MOVQ         R11, X14
+	VPBROADCASTQ X14, Y14
+	// Y13: h=1 rotation mask — the same qword pattern but only in the
+	// s3 slot (qword 1) of each 128-bit half
+	VPAND r4alt<>(SB), Y14, Y13
+
+	// ---- head stage (odd log2): adjacent pairs (a,b) -> (a+b, a-b) --
+	MOVQ SI, CX          // log2 parity probe: n has a single set bit;
+	MOVQ $0xAAAAAAAAAAAAAAAA, R11
+	TESTQ R11, CX        // bits 1,3,5,... set => log2(n) odd
+	MOVQ $1, R8          // h = 1
+	JZ   sr4_h1          // even log2: straight to the h=1 radix-4 stage
+
+	XORQ R10, R10
+
+sr4_head:
+	VMOVUPS   (DI)(R10*8), Y6
+	VMOVDDUP  Y6, Y7            // (c0, c0, c2, c2)
+	VPERMILPD $0x0F, Y6, Y8     // (c1, c1, c3, c3)
+	VADDPS    Y8, Y7, Y9        // sums
+	VSUBPS    Y8, Y7, Y10       // diffs
+	VBLENDPS  $0xCC, Y10, Y9, Y6
+	VMOVUPS   Y6, (DI)(R10*8)
+	ADDQ      $4, R10
+	CMPQ      R10, SI
+	JLT       sr4_head
+
+	MOVQ $2, R8                 // radix-4 stages start at h = 2
+	JMP  sr4_stage
+
+	// ---- h=1 radix-4 stage: one YMM per 4-complex group ------------
+	// Lanes hold (A, Cin, Bin, Din); twiddles are all (1,0). Lanes
+	// 1..3 run the multiply idiom (wr=1 lanes, wi=0^conj lanes) and
+	// lane 0 is blended back unmultiplied, matching the scalar exactly
+	// (mulPlain(v, 1) is not a bitwise no-op on -0 inputs).
+sr4_h1:
+	ADDQ         $24, DX        // skip the h=1 tri block (3 entries) —
+	                            // this stage's twiddles are hardcoded 1
+	VXORPS       Y1, Y1, Y1     // wi = 0
+	VXORPS       Y15, Y1, Y1    // conj sign on the zero lanes (inverse: -0)
+	XORQ         R10, R10
+	MOVL         $0x3F800000, R11
+	MOVD         R11, X0
+	VPBROADCASTD X0, Y0         // wr = 1 lanes
+
+sr4_h1_loop:
+	VMOVUPS   (DI)(R10*8), Y6
+	VPERMILPS $0xB1, Y6, Y10
+	VMULPS    Y0, Y6, Y11       // t1 = v*1
+	VMULPS    Y1, Y10, Y10      // t2 = swap(v)*(+-0)
+	VADDSUBPS Y10, Y11, Y11     // mulPlain(v, (1, +-0)) all lanes
+	VBLENDPS  $0x03, Y6, Y11, Y6 // lane 0 back to raw A
+	// butterfly across lanes: V = (A, tc, tb, td)
+	VMOVDDUP  Y6, Y7            // (A, A, tb, tb)
+	VPERMILPD $0x0F, Y6, Y8     // (tc, tc, td, td)
+	VADDPS    Y8, Y7, Y11       // (s0, s0, s2, s2)
+	VSUBPS    Y8, Y7, Y12       // (s1, s1, s3, s3)
+	VBLENDPS  $0xCC, Y12, Y11, Y6 // W = (s0, s1, s2, s3)
+	VPERM2F128 $0x00, Y6, Y6, Y7 // U = (s0, s1, s0, s1)
+	VPERM2F128 $0x11, Y6, Y6, Y8 // T = (s2, s3, s2, s3)
+	VPERMILPS $0xB4, Y8, Y8     // s3 slots pair-swapped
+	VXORPS    Y13, Y8, Y8       // T' = (s2, rot, s2, rot)
+	VADDPS    Y8, Y7, Y11       // (s0+s2, s1+rot, ..)
+	VSUBPS    Y8, Y7, Y12       // (.., .., s0-s2, s1-rot)
+	VBLENDPS  $0xF0, Y12, Y11, Y6
+	VMOVUPS   Y6, (DI)(R10*8)
+	ADDQ      $4, R10
+	CMPQ      R10, SI
+	JLT       sr4_h1_loop
+	MOVQ $4, R8                 // next radix-4 stage: h = 4
+
+	// ---- radix-4 stage loop (h = 2 via XMM, h >= 4 via YMM) ---------
+sr4_stage:
+	MOVQ R8, CX
+	SHLQ $2, CX
+	CMPQ CX, SI                 // 4h <= n ?
+	JGT  sr4_done
+
+	// j-chunks outer, groups inner: the three twiddle chunks prep once
+	// per j-chunk instead of once per (group, j-chunk) — small-h stages
+	// have many groups, and per-group reloading measurably drags the
+	// small-dftW scenes. Pure scheduling; per-element ops unchanged.
+	CMPQ R8, $2
+	JEQ  sr4_h2_start
+	XORQ R10, R10               // j = 0
+
+sr4_j:
+	// twiddle chunks: w1 at tri[j], w2 at tri[h+j], w3 at tri[2h+j]
+	VMOVUPS   (DX)(R10*8), Y0
+	VMOVSHDUP Y0, Y1
+	VMOVSLDUP Y0, Y0
+	VXORPS    Y15, Y1, Y1
+	LEAQ      (DX)(R8*8), CX
+	VMOVUPS   (CX)(R10*8), Y2
+	VMOVSHDUP Y2, Y3
+	VMOVSLDUP Y2, Y2
+	VXORPS    Y15, Y3, Y3
+	LEAQ      (CX)(R8*8), CX
+	VMOVUPS   (CX)(R10*8), Y4
+	VMOVSHDUP Y4, Y5
+	VMOVSLDUP Y4, Y4
+	VXORPS    Y15, Y5, Y5
+	LEAQ (DI)(R10*8), R11       // A = a + j
+	LEAQ (R11)(R8*8), R12       // C = A + h
+	LEAQ (R12)(R8*8), R13       // B = A + 2h
+	LEAQ (R13)(R8*8), R14       // D = A + 3h
+	XORQ R9, R9                 // group offset = 0
+
+sr4_groups:
+	VMOVUPS (R11)(R9*8), Y6     // A
+	VMOVUPS (R12)(R9*8), Y7     // C-input
+	VMOVUPS (R13)(R9*8), Y8     // B-input
+	VMOVUPS (R14)(R9*8), Y9     // D-input
+	VPERMILPS $0xB1, Y8, Y10
+	VMULPS    Y0, Y8, Y11
+	VMULPS    Y1, Y10, Y10
+	VADDSUBPS Y10, Y11, Y8      // tb = B*w1
+	VPERMILPS $0xB1, Y7, Y10
+	VMULPS    Y2, Y7, Y11
+	VMULPS    Y3, Y10, Y10
+	VADDSUBPS Y10, Y11, Y7      // tc = C*w2
+	VPERMILPS $0xB1, Y9, Y10
+	VMULPS    Y4, Y9, Y11
+	VMULPS    Y5, Y10, Y10
+	VADDSUBPS Y10, Y11, Y9      // td = D*w3
+	VADDPS    Y7, Y6, Y11       // s0
+	VSUBPS    Y7, Y6, Y12       // s1
+	VADDPS    Y9, Y8, Y7        // s2
+	VSUBPS    Y9, Y8, Y10       // s3
+	VPERMILPS $0xB1, Y10, Y10
+	VXORPS    Y14, Y10, Y10     // rot
+	VADDPS    Y7, Y11, Y6       // out0 = s0+s2
+	VSUBPS    Y7, Y11, Y8       // out2 = s0-s2
+	VADDPS    Y10, Y12, Y7      // out1 = s1+rot
+	VSUBPS    Y10, Y12, Y9      // out3 = s1-rot
+	VMOVUPS   Y6, (R11)(R9*8)
+	VMOVUPS   Y7, (R12)(R9*8)
+	VMOVUPS   Y8, (R13)(R9*8)
+	VMOVUPS   Y9, (R14)(R9*8)
+	LEAQ      (R9)(R8*4), R9    // next group: += 4h
+	CMPQ      R9, SI
+	JLT       sr4_groups
+	ADDQ      $4, R10           // next j-chunk
+	CMPQ      R10, R8
+	JLT       sr4_j
+	JMP       sr4_next
+
+	// h=2: quarters are 2 complexes apart — one XMM iteration per group
+sr4_h2_start:
+	XORQ R9, R9
+
+sr4_h2_groups:
+	VMOVUPS   (DX), X0          // w1[0..1]
+	VMOVSHDUP X0, X1
+	VMOVSLDUP X0, X0
+	VXORPS    X15, X1, X1
+	VMOVUPS   16(DX), X2        // w2[0..1]
+	VMOVSHDUP X2, X3
+	VMOVSLDUP X2, X2
+	VXORPS    X15, X3, X3
+	VMOVUPS   32(DX), X4        // w3[0..1]
+	VMOVSHDUP X4, X5
+	VMOVSLDUP X4, X4
+	VXORPS    X15, X5, X5
+
+sr4_h2_loop:
+	LEAQ      (DI)(R9*8), R11
+	VMOVUPS   (R11), X6         // A pair
+	VMOVUPS   16(R11), X7       // C pair
+	VMOVUPS   32(R11), X8       // B pair
+	VMOVUPS   48(R11), X9       // D pair
+	VPERMILPS $0xB1, X8, X10
+	VMULPS    X0, X8, X11
+	VMULPS    X1, X10, X10
+	VADDSUBPS X10, X11, X8
+	VPERMILPS $0xB1, X7, X10
+	VMULPS    X2, X7, X11
+	VMULPS    X3, X10, X10
+	VADDSUBPS X10, X11, X7
+	VPERMILPS $0xB1, X9, X10
+	VMULPS    X4, X9, X11
+	VMULPS    X5, X10, X10
+	VADDSUBPS X10, X11, X9
+	VADDPS    X7, X6, X11
+	VSUBPS    X7, X6, X12
+	VADDPS    X9, X8, X7
+	VSUBPS    X9, X8, X10
+	VPERMILPS $0xB1, X10, X10
+	VXORPS    X14, X10, X10
+	VADDPS    X7, X11, X6
+	VSUBPS    X7, X11, X8
+	VADDPS    X10, X12, X7
+	VSUBPS    X10, X12, X9
+	VMOVUPS   X6, (R11)
+	VMOVUPS   X7, 16(R11)
+	VMOVUPS   X8, 32(R11)
+	VMOVUPS   X9, 48(R11)
+	ADDQ      $8, R9            // next group (8 complexes)
+	CMPQ      R9, SI
+	JLT       sr4_h2_loop
+
+sr4_next:
+	LEAQ (DX)(R8*8), DX         // tri += 3h entries
+	LEAQ (DX)(R8*8), DX
+	LEAQ (DX)(R8*8), DX
+	SHLQ $2, R8                 // h *= 4
+	JMP  sr4_stage
+
+sr4_done:
 	VZEROUPPER
 	RET

@@ -10,12 +10,16 @@ package simd
 // other architecture (arm64 included, by owner decision — the NEON twin
 // kernels were deleted for code-size reasons) runs the scalar loops.
 
-// FFTStages runs the complete radix-2 butterfly cascade (every stage,
-// half=1 upward) over bit-reversed data; len(a) must be a power of two
-// >= 8. The caller only performs the swap-pair permutation.
+// FFTStagesR4 runs the complete radix-4 cascade over one bit-reversed
+// row (len a power of two >= 8): the odd-log2 head stage (pure adds),
+// the h=1 in-register stage (lanes 1..3 through the w=(1,0) multiply
+// idiom, lane 0 untouched exactly like the scalar), then h=2/h>=4
+// stages — per element exactly the scalar fftR4 sequence, twiddle
+// triplets from the same tri table, inverse via exact wi-lane sign
+// flips. The caller performs the swap-pair permutation. No FMA.
 //
 //go:noescape
-func FFTStages(a []complex64, tw []complex64, inverse bool)
+func FFTStagesR4(a []complex64, tri []complex64, inverse bool)
 
 // FFTColsR4 applies one radix-4 column stage to the row quad
 // (r0, r1, r2, r3) = rows (r, r+h, r+2h, r+3h): per element exactly the

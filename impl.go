@@ -132,20 +132,6 @@ func sincospiFrac(j, half int) (float32, float32) {
 	return float32(c), float32(s)
 }
 
-// makeTwiddles fills tw[half+j] = exp(-pi*i*j/half) for each power-of-two
-// stage.
-func makeTwiddles(n int) []complex64 {
-	tw := make([]complex64, n)
-	tw[0] = 1
-	for half := 1; half < n; half <<= 1 {
-		for j := 0; j < half; j++ {
-			c, s := sincospiFrac(j, half)
-			tw[half+j] = complex(c, -s)
-		}
-	}
-	return tw
-}
-
 // makeSwapPairs lists the bit-reversal swaps (i, br[i]) with i < br[i];
 // iterating pairs avoids the branchy per-element compare. Pure data
 // movement — results are unaffected.
@@ -176,30 +162,20 @@ var (
 
 type fftTab struct {
 	n     int
-	tw    []complex64 // radix-2 rows; lazily built on uncached sizes
-	tri   []complex64 // radix-4 column triplets; lazily built on uncached sizes
+	triT  []complex64 // radix-4 stage triplets; lazily built on uncached sizes
 	pairs []int32
 }
 
-// rowTw and colTri return the requested twiddle family. Cached sizes
-// build both families eagerly under the cache lock (immutable once
-// published, safe to share); sizes above 4096 return per-call structs
-// that fill only the family actually read — plans are built on a single
-// goroutine before any fan-out, so the lazy fill needs no lock. This
-// keeps rectangular plans from building a family an axis never uses
-// (codex P2, PR #23).
-func (t *fftTab) rowTw() []complex64 {
-	if t.tw == nil {
-		t.tw = makeTwiddles(t.n)
+// tri returns the radix-4 triplet table. Cached sizes build it eagerly
+// under the cache lock (immutable once published, safe to share); sizes
+// above 4096 return per-call structs that fill on first read — plans
+// are built on a single goroutine before any fan-out, so the lazy fill
+// needs no lock.
+func (t *fftTab) tri() []complex64 {
+	if t.triT == nil {
+		t.triT = makeTriTwiddles(t.n)
 	}
-	return t.tw
-}
-
-func (t *fftTab) colTri() []complex64 {
-	if t.tri == nil {
-		t.tri = makeTriTwiddles(t.n)
-	}
-	return t.tri
+	return t.triT
 }
 
 func fftTables(n int) *fftTab {
@@ -209,110 +185,11 @@ func fftTables(n int) *fftTab {
 	fftTabMu.Lock()
 	t := fftTabs[n]
 	if t == nil {
-		t = &fftTab{n: n, tw: makeTwiddles(n), tri: makeTriTwiddles(n), pairs: makeSwapPairs(n)}
+		t = &fftTab{n: n, triT: makeTriTwiddles(n), pairs: makeSwapPairs(n)}
 		fftTabs[n] = t
 	}
 	fftTabMu.Unlock()
 	return t
-}
-
-// bfly applies one radix-2 butterfly with explicit float32 single-rounding
-// semantics: the products are rounded to float32 before the add/sub (the
-// gc compiler would otherwise evaluate complex64 products through float64
-// intermediates on some architectures, and may fuse mul-adds on others;
-// the float32 conversions pin both down). The SIMD kernels implement
-// precisely these ops.
-func bfly(p, q *complex64, wr, wi float32) {
-	qv := *q
-	vr := float32(real(qv)*wr) - float32(imag(qv)*wi)
-	vi := float32(real(qv)*wi) + float32(imag(qv)*wr)
-	u := *p
-	*p = complex(real(u)+vr, imag(u)+vi)
-	*q = complex(real(u)-vr, imag(u)-vi)
-}
-
-// bflyV is bfly by value — identical op sequence, but operands stay in
-// registers so fused stage pairs can chain butterflies without a memory
-// round trip between layers.
-func bflyV(u, q complex64, wr, wi float32) (complex64, complex64) {
-	vr := float32(real(q)*wr) - float32(imag(q)*wi)
-	vi := float32(real(q)*wi) + float32(imag(q)*wr)
-	return complex(real(u)+vr, imag(u)+vi), complex(real(u)-vr, imag(u)-vi)
-}
-
-// twdir returns w's components with the inverse-direction sign applied to
-// the imaginary part. Multiplying by ±1 is an exact sign operation, so
-// this replaces the former per-butterfly s*imag multiply bit-identically.
-func twdir(w complex64, inverse bool) (float32, float32) {
-	if inverse {
-		return real(w), -imag(w)
-	}
-	return real(w), imag(w)
-}
-
-func fftGo(a []complex64, tw []complex64, pairs []int32, inverse bool) {
-	n := len(a)
-	for k := 0; k+1 < len(pairs); k += 2 {
-		i, j := pairs[k], pairs[k+1]
-		a[i], a[j] = a[j], a[i]
-	}
-	if n >= 8 && simd.Enabled {
-		simd.FFTStages(a, tw, inverse)
-		return
-	}
-	// The half=1,2 stages are fused into one quad pass (both layers of a
-	// closed 4-element group chain in registers), and the remaining
-	// cascade fuses stage pairs the same way — exactly the structure of
-	// the asm kernels. Each element still sees exactly the arithmetic of
-	// the generic stage loop, so results are bit-identical.
-	if n >= 4 {
-		w1r, w1i := twdir(tw[1], inverse)
-		w2ar, w2ai := twdir(tw[2], inverse)
-		w2br, w2bi := twdir(tw[3], inverse)
-		for i := 0; i < n; i += 4 {
-			p := a[i : i+4 : i+4]
-			x0, x1 := bflyV(p[0], p[1], w1r, w1i)
-			x2, x3 := bflyV(p[2], p[3], w1r, w1i)
-			x0, x2 = bflyV(x0, x2, w2ar, w2ai)
-			x1, x3 = bflyV(x1, x3, w2br, w2bi)
-			p[0], p[1], p[2], p[3] = x0, x1, x2, x3
-		}
-	} else if n == 2 {
-		w0r, w0i := twdir(tw[1], inverse)
-		bfly(&a[0], &a[1], w0r, w0i)
-	}
-	half := 4
-	for ; half*2 < n; half *= 4 {
-		for i := 0; i < n; i += half * 4 {
-			for j := 0; j < half; j++ {
-				w1r, w1i := twdir(tw[half+j], inverse)
-				w2ar, w2ai := twdir(tw[2*half+j], inverse)
-				w2br, w2bi := twdir(tw[3*half+j], inverse)
-				p := a[i+j : i+j+3*half+1 : i+j+3*half+1]
-				x0, x1 := bflyV(p[0], p[half], w1r, w1i)
-				x2, x3 := bflyV(p[2*half], p[3*half], w1r, w1i)
-				x0, x2 = bflyV(x0, x2, w2ar, w2ai)
-				x1, x3 = bflyV(x1, x3, w2br, w2bi)
-				p[0], p[half], p[2*half], p[3*half] = x0, x1, x2, x3
-			}
-		}
-	}
-	for ; half < n; half <<= 1 {
-		w := tw[half : half*2]
-		for i := 0; i < n; i += half << 1 {
-			p := a[i : i+half : i+half]
-			q := a[i+half : i+half*2 : i+half*2]
-			if inverse {
-				for j := 0; j < half; j++ {
-					bfly(&p[j], &q[j], real(w[j]), -imag(w[j]))
-				}
-			} else {
-				for j := 0; j < half; j++ {
-					bfly(&p[j], &q[j], real(w[j]), imag(w[j]))
-				}
-			}
-		}
-	}
 }
 
 // colRange runs fn over the whole width, or splits it across a worker team
@@ -335,8 +212,7 @@ func colRange(team, width int, fn func(c0, c1 int)) {
 type goPlan struct {
 	dftW, dftH, hw int
 	blockW, blockH int
-	twW            []complex64 // radix-2 row engine (dftW)
-	triH           []complex64 // radix-4 column engine (dftH)
+	triW, triH     []complex64 // radix-4 stage triplets (dftW rows, dftH columns)
 	prW, prH       []int32
 }
 
@@ -392,12 +268,12 @@ func newGoPlan(tw, th, rw, rh int) *goPlan {
 		p.blockH = rh
 	}
 	tabW := fftTables(dftW)
-	p.twW, p.prW = tabW.rowTw(), tabW.pairs
+	p.triW, p.prW = tabW.tri(), tabW.pairs
 	tabH := tabW
 	if dftH != dftW {
 		tabH = fftTables(dftH)
 	}
-	p.triH, p.prH = tabH.colTri(), tabH.pairs
+	p.triH, p.prH = tabH.tri(), tabH.pairs
 	return p
 }
 
@@ -430,7 +306,7 @@ func forwardRowPair(chanBase []uint8, stride, step, x0, y0, loadW, loadH int, p 
 		}
 	}
 	clear(z[loadW:n])
-	fftGo(z, p.twW, p.prW, false)
+	fftR4(z, p.triW, p.prW, false)
 	if simd.Enabled {
 		// k = 0 wraps to itself ((n-0)&mask == 0); the kernel covers
 		// the wrap-free k >= 1 range with the same op sequence.
@@ -508,7 +384,7 @@ func inverseRowPair(p *goPlan, spec, z []complex64, res []float32, rw, x0, y0, b
 			z[k] = complex(real(sa[m])+imag(sb[m]), real(sb[m])-imag(sa[m]))
 		}
 	}
-	fftGo(z, p.twW, p.prW, true)
+	fftR4(z, p.triW, p.prW, true)
 	o := res[(y0+r)*rw+x0:]
 	var o2 []float32
 	if r+1 < bh {
@@ -646,7 +522,7 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 			q := *p
 			q.dftH = dh2
 			tabH := fftTables(dh2)
-			q.triH, q.prH = tabH.colTri(), tabH.pairs
+			q.triH, q.prH = tabH.tri(), tabH.pairs
 			p2 = &q
 			tspec2 = cplxPool.get(cn * dh2 * p.hw)
 			defer cplxPool.put(tspec2)
