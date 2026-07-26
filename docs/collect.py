@@ -162,10 +162,12 @@ def matrix_markdown(data):
     if full:
         lines += [
             "",
-            f"**Measured summary (single-threaded, like-for-like):** the default asm build",
-            f"runs {min(r_amd):.1f}–{max(r_amd):.1f}x faster than the -tags purego build and beats",
-            f"native OpenCV C++ by {min(r_nat):.1f}–{max(r_nat):.1f}x; the no-asm build ranges",
-            f"{min(r_natgo):.2f}–{max(r_natgo):.2f}x vs native on the same scenes.",
+            f"**Measured summary (single-threaded, like-for-like):** the default asm",
+            f"build beats native OpenCV C++ by {min(r_nat):.1f}–{max(r_nat):.1f}x and runs",
+            f"{min(r_amd):.1f}–{max(r_amd):.1f}x faster than the -tags purego build — the",
+            f"proof that the amd64 assembly layer earns its keep. The no-asm build",
+            f"is the algorithm-only comparison (what every non-amd64 platform",
+            f"runs): {min(r_natgo):.2f}–{max(r_natgo):.2f}x vs native on the same scenes.",
         ]
     if r_thr:
         lines += [
