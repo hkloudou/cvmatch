@@ -277,11 +277,19 @@ the ranges.
   FFTStagesR4/FFTColsR4/FFTColsHead kernels). Every radix-2 remnant is
   deleted: fftGo, bfly/bflyV/twdir, makeTwiddles, the FFTStages and
   FFTCols4/FFTColsBfly kernels, the fftTab.tw family. The odd stage
-  runs as a twiddle-free bottom head in both axes. 7.2b local
-  interleaved 20x e2e: asm geomean +3.2% (min scene median 0.991),
-  purego +5.7% uniform — the purego wins are also arm64's. Next:
-  re-judge sweep-fusion (PR #21 PARKED) against the post-7.2 profile,
-  and consider retuning the argmin FFT weights for radix-4 costs.
+  runs as a twiddle-free bottom head in both axes. 7.2b reference pair
+  (native null x0.994): purego +5.6% 14/14 and gray +4.5% 14/14, asm
+  geomean +1.3% with a KNOWN LOCALIZED COST — the two dftW=256 scenes
+  (window1600_icon24x24, noise640_alpha) pay ~−8% asm because
+  FFTStagesR4 runs behind the retired FFTStages at n=256 (it wins at
+  512/1024; a twiddle-prep loop inversion shipped, an h=1-stage unroll
+  measured indistinguishable and was dropped). Shipped on the owner's
+  goal order: net −250 lines (KISS), both-build geomean positive,
+  arm64 +5.6%. RETAINED: a small-n row formulation (e.g. fusing h1+h4
+  in registers) is the parked follow-up; do NOT re-add a size-gated
+  second engine (the PR #21 non-portable-gate lesson). Next: re-judge
+  sweep-fusion (PR #21 PARKED) against the post-7.2 profile, and
+  consider retuning the argmin FFT weights for radix-4 costs.
 
 - Phase 8: the owner deleted the arm64 NEON backend outright ("全面删除
   arm64 的汇编") — ~4.8k lines (generated stream + `_gen` clang/objdump
