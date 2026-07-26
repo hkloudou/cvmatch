@@ -551,3 +551,106 @@ DATA slidem2<>+8(SB)/8, $0
 DATA slidem2<>+16(SB)/8, $0xFFFFFFFFFFFFFFFF
 DATA slidem2<>+24(SB)/8, $0xFFFFFFFFFFFFFFFF
 GLOBL slidem2<>(SB), RODATA|NOPTR, $32
+
+// func SpillStats4(wt []float32, stride int, lo, hi []int32, lo2, hi2 []int64,
+//                  s *[4]int64, tsum *[4]int64, s2, area int64, four bool) int64
+// The cn=3/4 normalize spill over len(wt) elements (a multiple of 4 by
+// the caller's vns mask, though any length works), RGBA column-sum
+// layout (4 int32 lanes per pixel; the caller gates cs == 4 and
+// cn·255²·th < 2^31 so |Δ colSum2| is a 32-bit value; the per-cn stats
+// caps bound every window sum below 2^31 and every cross/idiff below
+// 2^63). Pixel-major: the four channel sums live in one int64x4
+// register that slides by one VPMOVSXDQ+VPADDQ per element; cross and
+// Σ sk² come from exact VPMULDQ products and horizontal adds; the
+// float32 lanes are CVTSI2SDQ then CVTSD2SS — precisely the scalar
+// float32(float64(v)) two-rounding sequence, so output is
+// bit-identical to the cn=3/4 Go loops on every gated input. cn=3
+// zeroes the alpha lanes of both vectors so s3 never moves and
+// contributes nothing. s[0..3] advance in place; advanced s2 returns.
+// Register map (SpillStats4):
+//   DI=wt(cross lane) R10=idiff lane R11=s2 lane R9=stride(bytes)
+//   DX=n SI=i R8=lo BX=hi R12=lo2 R13=hi2 CX=s2 AX=s ptr
+//   R14=cross/idiff scratch R15=d2/scratch
+//   Y4=s_vec Y5=t_vec Y3=alpha mask; loop: Y0=d Y1=products X6/X7=hsum
+TEXT ·SpillStats4(SB), NOSPLIT, $0-176
+	MOVQ wt_base+0(FP), DI
+	MOVQ wt_len+8(FP), DX
+	MOVQ stride+24(FP), R9
+	SHLQ $2, R9
+	MOVQ lo_base+32(FP), R8
+	MOVQ hi_base+56(FP), BX
+	MOVQ lo2_base+80(FP), R12
+	MOVQ hi2_base+104(FP), R13
+	MOVQ s2+144(FP), CX
+	MOVQ s+128(FP), AX
+	VMOVDQU (AX), Y4            // s_vec = (s0, s1, s2c, s3)
+	MOVQ tsum+136(FP), R14
+	VMOVDQU (R14), Y5           // t_vec
+	// cn=3: force the alpha lanes of both vectors to zero — s3 then
+	// never moves and neither dot product sees it
+	VPCMPEQQ Y3, Y3, Y3
+	MOVBLZX  four+160(FP), R15
+	TESTB    R15, R15
+	JNZ      sp4_masked
+	VMOVDQU  sp4rgb<>(SB), Y3   // (~0, ~0, ~0, 0)
+sp4_masked:
+	VPAND Y3, Y4, Y4
+	VPAND Y3, Y5, Y5
+	LEAQ (DI)(R9*1), R10
+	LEAQ (R10)(R9*1), R11
+	XORQ SI, SI
+
+sp4_loop:
+	CMPQ SI, DX
+	JGE  sp4_done
+	// cross = Σ sk*tk (exact: sums and tsums < 2^31 by the caps)
+	VPMULDQ Y5, Y4, Y1
+	VEXTRACTI128 $1, Y1, X6
+	VPADDQ  X6, X1, X6
+	VPSHUFD $0x4E, X6, X7
+	VPADDQ  X7, X6, X6
+	VMOVQ   X6, R14
+	VCVTSI2SDQ R14, X6, X6
+	VCVTSD2SS X6, X6, X6
+	VMOVSS  X6, (DI)(SI*4)
+	// idiff = area*s2 - Σ sk*sk
+	VPMULDQ Y4, Y4, Y1
+	VEXTRACTI128 $1, Y1, X6
+	VPADDQ  X6, X1, X6
+	VPSHUFD $0x4E, X6, X7
+	VPADDQ  X7, X6, X6
+	VMOVQ   X6, R15
+	MOVQ    CX, R14
+	IMULQ   area+152(FP), R14
+	SUBQ    R15, R14
+	VCVTSI2SDQ R14, X6, X6
+	VCVTSD2SS X6, X6, X6
+	VMOVSS  X6, (R10)(SI*4)
+	// s2 lane, then slide: s2 += hi2-lo2, s_vec += (hi-lo) per channel
+	VCVTSI2SDQ CX, X6, X6
+	VCVTSD2SS X6, X6, X6
+	VMOVSS  X6, (R11)(SI*4)
+	MOVQ    (R13)(SI*8), R15
+	SUBQ    (R12)(SI*8), R15
+	ADDQ    R15, CX
+	LEAQ    (SI)(SI*1), R15
+	VPMOVSXDQ (BX)(R15*8), Y0
+	VPMOVSXDQ (R8)(R15*8), Y1
+	VPSUBQ  Y1, Y0, Y0
+	VPAND   Y3, Y0, Y0          // cn=3: alpha delta stays zero
+	VPADDQ  Y0, Y4, Y4
+	INCQ    SI
+	JMP     sp4_loop
+
+sp4_done:
+	MOVQ AX, R14                // s ptr still in AX
+	VMOVDQU Y4, (R14)
+	MOVQ CX, ret+168(FP)
+	VZEROUPPER
+	RET
+
+DATA sp4rgb<>+0(SB)/8, $0xffffffffffffffff
+DATA sp4rgb<>+8(SB)/8, $0xffffffffffffffff
+DATA sp4rgb<>+16(SB)/8, $0xffffffffffffffff
+DATA sp4rgb<>+24(SB)/8, $0x0000000000000000
+GLOBL sp4rgb<>(SB), RODATA|NOPTR, $32

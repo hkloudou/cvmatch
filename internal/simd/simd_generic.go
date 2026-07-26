@@ -80,6 +80,11 @@ func SlideCols4(colSum []int32, colSum2 []int64, rsub, radd []uint8, cn int) {
 	panic("cvmatch: SIMD kernel on unsupported platform")
 }
 
+func SpillStats4(wt []float32, stride int, lo, hi []int32, lo2, hi2 []int64,
+	s *[4]int64, tsum *[4]int64, s2, area int64, four bool) int64 {
+	panic("cvmatch: SIMD kernel on unsupported platform")
+}
+
 func SpillStats1(wt []float32, stride int, lo, hi []int32, lo2, hi2 []int64, s0, s2, area int64) (ns0, ns2 int64) {
 	panic("cvmatch: SIMD kernel on unsupported platform")
 }
