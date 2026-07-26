@@ -328,13 +328,20 @@ the ranges.
   writers store spec rows at bit-reversed slots for free, the inverse
   cascade conjugates every row access through the involution (rmap),
   MulConj untouched; zero numeric change, goldens unchanged (no
-  re-record) — REFERENCE VERDICT PENDING. Post-Phase-9 profile
-  (noise1080p, timed region): FFT kernels ~45% (engine closed by the
-  7.2 ledger), SpillStats4 ~16% (serial slide chain + wide converts,
-  little left inside), pad-row memclr ~7% (dirty-tracking priced above
-  its value). Published headline after SpillStats4: beats native
-  3.8-10.2x, asm 3.8-4.9x over purego (generated ranges, runner
-  dependent).
+  re-record). Reference pair (null x0.980, first pair discarded on a
+  x0.794 null — different runner generations): Match asm **+3.2%
+  geomean 13/14**, purego +2.1% 13/14, gray purego +3.2% 14/14, gray
+  asm +1.1% — all four columns positive, strongest on big-tile scenes
+  (starry +6.7%, building +6.0%, 4k +4.0% asm) and ~flat on the
+  small-tile window scenes, exactly the traffic-elimination shape.
+  Phase 9 closed after this: the post-SpillStats4 profile (noise1080p,
+  timed region) prices every remaining lever under the reference noise
+  floor — FFT kernels ~45% (engine closed by the 7.2 ledger),
+  SpillStats4 ~16% (serial slide chain + wide converts, little left
+  inside), pad-row memclr ~7% (dirty-tracking complexity above its
+  value), and the memmove line is deleted outright by PR #27.
+  Published headline after SpillStats4: beats native 3.8-10.2x, asm
+  3.8-4.9x over purego (generated ranges, runner dependent).
 
 ## Phase 7 design-study verdict ledger (adjudicated 2026-07-17)
 
