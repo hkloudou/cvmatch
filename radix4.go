@@ -5,9 +5,10 @@ import "math/bits"
 // Radix-4 FFT engine (Phase 7.2), no-FMA — decided by measurement: the
 // FMA variant needs the fma32 scalar twin for self-determinism, and
 // that measured 3.8x slower in scalar, killing the purego/arm64 leg.
-// Not yet wired into the match pipeline: the pipeline flip, the AVX2
-// twins and the single golden re-record land together once the asm
-// matches this code bit-for-bit.
+// The column passes run this engine (colsR4Go + the FFTColsR4/Head
+// kernels); the packed row FFTs stay on the radix-2 fftGo/FFTStages
+// pair — each scalar<->asm pair is bit-identical on its own, so the
+// engines may differ per axis (7.2b may flip the rows later).
 //
 // Kernel contract (the fixed op sequence the asm must reproduce):
 //   - Input is BIT-reversed (the shared makeSwapPairs table). With plain
@@ -26,24 +27,19 @@ import "math/bits"
 //   - Inverse conjugates the twiddles and swaps the +-i rotation; the
 //     1/n scale stays the caller's job (unchanged from fftGo).
 
-// r4Tab holds per-stage twiddle triplets for the radix-4 stages of size
-// n: for each stage with quarter size h, w1[j]=cis(-pi j/(2h)),
-// w2[j]=cis(-pi j/h), w3[j]=cis(-3pi j/(2h)) for j<h, stored as three
-// consecutive h-blocks. All values come from the shared deterministic
-// sincospiFrac generator; w3 folds 3j into [0,2h) with an exact sign
-// flip, so every entry is a directly generated dyadic-angle value.
-type r4Tab struct {
-	n     int
-	tri   []complex64 // concatenated [w1|w2|w3] blocks per stage
-	pairs []int32     // bit-reversal swaps (shared shape with fftGo)
-}
-
 // oddLog2 reports whether log2(n) is odd (n a power of two), i.e. the
 // transform needs the radix-2 head stage.
 func oddLog2(n int) bool { return bits.Len(uint(n))%2 == 0 }
 
-func makeR4Tab(n int) *r4Tab {
-	t := &r4Tab{n: n, pairs: makeSwapPairs(n)}
+// makeTriTwiddles builds the per-stage twiddle triplets for the radix-4
+// stages of an n-point transform: for each stage with quarter size h,
+// w1[j]=cis(-pi j/(2h)), w2[j]=cis(-pi j/h), w3[j]=cis(-3pi j/(2h)) for
+// j<h, stored as three consecutive h-blocks. All values come from the
+// shared deterministic sincospiFrac generator; w3 folds 3j into [0,2h)
+// with an exact sign flip, so every entry is a directly generated
+// dyadic-angle value.
+func makeTriTwiddles(n int) []complex64 {
+	var tri []complex64
 	h := 1
 	if oddLog2(n) {
 		h = 2
@@ -51,11 +47,11 @@ func makeR4Tab(n int) *r4Tab {
 	for ; 4*h <= n; h *= 4 {
 		for j := 0; j < h; j++ { // w1 block
 			c, s := sincospiFrac(j, 2*h)
-			t.tri = append(t.tri, complex(c, -s))
+			tri = append(tri, complex(c, -s))
 		}
 		for j := 0; j < h; j++ { // w2 block
 			c, s := sincospiFrac(j, h)
-			t.tri = append(t.tri, complex(c, -s))
+			tri = append(tri, complex(c, -s))
 		}
 		for j := 0; j < h; j++ { // w3 block: 3j folded into [0,2h)
 			m, neg := 3*j, false
@@ -66,10 +62,10 @@ func makeR4Tab(n int) *r4Tab {
 			if neg {
 				c, s = -c, -s
 			}
-			t.tri = append(t.tri, complex(c, -s))
+			tri = append(tri, complex(c, -s))
 		}
 	}
-	return t
+	return tri
 }
 
 // mulPlain is the engine's complex twiddle multiply: every product and
@@ -88,10 +84,10 @@ func mulPlain(v, w complex64) complex64 {
 // optional radix-2 head stage, then radix-4 sweeps. Same external 1/n
 // scaling convention as fftGo, so callers swap engines without other
 // changes.
-func fftR4(a []complex64, t *r4Tab, inverse bool) {
+func fftR4(a []complex64, tri []complex64, pairs []int32, inverse bool) {
 	n := len(a)
-	for k := 0; k+1 < len(t.pairs); k += 2 {
-		i, j := t.pairs[k], t.pairs[k+1]
+	for k := 0; k+1 < len(pairs); k += 2 {
+		i, j := pairs[k], pairs[k+1]
 		a[i], a[j] = a[j], a[i]
 	}
 	h := 1
@@ -103,7 +99,6 @@ func fftR4(a []complex64, t *r4Tab, inverse bool) {
 		}
 		h = 2
 	}
-	tri := t.tri
 	for ; 4*h <= n; h *= 4 {
 		w1, w2, w3 := tri[:h], tri[h:2*h], tri[2*h:3*h]
 		tri = tri[3*h:]

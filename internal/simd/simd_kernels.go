@@ -17,21 +17,6 @@ package simd
 //go:noescape
 func FFTStages(a []complex64, tw []complex64, inverse bool)
 
-// FFTColsBfly applies one column-FFT butterfly row pair with the
-// (already sign-adjusted) twiddle w: p,q = p+q*w, p-q*w.
-//
-//go:noescape
-func FFTColsBfly(p, q []complex64, w complex64)
-
-// FFTCols4 fuses two column-FFT stages over a closed quad of rows in one
-// memory pass: r0,r1 = r0±r1*w1; r2,r3 = r2±r3*w1; then r0,r2 = r0±r2*w2a;
-// r1,r3 = r1±r3*w2b. Each butterfly is the exact FFTColsBfly op sequence;
-// values stay in registers between the stages, which changes nothing (the
-// scalar path's intermediate stores are exact). All rows share r0's length.
-//
-//go:noescape
-func FFTCols4(r0, r1, r2, r3 []complex64, w1, w2a, w2b complex64)
-
 // FFTColsR4 applies one radix-4 column stage to the row quad
 // (r0, r1, r2, r3) = rows (r, r+h, r+2h, r+3h): per element exactly the
 // scalar colsR4Pass sequence — tb = r2*w1, tc = r1*w2, td = r3*w3 with

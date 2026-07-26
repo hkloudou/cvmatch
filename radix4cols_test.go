@@ -11,7 +11,7 @@ import (
 // exercise the width-split scheduling.
 func TestColsR4MatchesRowEngine(t *testing.T) {
 	for _, n := range []int{2, 4, 8, 16, 64, 128, 512} {
-		tab := makeR4Tab(n)
+		ft := fftTables(n)
 		for _, width := range []int{1, 7, 8, 24, 33} {
 			src := randSlab(n*width, int64(n*width))
 			want := make([]complex64, n*width)
@@ -22,7 +22,7 @@ func TestColsR4MatchesRowEngine(t *testing.T) {
 					for r := 0; r < n; r++ {
 						col[r] = src[r*width+c]
 					}
-					fftR4(col, tab, inverse)
+					fftR4(col, ft.tri, ft.pairs, inverse)
 					for r := 0; r < n; r++ {
 						want[r*width+c] = col[r]
 					}
@@ -31,7 +31,7 @@ func TestColsR4MatchesRowEngine(t *testing.T) {
 					got := make([]complex64, n*width)
 					copy(got, src)
 					tmp := make([]complex64, width)
-					colsR4Go(got, n, width, tab, inverse, tmp, team)
+					colsR4Go(got, n, width, ft.tri, ft.pairs, inverse, tmp, team)
 					for i := range got {
 						if math.Float32bits(real(got[i])) != math.Float32bits(real(want[i])) ||
 							math.Float32bits(imag(got[i])) != math.Float32bits(imag(want[i])) {
@@ -45,26 +45,16 @@ func TestColsR4MatchesRowEngine(t *testing.T) {
 	}
 }
 
-// Cost probe: the current column engine vs the radix-4 twin on a
-// pipeline-shaped slab (n=512 columns of a 256-wide spectrum).
-func BenchmarkColsRadix2(b *testing.B) {
+// Standing cost probe for the column engine on a pipeline-shaped slab
+// (n=512 columns of a 256-wide spectrum). At the 7.2 flip this measured
+// +14.5% asm / +18.7% purego over the retired radix-2 column passes.
+func BenchmarkColsRadix4(b *testing.B) {
 	const n, width = 512, 256
 	ft := fftTables(n)
 	d := randSlab(n*width, 9)
 	tmp := make([]complex64, width)
 	b.SetBytes(int64(n * width * 8))
 	for i := 0; i < b.N; i++ {
-		fftColsGo(d, n, width, ft.tw, ft.pairs, i&1 == 1, tmp, 1)
-	}
-}
-
-func BenchmarkColsRadix4(b *testing.B) {
-	const n, width = 512, 256
-	tab := makeR4Tab(n)
-	d := randSlab(n*width, 9)
-	tmp := make([]complex64, width)
-	b.SetBytes(int64(n * width * 8))
-	for i := 0; i < b.N; i++ {
-		colsR4Go(d, n, width, tab, i&1 == 1, tmp, 1)
+		colsR4Go(d, n, width, ft.tri, ft.pairs, i&1 == 1, tmp, 1)
 	}
 }
