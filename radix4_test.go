@@ -41,7 +41,7 @@ func TestFFTR4MatchesOracle(t *testing.T) {
 		for _, inverse := range []bool{false, true} {
 			x := randSlab(n, int64(n)+7)
 			got := append([]complex64(nil), x...)
-			fftR4(got, ft.tri, ft.pairs, inverse)
+			fftR4(got, ft.colTri(), ft.pairs, inverse)
 			want := naiveDFT(x, inverse)
 			// f32 FFT error grows ~sqrt(log n); scale by the L2 norm.
 			var norm float64
@@ -70,8 +70,8 @@ func TestFFTR4NearRadix2(t *testing.T) {
 			x := randSlab(n, int64(n)+31)
 			r4 := append([]complex64(nil), x...)
 			r2 := append([]complex64(nil), x...)
-			fftR4(r4, ft.tri, ft.pairs, inverse)
-			fftGo(r2, ft.tw, ft.pairs, inverse)
+			fftR4(r4, ft.colTri(), ft.pairs, inverse)
+			fftGo(r2, ft.rowTw(), ft.pairs, inverse)
 			var norm float64
 			for _, w := range r2 {
 				norm += float64(real(w))*float64(real(w)) + float64(imag(w))*float64(imag(w))
@@ -93,8 +93,8 @@ func TestFFTR4RoundTrip(t *testing.T) {
 		ft := fftTables(n)
 		x := randSlab(n, int64(n)+3)
 		a := append([]complex64(nil), x...)
-		fftR4(a, ft.tri, ft.pairs, false)
-		fftR4(a, ft.tri, ft.pairs, true)
+		fftR4(a, ft.colTri(), ft.pairs, false)
+		fftR4(a, ft.colTri(), ft.pairs, true)
 		inv := 1 / float32(n)
 		for i := range a {
 			a[i] = complex(real(a[i])*inv, imag(a[i])*inv)
@@ -115,7 +115,7 @@ func Benchmark1DRadix2(b *testing.B) {
 		a := randSlab(n, 1)
 		b.Run(itoa(n), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				fftGo(a, ft.tw, ft.pairs, i&1 == 1)
+				fftGo(a, ft.rowTw(), ft.pairs, i&1 == 1)
 			}
 		})
 	}
@@ -127,7 +127,7 @@ func Benchmark1DRadix4(b *testing.B) {
 		a := randSlab(n, 1)
 		b.Run(itoa(n), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				fftR4(a, ft.tri, ft.pairs, i&1 == 1)
+				fftR4(a, ft.colTri(), ft.pairs, i&1 == 1)
 			}
 		})
 	}

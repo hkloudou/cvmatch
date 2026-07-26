@@ -175,19 +175,41 @@ var (
 )
 
 type fftTab struct {
-	tw    []complex64
+	n     int
+	tw    []complex64 // radix-2 rows; lazily built on uncached sizes
+	tri   []complex64 // radix-4 column triplets; lazily built on uncached sizes
 	pairs []int32
-	tri   []complex64 // radix-4 stage triplets (column engine)
+}
+
+// rowTw and colTri return the requested twiddle family. Cached sizes
+// build both families eagerly under the cache lock (immutable once
+// published, safe to share); sizes above 4096 return per-call structs
+// that fill only the family actually read — plans are built on a single
+// goroutine before any fan-out, so the lazy fill needs no lock. This
+// keeps rectangular plans from building a family an axis never uses
+// (codex P2, PR #23).
+func (t *fftTab) rowTw() []complex64 {
+	if t.tw == nil {
+		t.tw = makeTwiddles(t.n)
+	}
+	return t.tw
+}
+
+func (t *fftTab) colTri() []complex64 {
+	if t.tri == nil {
+		t.tri = makeTriTwiddles(t.n)
+	}
+	return t.tri
 }
 
 func fftTables(n int) *fftTab {
 	if n > 4096 {
-		return &fftTab{makeTwiddles(n), makeSwapPairs(n), makeTriTwiddles(n)}
+		return &fftTab{n: n, pairs: makeSwapPairs(n)}
 	}
 	fftTabMu.Lock()
 	t := fftTabs[n]
 	if t == nil {
-		t = &fftTab{makeTwiddles(n), makeSwapPairs(n), makeTriTwiddles(n)}
+		t = &fftTab{n: n, tw: makeTwiddles(n), tri: makeTriTwiddles(n), pairs: makeSwapPairs(n)}
 		fftTabs[n] = t
 	}
 	fftTabMu.Unlock()
@@ -370,12 +392,12 @@ func newGoPlan(tw, th, rw, rh int) *goPlan {
 		p.blockH = rh
 	}
 	tabW := fftTables(dftW)
-	p.twW, p.prW = tabW.tw, tabW.pairs
+	p.twW, p.prW = tabW.rowTw(), tabW.pairs
 	tabH := tabW
 	if dftH != dftW {
 		tabH = fftTables(dftH)
 	}
-	p.triH, p.prH = tabH.tri, tabH.pairs
+	p.triH, p.prH = tabH.colTri(), tabH.pairs
 	return p
 }
 
@@ -624,7 +646,7 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 			q := *p
 			q.dftH = dh2
 			tabH := fftTables(dh2)
-			q.triH, q.prH = tabH.tri, tabH.pairs
+			q.triH, q.prH = tabH.colTri(), tabH.pairs
 			p2 = &q
 			tspec2 = cplxPool.get(cn * dh2 * p.hw)
 			defer cplxPool.put(tspec2)

@@ -22,7 +22,7 @@ func TestColsR4MatchesRowEngine(t *testing.T) {
 					for r := 0; r < n; r++ {
 						col[r] = src[r*width+c]
 					}
-					fftR4(col, ft.tri, ft.pairs, inverse)
+					fftR4(col, ft.colTri(), ft.pairs, inverse)
 					for r := 0; r < n; r++ {
 						want[r*width+c] = col[r]
 					}
@@ -31,7 +31,7 @@ func TestColsR4MatchesRowEngine(t *testing.T) {
 					got := make([]complex64, n*width)
 					copy(got, src)
 					tmp := make([]complex64, width)
-					colsR4Go(got, n, width, ft.tri, ft.pairs, inverse, tmp, team)
+					colsR4Go(got, n, width, ft.colTri(), ft.pairs, inverse, tmp, team)
 					for i := range got {
 						if math.Float32bits(real(got[i])) != math.Float32bits(real(want[i])) ||
 							math.Float32bits(imag(got[i])) != math.Float32bits(imag(want[i])) {
@@ -55,6 +55,6 @@ func BenchmarkColsRadix4(b *testing.B) {
 	tmp := make([]complex64, width)
 	b.SetBytes(int64(n * width * 8))
 	for i := 0; i < b.N; i++ {
-		colsR4Go(d, n, width, ft.tri, ft.pairs, i&1 == 1, tmp, 1)
+		colsR4Go(d, n, width, ft.colTri(), ft.pairs, i&1 == 1, tmp, 1)
 	}
 }
