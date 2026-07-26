@@ -55,6 +55,9 @@ jobs:
           GOOS=linux GOARCH=386 go vet -tags purego ./...
           GOOS=darwin GOARCH=arm64 go build -tags purego ./...
 
+  # arm64 has no assembly (owner decision — it runs the scalar loops in
+  # every build mode); this leg is the cross-architecture proof that the
+  # golden anchors reproduce on real arm64 hardware.
   test-arm64:
     runs-on: ubuntu-24.04-arm
     steps:
@@ -65,39 +68,12 @@ jobs:
           cache: false
       - name: Fetch real sample images (OpenCV samples/data)
         run: bench/testdata/fetch.sh
-      - name: NEON kernel stream matches kernels.S (generator is deterministic)
-        run: |
-          python3 internal/simd/_gen/gen.py
-          git diff --exit-code internal/simd/simd_arm64.s
-      - name: Unit tests — default build (NEON kernels on real hardware, golden anchors)
+      - name: Unit tests (scalar path, golden anchors on real arm64)
         run: go test -v ./...
-      - name: Unit tests — no-asm build (-tags purego)
-        run: go test -tags purego -v ./...
-      - name: Race detector (both builds)
-        run: |
-          go test -race ./...
-          go test -tags purego -race ./...
-      # Benchmark matrices cost real minutes and their numbers are only
-      # meaningful from the canonical bench-charts pipeline, so they run
-      # here only when explicitly dispatched (the perf-iteration loop).
-      - name: cvmatch matrix — arm64 NEON (default build), 1 and 4 threads
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          {
-            echo "### arm64 default build (NEON), -cpu 1,4"
-            echo '```'
-            go test -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m
-            echo '```'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: cvmatch matrix — arm64 no-asm build (-tags purego), 1 and 4 threads
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          {
-            echo "### arm64 no-asm build (-tags purego), -cpu 1,4"
-            echo '```'
-            go test -tags purego -run xxx -bench 'BenchmarkMatch/|BenchmarkMatchGray/' -benchtime 5x -cpu 1,4 -timeout 90m
-            echo '```'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: purego tag stays harmless (same scalar code)
+        run: go test -tags purego ./...
+      - name: Race detector
+        run: go test -race ./...
 
   # Correctness gate against native OpenCV: build the C++ binary, dump its
   # response maps once (no timing loops), and pin the public API

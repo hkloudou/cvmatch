@@ -4,18 +4,17 @@ matrix (matrix.md) from benchdata.json.
 
 benchdata.json is produced by docs/collect.py from raw benchmark outputs
 (`go test -bench . -benchtime 5x -cpu 1,4` for both build modes plus
-`bench/cpp/native_bench`, run identically on the amd64 and arm64
-runners, and the memprobe peak-RSS runs) — each architecture's numbers
-come from one session on one machine so its comparison against native
-OpenCV is coherent. The bench-charts workflow re-measures weekly and on
-demand and publishes the rendered outputs to the `assets` branch; the
-README references those stable URLs and is never rewritten.
+`bench/cpp/native_bench`, and the memprobe peak-RSS runs) — all from one
+session on one amd64 machine so the comparison against native OpenCV is
+coherent. The bench-charts workflow re-measures weekly and on demand and
+publishes the rendered outputs to the `assets` branch; the README
+references those stable URLs and is never rewritten.
 
 Series colors are meaning-stable across every chart: green = native
 OpenCV C++, blue family = cvmatch.Match, orange family =
-cvmatch.MatchGray; the solid shade is the default build (SIMD asm),
-the light shade is the -tags purego no-asm build. amd64 and arm64 are peer
-panels of one chart with identical series and annotations.
+cvmatch.MatchGray; the solid shade is the default build (AVX2 asm), the
+light shade is the -tags purego no-asm build. arm64 runs the scalar path
+by design and is correctness-tested in CI, not benchmarked.
 
 Manual run:
   python3 docs/collect.py [flags] -o out/benchdata.json
@@ -36,7 +35,7 @@ DATA = json.load(open(ARGS.data))
 SC = DATA["scenes"]
 MEM = DATA.get("mem", {})
 HOST = DATA.get("host", "")
-PARITY = DATA.get("parity", {})  # {scene: {"amd64": worst_abs, "arm64": ...}}
+PARITY = DATA.get("parity", {})  # {scene: {"amd64": worst_abs}}
 OPENCV = DATA.get("opencv", "")
 
 # (scene key, chart/table label, panel)
@@ -65,14 +64,13 @@ SERIES = [("OpenCV C++ (native)", "native"),
           ("Match (no asm, purego)", "matchgo"),
           ("MatchGray (asm)", "gray"),
           ("MatchGray (no asm, purego)", "graygo")]
-# Identical comparison dimensions on both architectures: native OpenCV +
-# the four cvmatch series, every cvmatch bar annotated vs its own
-# architecture's native baseline. All bars are SINGLE-THREADED —
-# OpenCV's matchTemplate is single-threaded, so the like-for-like chart
-# is 1T vs 1T; cvmatch's internal multi-threading is real and kept, but
-# it is disclosed in the tables, never used as the headline comparison.
+# Three-way amd64 comparison: native OpenCV + both cvmatch builds, every
+# cvmatch bar annotated vs the native baseline. All bars are
+# SINGLE-THREADED — OpenCV's matchTemplate is single-threaded, so the
+# like-for-like chart is 1T vs 1T; cvmatch's internal multi-threading is
+# real and kept, but it is disclosed in the tables, never used as the
+# headline comparison. arm64 runs the scalar path and is not benchmarked.
 KEYS_AMD = ("native", "asm1", "go1", "agray1", "gray1")
-KEYS_ARM = ("nativeA", "asmA1", "goA1", "agrayA1", "grayA1")
 REFS = [None, 0, 0, 0, 0]
 
 # The chart shows one representative scene per class (full 14-scene
@@ -175,8 +173,7 @@ def legend(out, t, y, series):
 
 
 def speed_chart(mode):
-    """One chart, one panel per architecture, identical series and
-    annotations in both — amd64 and arm64 are peer configurations."""
+    """One amd64 panel: native OpenCV vs both cvmatch builds."""
     t = THEMES[mode]
     out = []
     out.append(f'<text x="20" y="20" font-size="15" font-weight="600" fill="{t["ink"]}" {FONT}>'
@@ -186,15 +183,12 @@ def speed_chart(mode):
                'asm = default build, no asm = -tags purego · multi-thread numbers in the tables</text>')
     y = legend(out, t, 60, SERIES)
     note = 'ms, 1T — lower is better · ×  = speedup vs native C++ (&lt;1 = slower)'
-    for arch, keys, host in (("amd64", KEYS_AMD, HOST),
-                             ("arm64", KEYS_ARM, DATA.get("hostArm64", ""))):
-        rows = rows_for(CHART_SCENES, keys)
-        if not rows:
-            continue
+    rows = rows_for(CHART_SCENES, KEYS_AMD)
+    if rows:
         vmax, ticks = axis_scale(rows)
-        cpu = cpu_of(host)
+        cpu = cpu_of(HOST)
         y = panel(out, t, rows, y + 8, vmax, ticks,
-                  f'{arch} — {cpu}' if cpu else arch, SERIES, REFS, note)
+                  f'amd64 — {cpu}' if cpu else 'amd64', SERIES, REFS, note)
     return svg(out, y)
 
 
@@ -301,38 +295,19 @@ def matrix_markdown():
             "matchTemplate timed end-to-end, which was not measured; treat MatchGray",
             "numbers as cvmatch-internal.",
         ]
-    if any("nativeA" in s and "asmA1" in s for s in SC.values()):
-        lines += [
-            "",
-            "**arm64** — " + (DATA.get("hostArm64") or "the arm64 CI runner") + ",",
-            "same OpenCV 4.12 static build, bit-identical cvmatch output to the",
-            "amd64 rows above:",
-            "",
-        ]
-        match_table(lines, ("nativeA", "asmA1", "asmA4", "goA1", "goA4"), header, parity_arch="arm64")
-        ga = SC.get("noise1080p_sub128", {})
-        if all(k in ga for k in ("agrayA1", "agrayA4", "grayA1", "grayA4")):
-            lines += [
-                "",
-                f"`MatchGray` at 1080p/128 on arm64: asm {ga['agrayA1']:.1f} / "
-                f"{ga['agrayA4']:.1f} ms, no-asm {ga['grayA1']:.1f} / "
-                f"{ga['grayA4']:.1f} ms (1T / 4T).",
-            ]
     # Derived claims, regenerated with the data so prose can reference them
     # without ever going stale.
     r_amd = [s["go1"] / s["asm1"] for s in SC.values() if "go1" in s and "asm1" in s]
-    r_arm = [s["goA1"] / s["asmA1"] for s in SC.values() if "goA1" in s and "asmA1" in s]
     r_nat = [s["native"] / s["asm1"] for s in SC.values() if "native" in s and "asm1" in s]
-    r_natA = [s["nativeA"] / s["asmA1"] for s in SC.values() if "nativeA" in s and "asmA1" in s]
+    r_natgo = [s["native"] / s["go1"] for s in SC.values() if "native" in s and "go1" in s]
     r_thr = [s["asm1"] / s["asm4"] for s in SC.values() if "asm1" in s and "asm4" in s]
-    if r_amd and r_arm and r_nat:
+    if r_amd and r_nat:
         lines += [
             "",
             f"**Measured summary (single-threaded, like-for-like):** the default asm build",
-            f"runs {min(r_amd):.1f}–{max(r_amd):.1f}x faster than the -tags purego build on amd64",
-            f"({min(r_arm):.1f}–{max(r_arm):.1f}x on arm64), and beats native OpenCV C++ by",
-            f"{min(r_nat):.1f}–{max(r_nat):.1f}x on amd64"
-            + (f" and {min(r_natA):.1f}–{max(r_natA):.1f}x on arm64." if r_natA else "."),
+            f"runs {min(r_amd):.1f}–{max(r_amd):.1f}x faster than the -tags purego build and beats",
+            f"native OpenCV C++ by {min(r_nat):.1f}–{max(r_nat):.1f}x; the no-asm build ranges",
+            f"{min(r_natgo):.2f}–{max(r_natgo):.2f}x vs native on the same scenes.",
         ]
     if r_thr:
         lines += [

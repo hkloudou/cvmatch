@@ -6,11 +6,11 @@ OpenCV-compatible `TM_CCOEFF_NORMED` template matching in **pure Go** — no
 OpenCV, no cgo, no bundled static libraries, no dependencies. Two build
 modes, selected by one global tag:
 
-- **Default build**: hand-written SIMD kernels on the hot loops — AVX2
-  on amd64 (runtime-detected), NEON on arm64 — so `go get` performance
-  beats native OpenCV out of the box (single-thread vs single-thread, on
-  every measured scene). Other architectures run the scalar code
-  automatically; plain cross-compilation just works.
+- **Default build**: hand-written AVX2 kernels on the hot loops
+  (amd64, runtime-detected) — so `go get` performance beats native
+  OpenCV out of the box (single-thread vs single-thread, on every
+  measured scene). Every other architecture — arm64 included — runs the
+  scalar Go code automatically; plain cross-compilation just works.
 - **`-tags purego`** (the community-standard tag): opts out of all
   assembly — 100% high-level Go, nothing hand-written to audit, for
   auditability-sensitive deployments. Costs **2–5x** depending on
@@ -184,9 +184,9 @@ templates, varying alpha).
   single-rounded IEEE op sequence runs everywhere, including a
   deterministic `sincospi` for twiddles — no libm trig, so output does not
   vary across glibc/musl/OS math libraries).
-- `TestSIMDMatchesScalar` asserts the assembly kernels (AVX2 and NEON)
-  equal the generic Go loops bit-for-bit (each vector lane performs
-  exactly the scalar op sequence).
+- `TestSIMDMatchesScalar` asserts the AVX2 kernels equal the generic Go
+  loops bit-for-bit (each vector lane performs exactly the scalar op
+  sequence).
 - `TestThreadsBitIdentical` / `TestThreadsVar` assert byte-equal maps and
   extrema for 1/2/3/4/8/16 workers, and `TestConstantAlphaSkip` asserts
   the constant-alpha skip is a no-op.
@@ -198,14 +198,14 @@ arm64 runners, in both build modes (default and `-tags purego`).
 
 > The charts, the measured matrix (including its summary paragraph) and
 > `docs/benchdata.json` are **auto-generated**: the `bench-charts`
-> workflow re-measures native OpenCV and cvmatch — both build modes on
-> both architectures, identical comparison dimensions — weekly and on
-> demand, and commits the refreshed SVGs and tables (`docs/collect.py`
-> parses the raw outputs, `docs/genchart.py` renders). amd64 and arm64
-> are peer panels of one chart. Series colors mean the same thing
+> workflow re-measures native OpenCV and both cvmatch builds on amd64 —
+> the three-way comparison — weekly and on demand, and commits the
+> refreshed SVGs and tables (`docs/collect.py` parses the raw outputs,
+> `docs/genchart.py` renders). Series colors mean the same thing
 > everywhere: green = native OpenCV C++, blue family = `cvmatch.Match`,
 > orange family = `cvmatch.MatchGray`; solid = default asm build,
-> light = `-tags purego` no-asm build.
+> light = `-tags purego` no-asm build. arm64 runs the scalar path by
+> design and is correctness-tested in CI, not benchmarked.
 
 Scenarios cover a realistic workload — finding a button, a toolbar icon or
 a panel inside a rendered desktop window (flat regions, gradients, text,
@@ -259,10 +259,9 @@ kind sits between the timer and OpenCV.
 - **Verified-equal outputs.** The parity suite above compares every
   response-map element against the C++ binary — no speed comes from
   computing something different.
-- **One session per architecture.** All numbers for an architecture come
-  from one session on that architecture's named runner — same OpenCV 4.12
-  static build, same scenes, same comparison dimensions on amd64 and
-  arm64; expect some run-to-run variance on shared cloud CPUs. The
+- **One session, one machine.** All numbers come from one session on
+  the named amd64 runner — same OpenCV 4.12 static build, same scenes;
+  expect some run-to-run variance on shared cloud CPUs. The
   `bench-charts` pipeline is the only benchmark source: it runs weekly
   and on demand (`workflow_dispatch`); regular CI runs correctness gates
   only, so numbers never come from two competing places.
@@ -273,7 +272,7 @@ Reproduce locally with `go test -bench . -benchtime 5x -cpu 1,4` (add
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../raw/assets/bench/bench-dark.svg">
-  <img alt="Benchmark: native OpenCV C++ vs cvmatch (asm and no-asm builds) on amd64 and arm64, identical output" src="../../raw/assets/bench/bench-light.svg">
+  <img alt="Benchmark: native OpenCV C++ vs cvmatch (asm and no-asm builds), identical output" src="../../raw/assets/bench/bench-light.svg">
 </picture>
 
 <picture>
@@ -283,9 +282,8 @@ Reproduce locally with `go test -bench . -benchtime 5x -cpu 1,4` (add
 
 ### The full matrix (measured)
 
-The complete measured matrix — both architectures, 1T/4T, asm and
-no-asm columns, plus the derived summary (speedup ranges, peak
-memory) — is auto-generated into
+The complete measured matrix — 1T/4T, asm and no-asm columns, plus the
+derived summary (speedup ranges, peak memory) — is auto-generated into
 [`bench/matrix.md` on the `assets` branch](../../blob/assets/bench/matrix.md),
 with the raw dataset alongside as
 [`benchdata.json`](../../blob/assets/bench/benchdata.json). The
@@ -318,12 +316,12 @@ summary always agree.
   parallelism over OpenCV can close most of its gap on such scenes (see
   fairness rules) — that residual is real and documented in the headroom
   section.
-- The kernels have two full backends — AVX2 on amd64 and NEON on arm64,
-  bit-identical to each other and to the scalar loops (asserted by the
-  golden hashes reproducing on both CI architectures in both build
-  modes). This pipeline retired the original cgo/C core by
-  out-benchmarking it on both architectures; the golden tests carry the
-  C core's cross-validated output forward as the permanent anchor.
+- The kernels are AVX2-only by owner decision (the NEON twins were
+  deleted for code-size reasons); arm64 runs the scalar loops, and the
+  golden hashes reproducing on the arm64 CI leg keep the cross-arch
+  bit-identity proof. This pipeline retired the original cgo/C core by
+  out-benchmarking it; the golden tests carry the C core's
+  cross-validated output forward as the permanent anchor.
 - Steady-state matching allocates ~0 in both modes: scratch is recycled
   through pools (a few MB/op appear on the largest scenes when GC clears
   the pools between calls).
@@ -501,7 +499,7 @@ OpenCV's `matchTemplate` is not slow because of sloppy code — the cost is in
 | DFT column transforms | strided per-column walks | batched butterflies over contiguous rows (vectorizes, cache-friendly) |
 | window statistics | materialize `sum` + `sqsum` double integral images: **~132 MB written to DRAM, then read back** | O(width) sliding integer column sums: **~60 KB working set, stays in L1/L2** |
 | min/max | separate `minMaxLoc` pass over the 8 MB result | scanned per row inside the normalization pass, while the data is cache-hot |
-| hot loops | generic SIMD dispatch | explicit AVX2/NEON kernels (FFT butterflies, conj-multiply, normalize sqrt/divide) on by default (opt out with `-tags purego`) |
+| hot loops | generic SIMD dispatch | explicit AVX2 kernels (FFT butterflies, conj-multiply, normalize sqrt/divide) on by default (opt out with `-tags purego`) |
 | result values | — | element-wise equal (verified vs the C++ binary) |
 
 The decisive line is the integral images: on a modern CPU a 1080p RGBA
@@ -663,9 +661,9 @@ Same math, different engineering:
   butterflies (contiguous row segments — a straight-line sweep instead of
   a strided walk), the conjugate multiply, the normalize sqrt/divide
   tail, the sliding column sums, the min/max scan and RGBA→gray run
-  hand-written `internal/simd` assembly — AVX2 behind a runtime CPU check
-  on amd64, NEON on arm64 (measured ranges in the benchmark matrix's
-  summary). Every vector lane
+  hand-written `internal/simd` assembly — AVX2 behind a runtime CPU
+  check on amd64 (measured ranges in the benchmark matrix's summary);
+  other architectures run the scalar loops. Every vector lane
   performs exactly the scalar op sequence (individually rounded
   multiplies and adds, never FMA), so the kernels change nothing but
   time. `-tags purego` compiles none of it — `simd.Enabled` becomes a
@@ -702,19 +700,15 @@ Same math, different engineering:
 
 - `impl.go` — the matching core: block-FFT correlation, sliding-window
   normalization, fused minMaxLoc, tile/band parallelism.
-- `internal/simd/` — the assembly kernels, compiled by default (excluded
-  by `-tags purego`; AVX2 on amd64, runtime-detected; NEON on arm64):
-  FFT stage cascades and fused column-stage quads, byte→complex packing,
-  spectrum untangle/combine, result emit, sliding column sums, the
-  normalize tail, first-occurrence min/max scan and RGBA→gray, plus the
-  generic fallback declarations.
+- `internal/simd/` — the AVX2 kernels (amd64, runtime-detected;
+  excluded by `-tags purego`): FFT stage cascades and fused column-stage
+  quads, byte→complex packing, spectrum untangle/combine, result emit,
+  sliding column sums, the normalize spill and tail, first-occurrence
+  min/max scan and RGBA→gray, plus the generic fallback declarations
+  every other architecture compiles.
   Every kernel executes the scalar loop's exact op sequence — asserted
   bit-for-bit by `TestSIMDMatchesScalar` and the kernel unit tests, and
-  across architectures by the golden output hashes. The NEON bodies live
-  in `internal/simd/_gen/kernels.S` (annotated ARM64 assembly) and are
-  spliced into `simd_arm64.s` as WORD streams by `_gen/gen.py` (Go's
-  assembler has no un-fused vector FP arithmetic); CI regenerates and
-  diffs the stream to keep them in lockstep.
+  across architectures by the golden output hashes.
 - `cvmatch.go` — public API and zero-copy image conversion.
 - `scenes/` — deterministic benchmark/parity scenes shared by the main
   module's benchmarks and the native comparison in `bench/`.
@@ -741,7 +735,7 @@ cross-compilation just work.
 The assembly is a global opt-in switch:
 
 ```sh
-go build ./...               # default: SIMD kernels (amd64 AVX2 / arm64 NEON)
+go build ./...               # default: AVX2 kernels on amd64
 go build -tags purego ./...  # opt out of all assembly: 100% high-level Go
 ```
 
@@ -750,8 +744,9 @@ out of the box; `-tags purego` (the Go community's standard tag) removes
 every line of hand-written assembly for deployments that want the
 compiler's memory safety guarantees end to end. Output is bit-identical
 in both modes (the golden anchors and the asm-vs-scalar parity suite run
-in both modes, on both architectures, in CI). On architectures without
-kernels both builds run the same scalar code.
+in both modes in CI, and the anchors reproduce on the arm64 leg). On
+architectures without kernels — everything except amd64 — both builds
+run the same scalar code.
 
 Versions are tagged from `main` via the *Tag release* workflow
 (`.github/workflows/tag.yml`); CI runs the full test + parity + benchmark

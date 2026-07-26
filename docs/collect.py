@@ -5,19 +5,16 @@ Inputs (any subset; missing values are carried over from the existing
 benchdata.json so partial re-measurements stay coherent per field):
 
   --asm FILE      `go test -bench . -benchtime 5x -cpu 1,4` output
-                  (default build with SIMD kernels; keys asm1/asm4 for
-                  Match, agray1/agray4 for MatchGray)
+                  (default build with the AVX2 kernels; keys asm1/asm4
+                  for Match, agray1/agray4 for MatchGray)
   --go FILE       the same run with -tags purego — scalar safe mode
                   (keys go1/go4, gray1/gray4)
-  --asm-arm64 / --go-arm64 FILE
-                  the same two runs from an arm64 machine (keys gain an
-                  'A' suffix: asmA1, goA4, grayA4, ...)
-  --native FILE   `bench/cpp/native_bench cpp/scenes N` output (amd64)
-  --native-arm64 FILE  the same run on the arm64 machine (key nativeA)
+  --native FILE   `bench/cpp/native_bench cpp/scenes N` output
   --mem FILE      concatenated `memprobe -impl {baseline,cvmatch,gray}` lines
   --native-mem KB peak RSS (VmHWM kB) of native_bench on the 1080p/128 scene
+  --parity FILE   `bench/cmd/paritystat` output (drift column)
+  --opencv TEXT   native OpenCV version string
   --host TEXT     one-line description of the machine
-  --host-arm64 TEXT  same for the arm64 machine
 
 Usage: python3 docs/collect.py [flags] -o docs/benchdata.json
 """
@@ -31,10 +28,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Everything genchart.py reads; carried-over keys outside this vocabulary
 # (e.g. from retired implementations) are pruned on every run.
-SCENE_KEYS = {"native", "nativeA",
-              "asm1", "asm4", "go1", "go4", "agray1", "agray4", "gray1", "gray4",
-              "asmA1", "asmA4", "goA1", "goA4",
-              "agrayA1", "agrayA4", "grayA1", "grayA4"}
+SCENE_KEYS = {"native",
+              "asm1", "asm4", "go1", "go4", "agray1", "agray4", "gray1", "gray4"}
 MEM_KEYS = {"native", "match", "gray", "baseline"}
 
 
@@ -89,17 +84,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--asm")
     ap.add_argument("--go")
-    ap.add_argument("--asm-arm64")
-    ap.add_argument("--go-arm64")
     ap.add_argument("--native")
-    ap.add_argument("--native-arm64")
     ap.add_argument("--mem")
     ap.add_argument("--native-mem", type=float, help="VmHWM kB")
-    ap.add_argument("--parity", help="paritystat output (amd64)")
-    ap.add_argument("--parity-arm64")
+    ap.add_argument("--parity", help="paritystat output")
     ap.add_argument("--opencv", help="native OpenCV version string")
     ap.add_argument("--host")
-    ap.add_argument("--host-arm64")
     ap.add_argument("-o", "--out", default=os.path.join(HERE, "benchdata.json"))
     args = ap.parse_args()
 
@@ -109,8 +99,7 @@ def main():
 
     if args.host:
         data["host"] = args.host
-    if args.host_arm64:
-        data["hostArm64"] = args.host_arm64
+    data.pop("hostArm64", None)
     scenes = data.setdefault("scenes", {})
 
     def put_go(path, match_key, gray_key, suffix):
@@ -121,17 +110,10 @@ def main():
     if args.native:
         for scene, ms in parse_native(args.native).items():
             scenes.setdefault(scene, {})["native"] = round(ms, 1)
-    if args.native_arm64:
-        for scene, ms in parse_native(args.native_arm64).items():
-            scenes.setdefault(scene, {})["nativeA"] = round(ms, 1)
     if args.asm:
         put_go(args.asm, "asm", "agray", "")
     if args.go:
         put_go(args.go, "go", "gray", "")
-    if args.asm_arm64:
-        put_go(args.asm_arm64, "asm", "agray", "A")
-    if args.go_arm64:
-        put_go(args.go_arm64, "go", "gray", "A")
     if args.mem:
         mem = parse_mem(args.mem)
         for k_src, k_dst in (("baseline", "baseline"), ("cvmatch", "match"), ("gray", "gray")):
@@ -142,9 +124,6 @@ def main():
     if args.parity:
         for scene, w in parse_parity(args.parity).items():
             data.setdefault("parity", {}).setdefault(scene, {})["amd64"] = w
-    if args.parity_arm64:
-        for scene, w in parse_parity(args.parity_arm64).items():
-            data.setdefault("parity", {}).setdefault(scene, {})["arm64"] = w
     if args.opencv:
         data["opencv"] = args.opencv
 
@@ -157,7 +136,7 @@ def main():
             del data["mem"][k]
     for per in data.get("parity", {}).values():
         for k in list(per):
-            if k not in ("amd64", "arm64"):
+            if k != "amd64":
                 del per[k]
 
     json.dump(data, open(args.out, "w"), indent=1, sort_keys=True)
