@@ -176,26 +176,21 @@ element-wise against a native OpenCV C++ binary.
   README benchmatrix block and its summary paragraph). Never hand-write
   a measured value into prose — reference the generated block instead.
 
-## Charts pipeline
+## Measured-matrix pipeline
 
-`bench-charts.yml` (weekly cron + dispatch): one amd64 `bench` job
-measures native OpenCV (prebuilt static 4.12), both cvmatch builds, the
-parity drift lines and peak RSS, renders via `docs/collect.py` +
-`docs/genchart.py`, and **publishes `bench/{benchdata.json, bench-*.svg,
-mem-*.svg, matrix.md}` to the `assets` branch** — main is never touched
-and the README is never rewritten (it references the stable
-`../../raw/assets/bench/...` URLs and links `matrix.md`). Dispatch with
-`publish=false` to get the rendered bundle as a workflow artifact
-instead (perf iteration). `matrix.md` carries the measured table plus
-the derived summary paragraph (speedup ranges, memory, drift), so no
-measured number is ever hand-written. The comparison is the **amd64
-three-way**: native OpenCV + {asm, no-asm} × {Match, MatchGray} with
-ratios vs native; arm64 runs the scalar path and is correctness-tested
-in ci.yml, never benchmarked. Keys: `asm*`/`agray*` = default build,
-`go*`/`gray*` = `-tags purego`, `native`. Colors are meaning-stable
-(green = native, blue family = Match, orange family = MatchGray;
-solid = asm, light = no-asm); build labels are asm / no-asm — never
-"pure Go", both builds are pure Go in the no-cgo sense.
+`bench-charts.yml` (weekly cron + dispatch): one amd64 job measures
+native OpenCV (prebuilt static 4.12), both cvmatch builds, the parity
+drift lines and peak RSS, renders via `docs/collect.py` (which also
+writes `matrix.md` — markdown tables only, no charts by owner decision
+2026-07-26), and **publishes `bench/{benchdata.json, matrix.md}` to the
+`assets` branch** — main is never touched; the README links the stable
+assets URLs. Dispatch with `publish=false` for a workflow artifact
+instead (perf iteration). The comparison is the **amd64 three-way**:
+native OpenCV + {asm, no-asm} × {Match, MatchGray}, 1T vs 1T, plus the
+4T columns as the disclosed threading fact; arm64 runs the scalar path
+and is correctness-tested in ci.yml, never benchmarked. No measured
+number is ever hand-written — the generated summary paragraph carries
+the ranges.
 
 ## History (context for future work)
 

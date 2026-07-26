@@ -13,10 +13,12 @@ modes, selected by one global tag:
   scalar Go code automatically; plain cross-compilation just works.
 - **`-tags purego`** (the community-standard tag): opts out of all
   assembly — 100% high-level Go, nothing hand-written to audit, for
-  auditability-sensitive deployments. Costs **2–5x** depending on
-  architecture (auto-refreshed ranges in the
-  [measured summary](#the-full-matrix-measured)); output is bit-identical
-  to the default build, asserted by the test suite in both modes.
+  auditability-sensitive deployments. On amd64 — the only architecture
+  with kernels — it costs the auto-refreshed range in the
+  [measured summary](#the-full-matrix-measured); everywhere else both
+  builds compile the same scalar code, so the tag is free. Output is
+  bit-identical to the default build, asserted by the test suite in
+  both modes.
 
 Output is pinned two ways. Element-wise against **native OpenCV C++** on
 every CI run — see [Accuracy](#accuracy-cvmatch-vs-native-c) for the
@@ -196,16 +198,13 @@ arm64 runners, in both build modes (default and `-tags purego`).
 
 ## Benchmarks: cvmatch vs native C++
 
-> The charts, the measured matrix (including its summary paragraph) and
-> `docs/benchdata.json` are **auto-generated**: the `bench-charts`
-> workflow re-measures native OpenCV and both cvmatch builds on amd64 —
-> the three-way comparison — weekly and on demand, and commits the
-> refreshed SVGs and tables (`docs/collect.py` parses the raw outputs,
-> `docs/genchart.py` renders). Series colors mean the same thing
-> everywhere: green = native OpenCV C++, blue family = `cvmatch.Match`,
-> orange family = `cvmatch.MatchGray`; solid = default asm build,
-> light = `-tags purego` no-asm build. arm64 runs the scalar path by
-> design and is correctness-tested in CI, not benchmarked.
+> The measured matrix (including its summary paragraph) and
+> `benchdata.json` are **auto-generated**: the `bench-charts` workflow
+> re-measures native OpenCV and both cvmatch builds on amd64 — the
+> three-way comparison — weekly and on demand, and commits the
+> refreshed tables (`docs/collect.py` parses the raw outputs and
+> renders the markdown). arm64 runs the scalar path by design and is
+> correctness-tested in CI, not benchmarked.
 
 Scenarios cover a realistic workload — finding a button, a toolbar icon or
 a panel inside a rendered desktop window (flat regions, gradients, text,
@@ -269,16 +268,6 @@ kind sits between the timer and OpenCV.
 Reproduce locally with `go test -bench . -benchtime 5x -cpu 1,4` (add
 `-tags purego` for the no-asm build), plus
 `bench/cpp/build.sh && bench/cpp/native_bench bench/cpp/scenes 7`.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../../raw/assets/bench/bench-dark.svg">
-  <img alt="Benchmark: native OpenCV C++ vs cvmatch (asm and no-asm builds), identical output" src="../../raw/assets/bench/bench-light.svg">
-</picture>
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../../raw/assets/bench/mem-dark.svg">
-  <img alt="Peak memory for one 1080p match: native OpenCV C++ vs cvmatch" src="../../raw/assets/bench/mem-light.svg">
-</picture>
 
 ### The full matrix (measured)
 
@@ -721,11 +710,11 @@ Same math, different engineering:
 - `bench/testdata/fetch.sh` — downloads the real sample photographs.
 - `bench/cmd/annotate` — renders the match-result demo images shown above
   (published on the `assets` branch).
-- `docs/collect.py` / `docs/genchart.py` / `docs/benchdata.json` — the
-  benchmark-chart pipeline: `collect.py` parses raw benchmark outputs into
-  `benchdata.json`, `genchart.py` renders the SVGs and rewrites the README
-  matrix. The `bench-charts` workflow runs both weekly and on demand
-  (`workflow_dispatch`) and commits the refresh.
+- `docs/collect.py` — the whole benchmark-report pipeline: parses raw
+  benchmark outputs into `benchdata.json` and renders `matrix.md`
+  (markdown tables, no charts). The `bench-charts` workflow runs it
+  weekly and on demand (`workflow_dispatch`) and commits the refresh to
+  the `assets` branch.
 
 ## Requirements and releases
 
