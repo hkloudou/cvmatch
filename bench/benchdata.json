@@ -1,10 +1,10 @@
 {
- "host": "GitHub Actions ubuntu-latest (4-vCPU AMD EPYC 7763 64-Core Processor, linux/amd64)",
+ "host": "GitHub Actions ubuntu-latest (4-vCPU AMD EPYC 9V74 80-Core Processor, linux/amd64)",
  "mem": {
   "baseline": 12.1,
-  "gray": 22.5,
-  "match": 34.5,
-  "native": 154.6
+  "gray": 24.5,
+  "match": 34.4,
+  "native": 154.9
  },
  "opencv": "4.12.0",
  "parity": {
@@ -27,202 +27,202 @@
    "amd64": 2.22e-06
   },
   "noise640_alpha": {
-   "amd64": 1.674e-06
+   "amd64": 1.736e-06
   },
   "noise720p_sub96": {
-   "amd64": 2.146e-06
+   "amd64": 2.153e-06
   },
   "photo_baboon": {
-   "amd64": 1.051e-05
+   "amd64": 1.219e-05
   },
   "photo_building": {
    "amd64": 5.378e-05
   },
   "photo_fruits": {
-   "amd64": 1.951e-05
+   "amd64": 1.834e-05
   },
   "photo_graf1": {
    "amd64": 4.143e-06
   },
   "photo_starry_night": {
-   "amd64": 5.445e-06
+   "amd64": 4.847e-06
   },
   "window1600_button96x32": {
    "amd64": 0.0004672
   },
   "window1600_icon24x24": {
-   "amd64": 7.337e-05
+   "amd64": 7.338e-05
   },
   "window1600_panel300x200": {
    "amd64": 1.959e-05
   },
   "window4k_button96x32": {
-   "amd64": 0.0004672
+   "amd64": 0.0005451
   }
  },
  "scenes": {
   "absent_patch": {
-   "native": 210.8
+   "native": 218.5
   },
   "degraded_button": {
-   "native": 179.4
+   "native": 181.0
   },
   "half_degraded_noise": {
-   "native": 116.0
+   "native": 120.9
   },
   "noise1080p_sub128": {
-   "agray1": 20.7,
-   "agray4": 11.7,
-   "asm1": 58.6,
-   "asm4": 32.8,
-   "go1": 198.7,
-   "go4": 108.1,
-   "gray1": 77.4,
-   "gray4": 43.6,
-   "native": 278.8
+   "agray1": 19.2,
+   "agray4": 10.6,
+   "asm1": 53.8,
+   "asm4": 29.3,
+   "go1": 199.3,
+   "go4": 103.8,
+   "gray1": 79.3,
+   "gray4": 45.2,
+   "native": 289.9
   },
   "noise1080p_sub32": {
-   "agray1": 19.7,
-   "agray4": 9.9,
-   "asm1": 51.2,
-   "asm4": 25.8,
-   "go1": 172.0,
-   "go4": 86.4,
-   "gray1": 70.8,
-   "gray4": 37.8,
-   "native": 195.8
+   "agray1": 16.8,
+   "agray4": 8.7,
+   "asm1": 44.3,
+   "asm4": 22.9,
+   "go1": 171.1,
+   "go4": 84.6,
+   "gray1": 70.6,
+   "gray4": 37.6,
+   "native": 194.9
   },
   "noise4k_sub256": {
-   "agray1": 85.3,
-   "agray4": 47.9,
-   "asm1": 231.8,
-   "asm4": 133.8,
-   "go1": 851.0,
-   "go4": 440.6,
-   "gray1": 328.0,
-   "gray4": 178.1,
-   "native": 1191.5
+   "agray1": 77.9,
+   "agray4": 45.1,
+   "asm1": 218.7,
+   "asm4": 124.3,
+   "go1": 839.7,
+   "go4": 433.3,
+   "gray1": 329.5,
+   "gray4": 176.5,
+   "native": 1238.7
   },
   "noise640_alpha": {
-   "agray1": 3.6,
-   "agray4": 2.5,
-   "asm1": 12.5,
-   "asm4": 6.9,
-   "go1": 33.8,
-   "go4": 20.8,
-   "gray1": 10.7,
-   "gray4": 7.3,
-   "native": 29.0
+   "agray1": 2.9,
+   "agray4": 2.1,
+   "asm1": 9.7,
+   "asm4": 6.1,
+   "go1": 34.2,
+   "go4": 20.9,
+   "gray1": 10.9,
+   "gray4": 7.5,
+   "native": 30.4
   },
   "noise720p_sub96": {
-   "agray1": 9.7,
-   "agray4": 5.5,
-   "asm1": 26.7,
-   "asm4": 14.1,
-   "go1": 91.5,
-   "go4": 47.0,
-   "gray1": 36.0,
-   "gray4": 19.2,
-   "native": 116.1
+   "agray1": 8.1,
+   "agray4": 4.6,
+   "asm1": 22.7,
+   "asm4": 12.5,
+   "go1": 91.0,
+   "go4": 45.6,
+   "gray1": 35.4,
+   "gray4": 19.7,
+   "native": 121.2
   },
   "photo_baboon": {
-   "agray1": 2.7,
+   "agray1": 2.4,
    "agray4": 2.8,
-   "asm1": 7.5,
+   "asm1": 6.6,
    "asm4": 7.1,
-   "go1": 22.5,
-   "go4": 15.0,
-   "gray1": 8.9,
-   "gray4": 6.3,
-   "native": 32.4
+   "go1": 22.3,
+   "go4": 16.5,
+   "gray1": 9.0,
+   "gray4": 6.9,
+   "native": 33.3
   },
   "photo_building": {
-   "agray1": 5.8,
-   "agray4": 3.3,
-   "asm1": 16.2,
-   "asm4": 8.9,
-   "go1": 55.4,
-   "go4": 28.9,
-   "gray1": 21.2,
+   "agray1": 4.9,
+   "agray4": 2.8,
+   "asm1": 14.0,
+   "asm4": 7.9,
+   "go1": 54.5,
+   "go4": 28.5,
+   "gray1": 21.3,
    "gray4": 11.5,
-   "native": 74.1
+   "native": 76.3
   },
   "photo_fruits": {
-   "agray1": 2.5,
-   "agray4": 2.8,
-   "asm1": 7.1,
-   "asm4": 7.3,
-   "go1": 21.8,
-   "go4": 14.9,
+   "agray1": 2.3,
+   "agray4": 3.0,
+   "asm1": 6.4,
+   "asm4": 7.0,
+   "go1": 21.4,
+   "go4": 16.0,
    "gray1": 8.5,
-   "gray4": 6.1,
-   "native": 49.5
+   "gray4": 6.7,
+   "native": 51.4
   },
   "photo_graf1": {
-   "agray1": 5.5,
-   "agray4": 3.6,
-   "asm1": 15.7,
-   "asm4": 10.2,
-   "go1": 51.8,
-   "go4": 29.7,
-   "gray1": 19.5,
-   "gray4": 12.1,
-   "native": 89.3
+   "agray1": 4.9,
+   "agray4": 3.2,
+   "asm1": 14.0,
+   "asm4": 8.8,
+   "go1": 50.6,
+   "go4": 31.8,
+   "gray1": 20.1,
+   "gray4": 11.1,
+   "native": 91.6
   },
   "photo_starry_night": {
-   "agray1": 5.3,
-   "agray4": 3.6,
-   "asm1": 14.7,
-   "asm4": 10.0,
-   "go1": 48.3,
-   "go4": 29.9,
+   "agray1": 4.5,
+   "agray4": 3.4,
+   "asm1": 13.0,
+   "asm4": 9.0,
+   "go1": 47.7,
+   "go4": 29.4,
    "gray1": 18.2,
-   "gray4": 11.7,
-   "native": 64.4
+   "gray4": 11.1,
+   "native": 67.0
   },
   "window1600_button96x32": {
-   "agray1": 17.9,
-   "agray4": 9.3,
-   "asm1": 46.6,
-   "asm4": 23.5,
-   "go1": 155.8,
-   "go4": 79.1,
-   "gray1": 62.3,
+   "agray1": 15.0,
+   "agray4": 8.5,
+   "asm1": 41.5,
+   "asm4": 21.4,
+   "go1": 157.0,
+   "go4": 77.6,
+   "gray1": 62.7,
    "gray4": 33.3,
-   "native": 183.9
+   "native": 187.2
   },
   "window1600_icon24x24": {
-   "agray1": 17.1,
-   "agray4": 8.1,
-   "asm1": 42.1,
-   "asm4": 20.7,
-   "go1": 128.0,
-   "go4": 65.1,
-   "gray1": 53.2,
-   "gray4": 28.6,
-   "native": 149.4
+   "agray1": 13.4,
+   "agray4": 7.4,
+   "asm1": 35.9,
+   "asm4": 18.8,
+   "go1": 128.8,
+   "go4": 66.9,
+   "gray1": 54.7,
+   "gray4": 28.8,
+   "native": 150.1
   },
   "window1600_panel300x200": {
-   "agray1": 16.6,
-   "agray4": 10.8,
-   "asm1": 47.0,
-   "asm4": 30.3,
-   "go1": 160.0,
-   "go4": 87.3,
-   "gray1": 60.8,
-   "gray4": 34.2,
-   "native": 158.4
+   "agray1": 15.6,
+   "agray4": 10.7,
+   "asm1": 44.8,
+   "asm4": 29.8,
+   "go1": 161.5,
+   "go4": 89.0,
+   "gray1": 61.9,
+   "gray4": 36.3,
+   "native": 162.7
   },
   "window4k_button96x32": {
-   "agray1": 77.9,
-   "agray4": 38.6,
-   "asm1": 201.5,
-   "asm4": 104.3,
-   "go1": 744.4,
-   "go4": 374.9,
-   "gray1": 301.7,
-   "gray4": 158.8,
-   "native": 861.1
+   "agray1": 68.9,
+   "agray4": 33.4,
+   "asm1": 185.8,
+   "asm4": 93.3,
+   "go1": 733.0,
+   "go4": 363.6,
+   "gray1": 300.1,
+   "gray4": 159.2,
+   "native": 869.8
   }
  }
 }
