@@ -185,9 +185,14 @@ element-wise against a native OpenCV C++ binary.
 - Never write the literal skip-CI marker (bracketed `skip ci`) in commit
   messages — it suppresses all workflows on the PR. The bench-charts
   auto-commit uses it deliberately.
-- Measured numbers live only in auto-generated artifacts (charts, the
-  README benchmatrix block and its summary paragraph). Never hand-write
-  a measured value into prose — reference the generated block instead.
+- Measured numbers in the PUBLISHED STORY live only in auto-generated
+  artifacts (the README benchmatrix block and its summary paragraph) —
+  never hand-write a live performance claim into README prose;
+  reference the generated block instead. CLAUDE.md is the opposite
+  case by design: its history and verdict ledgers MUST pin the measured
+  basis of each decision (the determinism framework's ledger rule) —
+  those are frozen audit records of past A/Bs, not live claims, and
+  they do not go stale when the matrix refreshes.
 
 ## Measured-matrix pipeline
 
