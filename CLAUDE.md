@@ -54,8 +54,16 @@ specified op sequence shared by the scalar code and the asm kernels:
 - **Tolerance-budget ledger**: every merged deviation from OpenCV's op
   order records, in this file, what reorders, its worst-case bound, and
   the measured same-dump before/after delta; the running sum stays ≪ the
-  5% budget. (Ledger so far: none — the shipped pipeline is still
-  bit-identical to the recorded goldens.)
+  5% budget. Ledger:
+  - 7.1 argmin geometry (PR #18): tile DFT sizes differ from OpenCV's
+    block heuristic → different FFT rounding paths; measured same-dump
+    worst |Δ| ~2e-5.
+  - 7.3 normalize-f32 (PR #19): float32 normalization tail (exact-integer
+    cross/idiff unchanged); measured worst |Δ| 6.2e-4
+    (window4k_button96x32) — the current suite-wide worst.
+  - 7.4-lite last-band dftH shrink: only the FFT numerator reorders on
+    short last bands (guard chain untouched); affected-scene |Δ| ~5e-6,
+    suite worst unchanged.
 - **Golden constants change only via the deliberate re-record flow**
   (`make regolden`, Phase 7.0): native tolerance parity must pass BEFORE
   recording, the commit log carries a `Goldens:` reason trailer, and the
@@ -242,12 +250,15 @@ the ranges.
   tail; one NormRow kernel for every cn plus the SpillStats1 cn=1 spill
   kernel; reference A/B: Match native-normalized geomean +6.7%, improved
   14/14 scenes, gray flat within noise, purego +7%; per-cn stats caps
-  after a codex finding). Remaining program: 7.2 radix-4+FMA (still
-  gated on post-7.1 pprof share ≥70% AND owner sign-off on the purego
-  chart regression it implies) → 7.4 conditional per-edge-tile DFT
-  sizing. A no-record lever (deeper column-stage fusion, 16-row groups —
-  pure loop reorder, bit-identical under any contract) may be
-  prototyped at any time.
+  after a codex finding) and 7.4-lite last-band dftH shrink (the full
+  per-edge-tile 7.4 was scoped down after an analytic scan showed the
+  7.1 argmin already absorbs edge waste on 12/14 scenes; the shrunk
+  template spectrum is a free stride-2^s row gather of tspec ×2^s via
+  the exact decimation identity — the naive rebuild variant measured as
+  a LOSS on asm and was discarded). Remaining program: 7.2 radix-4+FMA
+  under the owner's full delegation (2026-07-26: "你可以都做对吧,你自己
+  决定。我只验收结果") with the decision rule: ship if reference asm
+  ≥+5% and purego ≥−15%, else fall back to the no-FMA radix-4 variant.
 
 - Phase 8: the owner deleted the arm64 NEON backend outright ("全面删除
   arm64 的汇编") — ~4.8k lines (generated stream + `_gen` clang/objdump
@@ -274,6 +285,20 @@ the ranges.
 - **rsqrt-approx**: REJECTED (breaks determinism) — estimate-instruction
   bits are vendor-defined even within amd64; sub-noise gain; the
   instructions are on the forbidden list above.
+- **column-FFT octet fusion (3 stages/sweep)**: PARKED PENDING 7.2
+  (PR #21, closed unmerged) — local 20x interleave said x1.030 geomean,
+  but the reference machines arbitrated it away: suite geomean
+  x0.995/x0.983 across two dispatch pairs, and the per-scene signal
+  split into a consistent 1080p-slab win (+3~9%) vs a consistent
+  4k-slab LOSS (−2~−5%) — the L3-vs-DRAM regime boundary that a fixed
+  `n·width·8 > 1MB` gate cannot encode portably (the same scenes
+  measured +7% on the local EPYC container: gate constants tuned
+  off-reference do not transfer). Retained: judge sweep-fusion again
+  only as a radix-4 epilogue after 7.2 lands, with a two-sided gate if
+  the reference machines still show column-pass dominance. Use the
+  purego columns of any dispatch-pair A/B as a null control — pair 2 of
+  this study showed +9~34% on byte-identical purego code and was
+  discarded.
 - **split-radix**: DEAD ON MERIT — ~6% FFT-op delta vs radix-4 is
   sub-noise end-to-end, for 2.5-3x kernel surface and a broken
   pass/barrier structure. Sits next to NTT: do not re-propose without

@@ -681,6 +681,46 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 			return ca > cb
 		})
 	}
+	// A short last row band whose loaded rows fit a smaller power of two
+	// gets its own transform height: same dftW and band geometry, half (or
+	// less) the column-FFT work on that band. The 7.1 argmin already
+	// absorbs edge waste into the uniform plan on most shapes — this
+	// catches the residual (two-band plans with a short tail, ~18% of the
+	// correlation model on the affected published scenes). The shrunk
+	// template spectrum costs no new transforms: the template's padded
+	// support (th+1 <= dftH2 rows) makes the decimation identity
+	// X_dftH[k<<s] = X_dftH2[k] exact per column, so it is the stride-2^s
+	// row gather of tspec times 2^s — an exact power-of-two multiply. The
+	// band's tiles run one fixed op sequence at dftH2, so output stays
+	// deterministic everywhere; scores move only within the tolerance
+	// contract (goldens re-recorded, parity gates prove the budget).
+	p2, tspec2 := p, tspec
+	lastY0 := ((rh - 1) / p.blockH) * p.blockH
+	if lastBh := rh - lastY0; lastY0 > 0 {
+		if dh2 := max(2, nextPow2(lastBh+th-1)); dh2 < p.dftH {
+			q := *p
+			q.dftH = dh2
+			tabH := fftTables(dh2)
+			q.twH, q.prH = tabH.tw, tabH.pairs
+			if dh2 == q.dftW {
+				q.twH, q.prH = q.twW, q.prW
+			}
+			p2 = &q
+			tspec2 = cplxPool.get(cn * dh2 * p.hw)
+			defer cplxPool.put(tspec2)
+			shift := bits.TrailingZeros(uint(p.dftH)) - bits.TrailingZeros(uint(dh2))
+			up := float32(int32(1) << shift)
+			for k := 0; k < cn; k++ {
+				for r := 0; r < dh2; r++ {
+					src := tspec[k*specN+(r<<shift)*p.hw:][:p.hw]
+					dst := tspec2[k*dh2*p.hw+r*p.hw:][:p.hw]
+					for x, v := range src {
+						dst[x] = complex(real(v)*up, imag(v)*up)
+					}
+				}
+			}
+		}
+	}
 	var next atomic.Int64
 	runParallel(nw, func(w int) {
 		spec := cplxPool.get(specN)
@@ -693,19 +733,24 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 			t := int(order[ti])
 			x0, y0 := (t%ntx)*p.blockW, (t/ntx)*p.blockH
 			bw, bh := min(p.blockW, rw-x0), min(p.blockH, rh-y0)
+			bp, bt := p, tspec
+			if y0 == lastY0 && p2 != p {
+				bp, bt = p2, tspec2
+			}
+			sn := bp.dftH * bp.hw
 			for k := 0; k < cn; k++ {
-				blockForwardGo(img[k:], istride, step, x0, y0, bw+tw-1, bh+th-1, p, spec, z, team)
-				ts := tspec[k*specN : (k+1)*specN]
+				blockForwardGo(img[k:], istride, step, x0, y0, bw+tw-1, bh+th-1, bp, spec, z, team)
+				ts := bt[k*sn : (k+1)*sn]
 				if team <= 1 {
-					mulConjGo(spec, ts)
+					mulConjGo(spec[:sn], ts)
 				} else {
 					runParallel(team, func(u int) {
-						lo := u * specN / team
-						hi := (u + 1) * specN / team
+						lo := u * sn / team
+						hi := (u + 1) * sn / team
 						mulConjGo(spec[lo:hi], ts[lo:hi])
 					})
 				}
-				blockInverseEmitGo(p, spec, z, result, rw, x0, y0, bw, bh, k > 0, team)
+				blockInverseEmitGo(bp, spec, z, result, rw, x0, y0, bw, bh, k > 0, team)
 			}
 		}
 		cplxPool.put(spec)
