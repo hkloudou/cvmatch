@@ -23,6 +23,10 @@ func FFTCols4(r0, r1, r2, r3 []complex64, w1, w2a, w2b complex64) {
 	panic("cvmatch: SIMD kernel on unsupported platform")
 }
 
+func FFTCols8(p *[8][]complex64, w1, w2a, w2b, w4a, w4b, w4c, w4d complex64) {
+	panic("cvmatch: SIMD kernel on unsupported platform")
+}
+
 func MulConj(spec, tspec []complex64) {
 	panic("cvmatch: SIMD kernel on unsupported platform")
 }

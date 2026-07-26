@@ -32,6 +32,18 @@ func FFTColsBfly(p, q []complex64, w complex64)
 //go:noescape
 func FFTCols4(r0, r1, r2, r3 []complex64, w1, w2a, w2b complex64)
 
+// FFTCols8 fuses three column-FFT stages over a closed octet of rows in
+// one memory pass: stage half pairs (0,1)(2,3)(4,5)(6,7) with w1; stage
+// 2*half pairs (0,2)(1,3)(4,6)(5,7) with w2a/w2b; stage 4*half pairs
+// (0,4)(1,5)(2,6)(3,7) with w4a..w4d. Each butterfly is the exact
+// FFTColsBfly op sequence and values stay in registers between stages
+// (the scalar path's intermediate stores are exact, so this changes
+// nothing). Rows share p[0]'s length; the kernel processes len&^3
+// elements and the caller finishes the remainder in Go.
+//
+//go:noescape
+func FFTCols8(p *[8][]complex64, w1, w2a, w2b, w4a, w4b, w4c, w4d complex64)
+
 // MulConj computes spec *= conj(tspec) element-wise.
 //
 //go:noescape

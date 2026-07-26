@@ -165,6 +165,152 @@ done_cols:
 	VZEROUPPER
 	RET
 
+// func FFTCols8(p *[8][]complex64, w1, w2a, w2b, w4a, w4b, w4c, w4d complex64)
+// Three fused column-FFT stages on a closed row octet; each butterfly is
+// the exact FFTColsBfly sequence, values held in registers between the
+// stages. Processes len(p[0])&^3 elements (caller finishes the tail).
+// Register map (FFTCols8):
+//   R9=&p[0] header  DI,DX,BX,R8,R11,R12,R13,R14=row base pointers 0-7
+//   SI=len  CX=len&^3  R10=element index
+//   Y0-Y7=rows 0-7  Y8=w1r  Y9=w1i (persistent)
+//   Y12/Y13=current stage wr/wi (memory-broadcast per pair group)
+//   Y10=swap scratch  Y11=t1/Q*w
+TEXT ·FFTCols8(SB), NOSPLIT, $0-64
+	MOVQ p+0(FP), R9
+	MOVQ 0(R9), DI              // row 0 base
+	MOVQ 8(R9), SI              // len
+	MOVQ 24(R9), DX             // row 1
+	MOVQ 48(R9), BX             // row 2
+	MOVQ 72(R9), R8             // row 3
+	MOVQ 96(R9), R11            // row 4
+	MOVQ 120(R9), R12           // row 5
+	MOVQ 144(R9), R13           // row 6
+	MOVQ 168(R9), R14           // row 7
+	VBROADCASTSS w1_real+8(FP), Y8
+	VBROADCASTSS w1_imag+12(FP), Y9
+	MOVQ SI, CX
+	ANDQ $-4, CX
+	XORQ R10, R10
+	CMPQ CX, $0
+	JEQ  c8_done
+
+c8_main:
+	VMOVUPS (DI)(R10*8), Y0
+	VMOVUPS (DX)(R10*8), Y1
+	VMOVUPS (BX)(R10*8), Y2
+	VMOVUPS (R8)(R10*8), Y3
+	VMOVUPS (R11)(R10*8), Y4
+	VMOVUPS (R12)(R10*8), Y5
+	VMOVUPS (R13)(R10*8), Y6
+	VMOVUPS (R14)(R10*8), Y7
+
+	// stage 1 (w1): (0,1) (2,3) (4,5) (6,7)
+	VPERMILPS $0xB1, Y1, Y10
+	VMULPS    Y8, Y1, Y11
+	VMULPS    Y9, Y10, Y10
+	VADDSUBPS Y10, Y11, Y11     // Y1*w1
+	VSUBPS    Y11, Y0, Y1
+	VADDPS    Y11, Y0, Y0
+	VPERMILPS $0xB1, Y3, Y10
+	VMULPS    Y8, Y3, Y11
+	VMULPS    Y9, Y10, Y10
+	VADDSUBPS Y10, Y11, Y11
+	VSUBPS    Y11, Y2, Y3
+	VADDPS    Y11, Y2, Y2
+	VPERMILPS $0xB1, Y5, Y10
+	VMULPS    Y8, Y5, Y11
+	VMULPS    Y9, Y10, Y10
+	VADDSUBPS Y10, Y11, Y11
+	VSUBPS    Y11, Y4, Y5
+	VADDPS    Y11, Y4, Y4
+	VPERMILPS $0xB1, Y7, Y10
+	VMULPS    Y8, Y7, Y11
+	VMULPS    Y9, Y10, Y10
+	VADDSUBPS Y10, Y11, Y11
+	VSUBPS    Y11, Y6, Y7
+	VADDPS    Y11, Y6, Y6
+
+	// stage 2 (w2a): (0,2) (4,6)
+	VBROADCASTSS w2a_real+16(FP), Y12
+	VBROADCASTSS w2a_imag+20(FP), Y13
+	VPERMILPS $0xB1, Y2, Y10
+	VMULPS    Y12, Y2, Y11
+	VMULPS    Y13, Y10, Y10
+	VADDSUBPS Y10, Y11, Y11
+	VSUBPS    Y11, Y0, Y2
+	VADDPS    Y11, Y0, Y0
+	VPERMILPS $0xB1, Y6, Y10
+	VMULPS    Y12, Y6, Y11
+	VMULPS    Y13, Y10, Y10
+	VADDSUBPS Y10, Y11, Y11
+	VSUBPS    Y11, Y4, Y6
+	VADDPS    Y11, Y4, Y4
+	// stage 2 (w2b): (1,3) (5,7)
+	VBROADCASTSS w2b_real+24(FP), Y12
+	VBROADCASTSS w2b_imag+28(FP), Y13
+	VPERMILPS $0xB1, Y3, Y10
+	VMULPS    Y12, Y3, Y11
+	VMULPS    Y13, Y10, Y10
+	VADDSUBPS Y10, Y11, Y11
+	VSUBPS    Y11, Y1, Y3
+	VADDPS    Y11, Y1, Y1
+	VPERMILPS $0xB1, Y7, Y10
+	VMULPS    Y12, Y7, Y11
+	VMULPS    Y13, Y10, Y10
+	VADDSUBPS Y10, Y11, Y11
+	VSUBPS    Y11, Y5, Y7
+	VADDPS    Y11, Y5, Y5
+
+	// stage 3: (0,4) w4a, (1,5) w4b, (2,6) w4c, (3,7) w4d
+	VBROADCASTSS w4a_real+32(FP), Y12
+	VBROADCASTSS w4a_imag+36(FP), Y13
+	VPERMILPS $0xB1, Y4, Y10
+	VMULPS    Y12, Y4, Y11
+	VMULPS    Y13, Y10, Y10
+	VADDSUBPS Y10, Y11, Y11
+	VSUBPS    Y11, Y0, Y4
+	VADDPS    Y11, Y0, Y0
+	VBROADCASTSS w4b_real+40(FP), Y12
+	VBROADCASTSS w4b_imag+44(FP), Y13
+	VPERMILPS $0xB1, Y5, Y10
+	VMULPS    Y12, Y5, Y11
+	VMULPS    Y13, Y10, Y10
+	VADDSUBPS Y10, Y11, Y11
+	VSUBPS    Y11, Y1, Y5
+	VADDPS    Y11, Y1, Y1
+	VBROADCASTSS w4c_real+48(FP), Y12
+	VBROADCASTSS w4c_imag+52(FP), Y13
+	VPERMILPS $0xB1, Y6, Y10
+	VMULPS    Y12, Y6, Y11
+	VMULPS    Y13, Y10, Y10
+	VADDSUBPS Y10, Y11, Y11
+	VSUBPS    Y11, Y2, Y6
+	VADDPS    Y11, Y2, Y2
+	VBROADCASTSS w4d_real+56(FP), Y12
+	VBROADCASTSS w4d_imag+60(FP), Y13
+	VPERMILPS $0xB1, Y7, Y10
+	VMULPS    Y12, Y7, Y11
+	VMULPS    Y13, Y10, Y10
+	VADDSUBPS Y10, Y11, Y11
+	VSUBPS    Y11, Y3, Y7
+	VADDPS    Y11, Y3, Y3
+
+	VMOVUPS Y0, (DI)(R10*8)
+	VMOVUPS Y1, (DX)(R10*8)
+	VMOVUPS Y2, (BX)(R10*8)
+	VMOVUPS Y3, (R8)(R10*8)
+	VMOVUPS Y4, (R11)(R10*8)
+	VMOVUPS Y5, (R12)(R10*8)
+	VMOVUPS Y6, (R13)(R10*8)
+	VMOVUPS Y7, (R14)(R10*8)
+	ADDQ    $4, R10
+	CMPQ    R10, CX
+	JLT     c8_main
+
+c8_done:
+	VZEROUPPER
+	RET
+
 // func FFTCols4(r0, r1, r2, r3 []complex64, w1, w2a, w2b complex64)
 // Two fused column-FFT stages on a closed row quad; each butterfly is the
 // exact FFTColsBfly sequence, values held in registers between stages.

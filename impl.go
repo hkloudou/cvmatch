@@ -307,12 +307,26 @@ func fftColsGo(d []complex64, n, width int, tw []complex64, pairs []int32, inver
 		copy(ri, rj)
 		copy(rj, tmp[:width])
 	}
-	// Fused stage pairs: rows {i+j, +half, +2half, +3half} are closed
-	// under stages half and 2*half, so each pass streams the matrix once
-	// instead of twice. Butterfly order within a quad follows the stage
-	// order, so results are bit-identical — in the kernels and in the
-	// register-chained scalar loop alike.
+	// Fused stage groups: rows {r, +half, ..., +7*half} are closed under
+	// stages half, 2*half and 4*half, so an octet pass streams the matrix
+	// once instead of three times (quads once instead of twice). Each
+	// element's butterfly chain is the exact stage-order op sequence, so
+	// results are bit-identical to single-stage passes — in the kernels
+	// and in the register-chained scalar loops alike; the octet/quad
+	// choice is a pure function of (n, width), so every platform picks
+	// the same passes. Octets engage only where they pay: with the AVX2
+	// kernel (the scalar octet spills 8 live values and loses) and only
+	// once the spectrum outgrows L2 (~1 MB) — at n=512 that is 3 sweeps
+	// of a DRAM-bound slab instead of 5; smaller slabs are cache-resident
+	// and the extra per-iteration twiddle broadcasts would cost more than
+	// the saved traffic (measured both ways on the 20x A/B).
 	half := 1
+	if simd.Enabled && n*width*8 > 1<<20 {
+		for ; half*4 < n; half *= 8 {
+			h := half
+			colRange(team, width, func(c0, c1 int) { fftColsPass8(d, n, width, tw, inverse, h, c0, c1) })
+		}
+	}
 	for ; half*2 < n; half *= 4 {
 		h := half
 		colRange(team, width, func(c0, c1 int) { fftColsPass4(d, n, width, tw, inverse, h, c0, c1) })
@@ -336,6 +350,52 @@ func colRange(team, width int, fn func(c0, c1 int)) {
 			fn(c0, c1)
 		}
 	})
+}
+
+// fftColsPass8 applies the fused stage triple (half, 2*half, 4*half) to
+// columns [c0, c1) of every affected row octet: one memory sweep, three
+// stages, values register-chained between stages exactly as the separate
+// passes would compute them.
+func fftColsPass8(d []complex64, n, width int, tw []complex64, inverse bool, half, c0, c1 int) {
+	for i := 0; i < n; i += half * 8 {
+		for j := 0; j < half; j++ {
+			w1r, w1i := twdir(tw[half+j], inverse)
+			w2ar, w2ai := twdir(tw[2*half+j], inverse)
+			w2br, w2bi := twdir(tw[2*half+j+half], inverse)
+			w4ar, w4ai := twdir(tw[4*half+j], inverse)
+			w4br, w4bi := twdir(tw[4*half+j+half], inverse)
+			w4cr, w4ci := twdir(tw[4*half+j+2*half], inverse)
+			w4dr, w4di := twdir(tw[4*half+j+3*half], inverse)
+			r := i + j
+			var p [8][]complex64
+			for k := range p {
+				p[k] = d[(r+k*half)*width+c0 : (r+k*half)*width+c1]
+			}
+			ci := 0
+			if simd.Enabled {
+				simd.FFTCols8(&p,
+					complex(w1r, w1i), complex(w2ar, w2ai), complex(w2br, w2bi),
+					complex(w4ar, w4ai), complex(w4br, w4bi), complex(w4cr, w4ci), complex(w4dr, w4di))
+				ci = len(p[0]) &^ 3 // kernel covered these; finish the tail
+			}
+			for c := ci; c < len(p[0]); c++ {
+				x0, x1 := bflyV(p[0][c], p[1][c], w1r, w1i)
+				x2, x3 := bflyV(p[2][c], p[3][c], w1r, w1i)
+				x4, x5 := bflyV(p[4][c], p[5][c], w1r, w1i)
+				x6, x7 := bflyV(p[6][c], p[7][c], w1r, w1i)
+				x0, x2 = bflyV(x0, x2, w2ar, w2ai)
+				x1, x3 = bflyV(x1, x3, w2br, w2bi)
+				x4, x6 = bflyV(x4, x6, w2ar, w2ai)
+				x5, x7 = bflyV(x5, x7, w2br, w2bi)
+				x0, x4 = bflyV(x0, x4, w4ar, w4ai)
+				x1, x5 = bflyV(x1, x5, w4br, w4bi)
+				x2, x6 = bflyV(x2, x6, w4cr, w4ci)
+				x3, x7 = bflyV(x3, x7, w4dr, w4di)
+				p[0][c], p[1][c], p[2][c], p[3][c] = x0, x1, x2, x3
+				p[4][c], p[5][c], p[6][c], p[7][c] = x4, x5, x6, x7
+			}
+		}
+	}
 }
 
 // fftColsPass4 applies the fused stage pair (half, 2*half) to columns
