@@ -12,13 +12,15 @@ modes, selected by one global tag:
   measured scene). Every other architecture — arm64 included — runs the
   scalar Go code automatically; plain cross-compilation just works.
 - **`-tags purego`** (the community-standard tag): opts out of all
-  assembly — 100% high-level Go, nothing hand-written to audit, for
-  auditability-sensitive deployments. On amd64 — the only architecture
-  with kernels — it costs the auto-refreshed range in the
-  [measured summary](#the-full-matrix-measured); everywhere else both
-  builds compile the same scalar code, so the tag is free. Output is
-  bit-identical to the default build, asserted by the test suite in
-  both modes.
+  assembly — 100% high-level Go. This build is the **algorithm-level
+  comparison against native OpenCV**: it is exactly what every
+  non-amd64 platform runs, and its vs-native range in the
+  [measured summary](#the-full-matrix-measured) shows what the
+  algorithm alone buys before any assembly. On amd64 it also doubles as
+  the audit-friendly opt-out, costing the summary's asm-vs-no-asm range
+  — that same range is the standing proof that the amd64 assembly layer
+  is worth carrying. Output is bit-identical to the default build,
+  asserted by the test suite in both modes.
 
 Output is pinned two ways. Element-wise against **native OpenCV C++** on
 every CI run — see [Accuracy](#accuracy-cvmatch-vs-native-c) for the
