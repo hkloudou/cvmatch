@@ -15,11 +15,11 @@ func FFTStages(a []complex64, tw []complex64, inverse bool) {
 	panic("cvmatch: SIMD kernel on unsupported platform")
 }
 
-func FFTColsBfly(p, q []complex64, w complex64) {
+func FFTColsR4(r0, r1, r2, r3 []complex64, w1, w2, w3 complex64, inverse bool) {
 	panic("cvmatch: SIMD kernel on unsupported platform")
 }
 
-func FFTCols4(r0, r1, r2, r3 []complex64, w1, w2a, w2b complex64) {
+func FFTColsHead(p, q []complex64) {
 	panic("cvmatch: SIMD kernel on unsupported platform")
 }
 

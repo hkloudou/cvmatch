@@ -64,6 +64,11 @@ specified op sequence shared by the scalar code and the asm kernels:
   - 7.4-lite last-band dftH shrink: only the FFT numerator reorders on
     short last bands (guard chain untouched); affected-scene |Δ| ~5e-6,
     suite worst unchanged.
+  - 7.2a radix-4 columns: every column FFT reorders (radix-4 butterflies,
+    odd stage moved to a twiddle-free bottom head); measured same-dump
+    suite worst IMPROVED 6.2e-4 → 4.7e-4 (window scenes; the 7.3 f32
+    tail still dominates the drift, the FFT contribution stays ~1e-5
+    class).
 - **Golden constants change only via the deliberate re-record flow**
   (`make regolden`, Phase 7.0): native tolerance parity must pass BEFORE
   recording, the commit log carries a `Goldens:` reason trailer, and the
@@ -255,10 +260,19 @@ the ranges.
   7.1 argmin already absorbs edge waste on 12/14 scenes; the shrunk
   template spectrum is a free stride-2^s row gather of tspec ×2^s via
   the exact decimation identity — the naive rebuild variant measured as
-  a LOSS on asm and was discarded). Remaining program: 7.2 radix-4+FMA
-  under the owner's full delegation (2026-07-26: "你可以都做对吧,你自己
-  决定。我只验收结果") with the decision rule: ship if reference asm
-  ≥+5% and purego ≥−15%, else fall back to the no-FMA radix-4 variant.
+  a LOSS on asm and was discarded) and 7.2a radix-4 columns under the
+  owner's full delegation (2026-07-26: "你可以都做对吧,你自己决定。我只
+  验收结果"): the FMA leg died on day one (fma-in-pipeline in the
+  verdict ledger), so the column passes run the no-FMA radix-4 engine
+  (colsR4Go + FFTColsR4/FFTColsHead kernels; the retired radix-2 column
+  passes and their FFTCols4/FFTColsBfly kernels were deleted). The odd
+  stage moved to a twiddle-free bottom head. Local interleaved 20x e2e:
+  asm geomean +2.2% (no scene regressed), purego +5.2% (uniform) — the
+  purego win is also arm64's. Rows stay on the radix-2 fftGo/FFTStages
+  pair: 7.2b (row flip to fftR4, which already exists in-tree) is the
+  remaining optional leg, to be judged the same way after 7.2a's
+  reference verdict; re-judge sweep-fusion (PR #21 PARKED) only after
+  that.
 
 - Phase 8: the owner deleted the arm64 NEON backend outright ("全面删除
   arm64 的汇编") — ~4.8k lines (generated stream + `_gen` clang/objdump
@@ -271,9 +285,16 @@ the ranges.
 
 ## Phase 7 design-study verdict ledger (adjudicated 2026-07-17)
 
-- **fma-everywhere**: PARKED (subsumed) — radix-4 ships the same FMA
-  payload in one golden re-record; the `fma32` round-to-odd helper +
-  directed tests are harvested as 7.2's first commit.
+- **fma-everywhere / fma-in-pipeline**: DEAD BY SCALAR COST (measured
+  2026-07-26) — hardware f32 FMA in asm forces the correctly-rounded
+  fma32 scalar twin into the purego/arm64 leg (self-determinism), and
+  the radix-4+fma32 scalar measured **3.8x slower** than the plain
+  radix-4 scalar (27.4µs vs 5.7µs at n=512 1-D; fma32 is ~10 sequenced
+  f64 ops per fusion). No asm gain can buy back a 3-4x purego FFT
+  regression under the owner's two-build positioning. The fma32 helper
+  + oracle tests stay in-tree (commit be911ae) as the framework's
+  reference implementation should the contract ever change. Same kill
+  class as NTT: do not re-propose absent new math.
 - **direct-int-corr**: PARKED (no demonstrated workload) — correctness
   clean, but 0% on the published suite (the smallest bench template,
   24x24, already loses to the AVX2 FFT baseline by its own arithmetic);

@@ -175,18 +175,41 @@ var (
 )
 
 type fftTab struct {
-	tw    []complex64
+	n     int
+	tw    []complex64 // radix-2 rows; lazily built on uncached sizes
+	tri   []complex64 // radix-4 column triplets; lazily built on uncached sizes
 	pairs []int32
+}
+
+// rowTw and colTri return the requested twiddle family. Cached sizes
+// build both families eagerly under the cache lock (immutable once
+// published, safe to share); sizes above 4096 return per-call structs
+// that fill only the family actually read — plans are built on a single
+// goroutine before any fan-out, so the lazy fill needs no lock. This
+// keeps rectangular plans from building a family an axis never uses
+// (codex P2, PR #23).
+func (t *fftTab) rowTw() []complex64 {
+	if t.tw == nil {
+		t.tw = makeTwiddles(t.n)
+	}
+	return t.tw
+}
+
+func (t *fftTab) colTri() []complex64 {
+	if t.tri == nil {
+		t.tri = makeTriTwiddles(t.n)
+	}
+	return t.tri
 }
 
 func fftTables(n int) *fftTab {
 	if n > 4096 {
-		return &fftTab{makeTwiddles(n), makeSwapPairs(n)}
+		return &fftTab{n: n, pairs: makeSwapPairs(n)}
 	}
 	fftTabMu.Lock()
 	t := fftTabs[n]
 	if t == nil {
-		t = &fftTab{makeTwiddles(n), makeSwapPairs(n)}
+		t = &fftTab{n: n, tw: makeTwiddles(n), tri: makeTriTwiddles(n), pairs: makeSwapPairs(n)}
 		fftTabs[n] = t
 	}
 	fftTabMu.Unlock()
@@ -292,37 +315,6 @@ func fftGo(a []complex64, tw []complex64, pairs []int32, inverse bool) {
 	}
 }
 
-// fftColsGo transforms the columns of a row-major [n x width] array; the
-// butterfly inner loop runs across contiguous row elements. With team > 1
-// each stage pass splits the width across workers — butterflies mix rows,
-// never columns, so width chunks are fully independent within a pass and
-// the per-element arithmetic is unchanged (runParallel is the barrier
-// between passes).
-func fftColsGo(d []complex64, n, width int, tw []complex64, pairs []int32, inverse bool, tmp []complex64, team int) {
-	for k := 0; k+1 < len(pairs); k += 2 {
-		i, j := int(pairs[k]), int(pairs[k+1])
-		ri := d[i*width : i*width+width]
-		rj := d[j*width : j*width+width]
-		copy(tmp[:width], ri)
-		copy(ri, rj)
-		copy(rj, tmp[:width])
-	}
-	// Fused stage pairs: rows {i+j, +half, +2half, +3half} are closed
-	// under stages half and 2*half, so each pass streams the matrix once
-	// instead of twice. Butterfly order within a quad follows the stage
-	// order, so results are bit-identical — in the kernels and in the
-	// register-chained scalar loop alike.
-	half := 1
-	for ; half*2 < n; half *= 4 {
-		h := half
-		colRange(team, width, func(c0, c1 int) { fftColsPass4(d, n, width, tw, inverse, h, c0, c1) })
-	}
-	for ; half < n; half <<= 1 {
-		h := half
-		colRange(team, width, func(c0, c1 int) { fftColsPass2(d, n, width, tw, inverse, h, c0, c1) })
-	}
-}
-
 // colRange runs fn over the whole width, or splits it across a worker team
 // (runParallel doubles as the barrier between column-FFT passes).
 func colRange(team, width int, fn func(c0, c1 int)) {
@@ -338,59 +330,13 @@ func colRange(team, width int, fn func(c0, c1 int)) {
 	})
 }
 
-// fftColsPass4 applies the fused stage pair (half, 2*half) to columns
-// [c0, c1) of every affected row group.
-func fftColsPass4(d []complex64, n, width int, tw []complex64, inverse bool, half, c0, c1 int) {
-	for i := 0; i < n; i += half * 4 {
-		for j := 0; j < half; j++ {
-			w1r, w1i := twdir(tw[half+j], inverse)
-			w2ar, w2ai := twdir(tw[2*half+j], inverse)
-			w2br, w2bi := twdir(tw[3*half+j], inverse)
-			r := i + j
-			p0 := d[r*width+c0 : r*width+c1]
-			p1 := d[(r+half)*width+c0 : (r+half)*width+c1]
-			p2 := d[(r+half*2)*width+c0 : (r+half*2)*width+c1]
-			p3 := d[(r+half*3)*width+c0 : (r+half*3)*width+c1]
-			if simd.Enabled {
-				simd.FFTCols4(p0, p1, p2, p3,
-					complex(w1r, w1i), complex(w2ar, w2ai), complex(w2br, w2bi))
-				continue
-			}
-			for c := range p0 {
-				x0, x1 := bflyV(p0[c], p1[c], w1r, w1i)
-				x2, x3 := bflyV(p2[c], p3[c], w1r, w1i)
-				x0, x2 = bflyV(x0, x2, w2ar, w2ai)
-				x1, x3 = bflyV(x1, x3, w2br, w2bi)
-				p0[c], p1[c], p2[c], p3[c] = x0, x1, x2, x3
-			}
-		}
-	}
-}
-
-// fftColsPass2 applies one single stage to columns [c0, c1).
-func fftColsPass2(d []complex64, n, width int, tw []complex64, inverse bool, half, c0, c1 int) {
-	for i := 0; i < n; i += half << 1 {
-		for j := 0; j < half; j++ {
-			wr, wi := twdir(tw[half+j], inverse)
-			p := d[(i+j)*width+c0 : (i+j)*width+c1]
-			q := d[(i+j+half)*width+c0 : (i+j+half)*width+c1]
-			if simd.Enabled {
-				simd.FFTColsBfly(p, q, complex(wr, wi))
-				continue
-			}
-			for c := range p {
-				bfly(&p[c], &q[c], wr, wi)
-			}
-		}
-	}
-}
-
 // -------------------------------------------------------- FFT plan/blocks --
 
 type goPlan struct {
 	dftW, dftH, hw int
 	blockW, blockH int
-	twW, twH       []complex64
+	twW            []complex64 // radix-2 row engine (dftW)
+	triH           []complex64 // radix-4 column engine (dftH)
 	prW, prH       []int32
 }
 
@@ -446,13 +392,12 @@ func newGoPlan(tw, th, rw, rh int) *goPlan {
 		p.blockH = rh
 	}
 	tabW := fftTables(dftW)
-	p.twW, p.prW = tabW.tw, tabW.pairs
-	if dftH == dftW {
-		p.twH, p.prH = p.twW, p.prW
-	} else {
-		tabH := fftTables(dftH)
-		p.twH, p.prH = tabH.tw, tabH.pairs
+	p.twW, p.prW = tabW.rowTw(), tabW.pairs
+	tabH := tabW
+	if dftH != dftW {
+		tabH = fftTables(dftH)
 	}
+	p.triH, p.prH = tabH.colTri(), tabH.pairs
 	return p
 }
 
@@ -526,7 +471,7 @@ func blockForwardGo(chanBase []uint8, stride, step, x0, y0, loadW, loadH int, p 
 			}
 		})
 	}
-	fftColsGo(spec, p.dftH, hw, p.twH, p.prH, false, z, team)
+	colsR4Go(spec, p.dftH, hw, p.triH, p.prH, false, z, team)
 }
 
 func mulConjGo(spec, tspec []complex64) {
@@ -597,7 +542,7 @@ func inverseRowPair(p *goPlan, spec, z []complex64, res []float32, rw, x0, y0, b
 }
 
 func blockInverseEmitGo(p *goPlan, spec, z []complex64, res []float32, rw, x0, y0, bw, bh int, add bool, team int) {
-	fftColsGo(spec, p.dftH, p.hw, p.twH, p.prH, true, z, team)
+	colsR4Go(spec, p.dftH, p.hw, p.triH, p.prH, true, z, team)
 	if team <= 1 {
 		for r := 0; r < bh; r += 2 {
 			inverseRowPair(p, spec, z, res, rw, x0, y0, bw, bh, add, r)
@@ -701,10 +646,7 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 			q := *p
 			q.dftH = dh2
 			tabH := fftTables(dh2)
-			q.twH, q.prH = tabH.tw, tabH.pairs
-			if dh2 == q.dftW {
-				q.twH, q.prH = q.twW, q.prW
-			}
+			q.triH, q.prH = tabH.colTri(), tabH.pairs
 			p2 = &q
 			tspec2 = cplxPool.get(cn * dh2 * p.hw)
 			defer cplxPool.put(tspec2)
