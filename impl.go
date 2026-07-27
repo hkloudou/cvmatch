@@ -132,6 +132,12 @@ func sincospiFrac(j, half int) (float32, float32) {
 	return float32(c), float32(s)
 }
 
+// asmTeamCost is the in-tile team engagement bar for the asm build, in
+// units of the plan cost model times the channel count: between baboon
+// (75M, 4T flat-to-negative with teams) and noise640_alpha (140M, the
+// smallest measured multi-thread winner), with margin on both sides.
+const asmTeamCost = 100_000_000
+
 // makeBitrev builds the bit-reversal table (an involution) and the
 // compacted swap list (i, brev[i]) with i < brev[i]. The row FFTs apply
 // the pairs as physical element swaps inside their scratch row; the
@@ -224,6 +230,7 @@ type goPlan struct {
 	triW, triH     []complex64 // radix-4 stage triplets (dftW rows, dftH columns)
 	prW            []int32     // row swap pairs (applied inside the scratch row)
 	brevH          []int32     // column slot map: spec row r lives at slot brevH[r]
+	cost           int64       // the winning geometry's per-channel model cost
 }
 
 // newGoPlan picks the DFT tile geometry by an integer cost-model argmin
@@ -268,7 +275,7 @@ func newGoPlan(tw, th, rw, rh int) *goPlan {
 		}
 	}
 	dftW, dftH := bestW, bestH
-	p := &goPlan{dftW: dftW, dftH: dftH, hw: dftW/2 + 1}
+	p := &goPlan{dftW: dftW, dftH: dftH, hw: dftW/2 + 1, cost: bestCost}
 	p.blockW = dftW - tw + 1
 	if p.blockW > rw {
 		p.blockW = rw
@@ -464,8 +471,21 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 	// Tiny blocks cannot amortize a per-pass fan-out (a 20x20 match
 	// regressed ~3x when it fanned out unconditionally — codex finding on
 	// PR #13), so team parallelism only engages when the spectrum carries
-	// real work.
+	// real work. The asm build additionally gates on the plan's own
+	// integer cost model: in-tile teams pay a barrier per pass, and below
+	// ~100M model ops the kernels clear the whole scene in a few ms where
+	// that price exceeds the win (reference matrix: fruits 72M was −10%
+	// at 4T, baboon 75M flat, while every ≥140M scene gains; purego runs
+	// ~4x the compute per barrier and keeps its win on the same scenes,
+	// so its bar stays specN alone). Shape-only and deterministic — the
+	// threads tests pin bit-identical output for every worker count.
+	// cost == -1 means every argmin candidate overflowed areaCap (huge
+	// template): such plans sit far above any team threshold by
+	// construction, so they stay eligible (codex finding, PR #29).
 	teamOK := specN >= 1<<16
+	if simd.Enabled && p.cost >= 0 && int64(cn)*p.cost < asmTeamCost {
+		teamOK = false
+	}
 	tspec := cplxPool.get(cn * specN)
 	// Template spectra: the channels are disjoint, and within one channel
 	// the team path and the chunked scale partition elementwise work — all
