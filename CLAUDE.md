@@ -375,6 +375,28 @@ the ranges.
   the full-map native parity gates and paritystat reach the maps only
   through the public API) and a ~25-line wrapper over the same core.
 
+- Phase 11 (owner decision 2026-07-28, workload: hundreds of sub
+  images hunted across a screen stream): **prepared-template Matcher
+  API** — NewMatcher/NewGrayMatcher cache the sub-side state (private
+  pixel copy, exact stats, and per parent geometry the plan + scaled
+  template spectrum via the extracted buildTSpecSet; crossCorrGo now
+  consumes a prebuilt tspecSet, pure code motion for the one-shot
+  paths — goldens unchanged). Find is bit-identical to Match/MatchGray
+  by test on every scene (repeat/geometry-change/concurrent/flat
+  cases; stats cached at cn=4 are provably equivalent for every
+  Find-time cn since constant alpha contributes zero variance).
+  Measured per-shape savings (prep-cost probe + e2e interleave):
+  button/icon-on-screen 1-5%, panel-class ~10% probe → **16.1% e2e**
+  (57.6→48.4ms), photo-class 17% probe → **21.5% e2e** (7.5→5.9ms) —
+  e2e beats the probe because Find also drops the per-call template
+  copy/stats/plan/alpha-of-sub. Cached spectrum costs cn·specN
+  complex64 per matcher (~1.5MB for an icon on 1600×1000) — documented,
+  owner accepted for the hundreds-of-matchers fleet. PARKED follow-up
+  (11.2, needs owner opt-in): batched Find sharing the parent spectrum
+  across same-plan matchers — with hundreds of templates over a
+  handful of plan geometries the parent forward FFT (~40% of a call)
+  amortizes across the fleet, est. ~30-40% off the batch total.
+
 ## Phase 7 design-study verdict ledger (adjudicated 2026-07-17)
 
 - **fma-everywhere / fma-in-pipeline**: DEAD BY SCALAR COST (measured

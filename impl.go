@@ -463,36 +463,76 @@ func blockInverseEmitGo(p *goPlan, spec, z []complex64, res []float32, rw, x0, y
 	})
 }
 
-// crossCorrGo runs the tile-parallel raw cross-correlation. Each tile owns a
-// disjoint result region and runs every channel in order, so per-element
-// arithmetic is identical for any worker count.
-func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, th, rw, rh, threads int, p *goPlan, result []float32) {
-	specN := p.dftH * p.hw
-	// Tiny blocks cannot amortize a per-pass fan-out (a 20x20 match
-	// regressed ~3x when it fanned out unconditionally — codex finding on
-	// PR #13), so team parallelism only engages when the spectrum carries
-	// real work. The asm build additionally gates on the plan's own
-	// integer cost model: in-tile teams pay a barrier per pass, and below
-	// ~100M model ops the kernels clear the whole scene in a few ms where
-	// that price exceeds the win (reference matrix: fruits 72M was −10%
-	// at 4T, baboon 75M flat, while every ≥140M scene gains; purego runs
-	// ~4x the compute per barrier and keeps its win on the same scenes,
-	// so its bar stays specN alone). Shape-only and deterministic — the
-	// threads tests pin bit-identical output for every worker count.
-	// cost == -1 means every argmin candidate overflowed areaCap (huge
-	// template): such plans sit far above any team threshold by
-	// construction, so they stay eligible (codex finding, PR #29).
-	teamOK := specN >= 1<<16
-	if simd.Enabled && p.cost >= 0 && int64(cn)*p.cost < asmTeamCost {
-		teamOK = false
+// teamEligible reports whether team parallelism may engage for this
+// plan. Tiny blocks cannot amortize a per-pass fan-out (a 20x20 match
+// regressed ~3x when it fanned out unconditionally — codex finding on
+// PR #13), so teams only engage when the spectrum carries real work.
+// The asm build additionally gates on the plan's own integer cost
+// model: in-tile teams pay a barrier per pass, and below ~100M model
+// ops the kernels clear the whole scene in a few ms where that price
+// exceeds the win (reference matrix: fruits 72M was −10% at 4T, baboon
+// 75M flat, while every ≥140M scene gains; purego runs ~4x the compute
+// per barrier and keeps its win on the same scenes, so its bar stays
+// specN alone). Shape-only and deterministic — the threads tests pin
+// bit-identical output for every worker count. cost == -1 means every
+// argmin candidate overflowed areaCap (huge template): such plans sit
+// far above any team threshold by construction, so they stay eligible
+// (codex finding, PR #29).
+func teamEligible(p *goPlan, cn int) bool {
+	if p.dftH*p.hw < 1<<16 {
+		return false
 	}
-	tspec := cplxPool.get(cn * specN)
+	if simd.Enabled && p.cost >= 0 && int64(cn)*p.cost < asmTeamCost {
+		return false
+	}
+	return true
+}
+
+// tspecSet is the template side of one correlation: the scaled template
+// spectrum on p's geometry, plus — when a short last row band shrinks
+// to a smaller transform height (7.4-lite) — the derived plan and
+// spectrum for that band. Built by buildTSpecSet, consumed by
+// crossCorrGo; the Matcher API caches one per parent geometry, the
+// one-shot entrypoints build a pooled one per call.
+type tspecSet struct {
+	spec   []complex64
+	p2     *goPlan     // nil: no shrunk last band
+	spec2  []complex64 // nil unless p2 != nil
+	pooled bool
+}
+
+func (s *tspecSet) release() {
+	if s.pooled {
+		cplxPool.put(s.spec)
+		if s.spec2 != nil {
+			cplxPool.put(s.spec2)
+		}
+	}
+}
+
+// buildTSpecSet computes the template spectra for plan p — exactly the
+// op sequence the correlation always ran (channel-parallel forward
+// blocks, chunked scale, then the exact stride-2^s gather for a shrunk
+// last band), factored out so prepared templates can reuse the result
+// across calls. Deterministic and channel-order fixed for any thread
+// count; pooled selects pooled scratch (one-shot calls) vs owned
+// allocations (long-lived Matcher cache).
+func buildTSpecSet(tpl []uint8, tstride, step, cn, tw, th, rh, threads int, p *goPlan, pooled bool) *tspecSet {
+	specN := p.dftH * p.hw
+	alloc := func(n int) []complex64 {
+		if pooled {
+			return cplxPool.get(n)
+		}
+		return make([]complex64, n)
+	}
+	set := &tspecSet{spec: alloc(cn * specN), pooled: pooled}
+	tspec := set.spec
 	// Template spectra: the channels are disjoint, and within one channel
 	// the team path and the chunked scale partition elementwise work — all
 	// pure scheduling, per-element arithmetic unchanged.
 	tcw := min(threads, cn)
 	tteam := 1
-	if teamOK {
+	if teamEligible(p, cn) {
 		tteam = threads / tcw
 	}
 	runParallel(tcw, func(w int) {
@@ -514,6 +554,52 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 			})
 		}
 	})
+	// A short last row band whose loaded rows fit a smaller power of two
+	// gets its own transform height: same dftW and band geometry, half (or
+	// less) the column-FFT work on that band. The 7.1 argmin already
+	// absorbs edge waste into the uniform plan on most shapes — this
+	// catches the residual (two-band plans with a short tail, ~18% of the
+	// correlation model on the affected published scenes). The shrunk
+	// template spectrum costs no new transforms: the template's padded
+	// support (th+1 <= dftH2 rows) makes the decimation identity
+	// X_dftH[k<<s] = X_dftH2[k] exact per column, so it is the stride-2^s
+	// row gather of tspec times 2^s — an exact power-of-two multiply. The
+	// band's tiles run one fixed op sequence at dftH2, so output stays
+	// deterministic everywhere; scores move only within the tolerance
+	// contract (goldens re-recorded, parity gates prove the budget).
+	lastY0 := ((rh - 1) / p.blockH) * p.blockH
+	if lastBh := rh - lastY0; lastY0 > 0 {
+		if dh2 := max(2, nextPow2(lastBh+th-1)); dh2 < p.dftH {
+			q := *p
+			q.dftH = dh2
+			tabH := fftTables(dh2)
+			q.triH, q.brevH = tabH.tri(), tabH.brev
+			set.p2 = &q
+			set.spec2 = alloc(cn * dh2 * p.hw)
+			shift := bits.TrailingZeros(uint(p.dftH)) - bits.TrailingZeros(uint(dh2))
+			up := float32(int32(1) << shift)
+			for k := 0; k < cn; k++ {
+				for r := 0; r < dh2; r++ {
+					src := tspec[k*specN+(r<<shift)*p.hw:][:p.hw]
+					dst := set.spec2[k*dh2*p.hw+r*p.hw:][:p.hw]
+					for x, v := range src {
+						dst[x] = complex(real(v)*up, imag(v)*up)
+					}
+				}
+			}
+		}
+	}
+	return set
+}
+
+// crossCorrGo runs the tile-parallel raw cross-correlation against a
+// prebuilt template-spectrum set. Each tile owns a disjoint result
+// region and runs every channel in order, so per-element arithmetic is
+// identical for any worker count.
+func crossCorrGo(img []uint8, istride, step, cn, tw, th, rw, rh, threads int, p *goPlan, set *tspecSet, result []float32) {
+	specN := p.dftH * p.hw
+	teamOK := teamEligible(p, cn)
+	tspec := set.spec
 	ntx := (rw + p.blockW - 1) / p.blockW
 	nty := (rh + p.blockH - 1) / p.blockH
 	ntiles := ntx * nty
@@ -546,43 +632,11 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 			return ca > cb
 		})
 	}
-	// A short last row band whose loaded rows fit a smaller power of two
-	// gets its own transform height: same dftW and band geometry, half (or
-	// less) the column-FFT work on that band. The 7.1 argmin already
-	// absorbs edge waste into the uniform plan on most shapes — this
-	// catches the residual (two-band plans with a short tail, ~18% of the
-	// correlation model on the affected published scenes). The shrunk
-	// template spectrum costs no new transforms: the template's padded
-	// support (th+1 <= dftH2 rows) makes the decimation identity
-	// X_dftH[k<<s] = X_dftH2[k] exact per column, so it is the stride-2^s
-	// row gather of tspec times 2^s — an exact power-of-two multiply. The
-	// band's tiles run one fixed op sequence at dftH2, so output stays
-	// deterministic everywhere; scores move only within the tolerance
-	// contract (goldens re-recorded, parity gates prove the budget).
 	p2, tspec2 := p, tspec
-	lastY0 := ((rh - 1) / p.blockH) * p.blockH
-	if lastBh := rh - lastY0; lastY0 > 0 {
-		if dh2 := max(2, nextPow2(lastBh+th-1)); dh2 < p.dftH {
-			q := *p
-			q.dftH = dh2
-			tabH := fftTables(dh2)
-			q.triH, q.brevH = tabH.tri(), tabH.brev
-			p2 = &q
-			tspec2 = cplxPool.get(cn * dh2 * p.hw)
-			defer cplxPool.put(tspec2)
-			shift := bits.TrailingZeros(uint(p.dftH)) - bits.TrailingZeros(uint(dh2))
-			up := float32(int32(1) << shift)
-			for k := 0; k < cn; k++ {
-				for r := 0; r < dh2; r++ {
-					src := tspec[k*specN+(r<<shift)*p.hw:][:p.hw]
-					dst := tspec2[k*dh2*p.hw+r*p.hw:][:p.hw]
-					for x, v := range src {
-						dst[x] = complex(real(v)*up, imag(v)*up)
-					}
-				}
-			}
-		}
+	if set.p2 != nil {
+		p2, tspec2 = set.p2, set.spec2
 	}
+	lastY0 := ((rh - 1) / p.blockH) * p.blockH
 	var next atomic.Int64
 	runParallel(nw, func(w int) {
 		spec := cplxPool.get(specN)
@@ -619,7 +673,6 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 		cplxPool.put(z)
 	})
 	i32Pool.put(order)
-	cplxPool.put(tspec)
 }
 
 // ------------------------------------------------- normalization + scan --
@@ -1078,6 +1131,8 @@ func matchU8(img []uint8, istride, iw, ih int, tpl []uint8, tstride, tw, th, cn,
 		defer f32Pool.put(res)
 	}
 	p := newGoPlan(tw, th, rw, rh)
-	crossCorrGo(img, istride, tpl, tstride, step, cn, tw, th, rw, rh, threads, p, res)
+	set := buildTSpecSet(tpl, tstride, step, cn, tw, th, rh, threads, p, true)
+	crossCorrGo(img, istride, step, cn, tw, th, rw, rh, threads, p, set, res)
+	set.release()
 	return normalizeParallelGo(img, istride, iw, tw, th, cn, step, rw, rh, threads, &tsum, varSum, res, res)
 }
