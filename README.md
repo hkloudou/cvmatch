@@ -46,6 +46,13 @@ minVal, minX, minY, maxVal, maxX, maxY = cvmatch.MatchGray(parent, sub)
 
 // Full response map (find every occurrence above a threshold):
 resp, w, h := cvmatch.MatchMap(parent, sub)
+
+// Searching the same template repeatedly (a fixed button/icon hunted
+// across a screenshot stream)? Prepare it once — Find caches the
+// template's statistics, FFT plan and spectrum, and returns exactly
+// Match's tuple, bit for bit:
+m := cvmatch.NewMatcher(sub) // or NewGrayMatcher for the gray path
+minVal, minX, minY, maxVal, maxX, maxY = m.Find(parent)
 ```
 
 `Match` panics if an image is empty or `sub` is larger than `parent`
@@ -438,10 +445,11 @@ variable.
 
 ## Recipe: describing a window (one frame, many ROIs, many templates)
 
-The building blocks already compose — no dedicated API needed. Convert the
-frame to gray **once**, take zero-copy `SubImage` views per ROI, and each ROI
-may check any number of expected templates (pre-convert templates to gray
-once at startup; they are reused every frame):
+The building blocks compose. Convert the frame to gray **once**, take
+zero-copy `SubImage` views per ROI, and give each expected template a
+prepared `Matcher` at startup: `Find` skips the per-call template
+preparation (statistics, FFT plan, spectrum — cached after the first
+frame for a stable ROI size) and returns `MatchGray`'s exact tuple:
 
 ```go
 // once per frame (~7 ms at 1080p when the screenshot is RGBA;
@@ -451,17 +459,17 @@ draw.Draw(gray, gray.Bounds(), frame, frame.Bounds().Min, draw.Src)
 
 type expect struct {
 	name string
-	tpl  image.Image // pre-converted gray, reused across frames
+	m    *cvmatch.Matcher // cvmatch.NewGrayMatcher(tpl), built at startup
 }
 groups := map[image.Rectangle][]expect{
-	okArea:   {{"ok", okTpl}, {"ok_disabled", okDisabledTpl}},
-	trayArea: {{"wifi", wifiTpl}, {"muted", mutedTpl}},
+	okArea:   {{"ok", okM}, {"ok_disabled", okDisabledM}},
+	trayArea: {{"wifi", wifiM}, {"muted", mutedM}},
 }
 
 for roi, expects := range groups {
 	view := gray.SubImage(roi) // zero-copy view; search cost ~ ROI area
 	for _, e := range expects {
-		_, _, _, score, x, y := cvmatch.MatchGray(view, e.tpl)
+		_, _, _, score, x, y := e.m.Find(view)
 		if score >= 0.95 {
 			fmt.Printf("%s at (%d,%d) score=%.3f\n",
 				e.name, roi.Min.X+x, roi.Min.Y+y, score) // frame coords
