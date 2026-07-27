@@ -384,9 +384,10 @@ the ranges.
   radix-4 scalar (27.4µs vs 5.7µs at n=512 1-D; fma32 is ~10 sequenced
   f64 ops per fusion). No asm gain can buy back a 3-4x purego FFT
   regression under the owner's two-build positioning. The fma32 helper
-  + oracle tests stay in-tree (commit be911ae) as the framework's
-  reference implementation should the contract ever change. Same kill
-  class as NTT: do not re-propose absent new math.
+  + oracle tests were deleted in the v1.2.1 prune (owner directive);
+  the reference implementation lives in history at commit be911ae
+  should the contract ever change. Same kill class as NTT: do not
+  re-propose absent new math.
 - **direct-int-corr**: PARKED (no demonstrated workload) — correctness
   clean, but 0% on the published suite (the smallest bench template,
   24x24, already loses to the AVX2 FFT baseline by its own arithmetic);

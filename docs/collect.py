@@ -260,9 +260,9 @@ def main():
     data.pop("hostArm64", None)
     scenes = data.setdefault("scenes", {})
 
-    def put_go(path, match_key, gray_key, suffix):
+    def put_go(path, match_key, gray_key):
         for (kind, scene, cpus), ms in parse_go_bench(path).items():
-            key = (match_key if kind == "Match" else gray_key) + suffix + str(cpus)
+            key = (match_key if kind == "Match" else gray_key) + str(cpus)
             scenes.setdefault(scene, {})[key] = round(ms, 1)
 
     if args.native:
@@ -272,9 +272,9 @@ def main():
         for scene, ms in ngray.items():
             scenes.setdefault(scene, {})["ngray"] = round(ms, 1)
     if args.asm:
-        put_go(args.asm, "asm", "agray", "")
+        put_go(args.asm, "asm", "agray")
     if args.go:
-        put_go(args.go, "go", "gray", "")
+        put_go(args.go, "go", "gray")
     if args.mem:
         mem = parse_mem(args.mem)
         for k_src, k_dst in (("baseline", "baseline"), ("cvmatch", "match"), ("gray", "gray")):
