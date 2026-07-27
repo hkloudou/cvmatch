@@ -176,9 +176,10 @@ def matrix_markdown(data):
             "",
             f"Gray like-for-like (1T vs 1T): the asm build beats native gray by",
             f"{min(rg1):.1f}–{max(rg1):.1f}x. In the production shape — cvmatch threaded, native",
-            f"single-threaded as it ships — asm at 4T holds {min(rg4):.1f}–{max(rg4):.1f}x, and even",
-            f"the no-asm build at 4T (every non-amd64 platform) holds",
-            f"{min(rgo4):.1f}–{max(rgo4):.1f}x over single-threaded native gray.",
+            f"single-threaded as it ships — asm at 4T holds {min(rg4):.1f}–{max(rg4):.1f}x, and the",
+            f"no-asm build at 4T — the same scalar path every non-amd64 platform",
+            f"runs, measured here on amd64 — holds {min(rgo4):.1f}–{max(rgo4):.1f}x over",
+            "single-threaded native gray.",
         ]
     else:
         g = sc.get("noise1080p_sub128", {})
