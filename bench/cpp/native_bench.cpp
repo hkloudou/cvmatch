@@ -95,6 +95,10 @@ int main(int argc, char **argv) {
     return 0;
   }
 
+  // The published contract is single-threaded native (matchTemplate does
+  // not thread, but cvtColor's parallel_for would — codex finding, PR
+  // #28): pin the global pool so the label is enforced, not assumed.
+  cv::setNumThreads(1);
   printf("threads=%d  iters=%d  (times are best-of runs, ms)\n", cv::getNumThreads(), iters);
   printf("%-28s %12s %12s   %s\n", "scene", "end-to-end", "core-only", "check");
 
@@ -148,6 +152,40 @@ int main(int argc, char **argv) {
            bestFull, bestCore, !check ? "-- " : ok ? "OK " : "BAD", maxLoc.x,
            maxLoc.y, maxVal);
     if (!ok) return 1;
+
+    // Gray baseline, the production call shape: cvtColor both images to
+    // 8-bit gray (BT.601, OpenCV's own fixed-point weights — the
+    // conversion MatchGray mirrors) and match single-channel, end-to-end
+    // per call. Unlike the color loop there is NO RGBA clone: MatchGray
+    // converts straight from the caller's frame without copying it
+    // first (codex finding, PR #28), and cvtColor only reads the
+    // wrapped buffer. The line format ("gray:" prefix, one ms field) is
+    // what docs/collect.py parses into the matrix's native gray column;
+    // the location check is informational only — a designed scene could
+    // legitimately tie differently once color is collapsed — so it
+    // never fails the run.
+    double bestGray = 1e30;
+    cv::Point gLoc;
+    double gVal = 0;
+    for (int it = 0; it < iters + 1; it++) {
+      double t0 = now_ms();
+      cv::Mat p4(pi.h, pi.w, CV_8UC4, pi.pix.data());
+      cv::Mat s4(si.h, si.w, CV_8UC4, si.pix.data());
+      cv::Mat pg, sg;
+      cv::cvtColor(p4, pg, cv::COLOR_RGBA2GRAY);
+      cv::cvtColor(s4, sg, cv::COLOR_RGBA2GRAY);
+      cv::Mat gres;
+      cv::matchTemplate(pg, sg, gres, cv::TM_CCOEFF_NORMED);
+      double mn;
+      cv::Point mnl;
+      cv::minMaxLoc(gres, &mn, &gVal, &mnl, &gLoc);
+      double dt = now_ms() - t0;
+      if (it > 0 && dt < bestGray) bestGray = dt;
+    }
+    bool gok = !check || (gLoc.x == px && gLoc.y == py && gVal > 0.99);
+    printf("gray:%-24s %9.1f ms   %s (%d,%d) max=%.6f\n", name.c_str(),
+           bestGray, !check ? "-- " : gok ? "OK " : "BAD", gLoc.x, gLoc.y,
+           gVal);
   }
   return 0;
 }

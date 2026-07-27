@@ -32,7 +32,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Everything matrix_markdown reads; carried-over keys outside this
 # vocabulary (e.g. from retired implementations) are pruned on every run.
-SCENE_KEYS = {"native",
+SCENE_KEYS = {"native", "ngray",
               "asm1", "asm4", "go1", "go4", "agray1", "agray4", "gray1", "gray4"}
 MEM_KEYS = {"native", "match", "gray", "baseline"}
 
@@ -52,14 +52,20 @@ def parse_go_bench(path):
 
 
 def parse_native(path):
-    """scene <best> ms <core> ms ... -> {scene: end_to_end_ms}"""
-    out = {}
+    """scene <best> ms <core> ms -> color e2e; gray:scene <best> ms -> gray
+    e2e. Returns ({scene: ms}, {scene: gray_ms})."""
+    out, gray = {}, {}
     rx = re.compile(r"^(\w+)\s+([\d.]+) ms\s+([\d.]+) ms")
+    rg = re.compile(r"^gray:(\w+)\s+([\d.]+) ms")
     for line in open(path):
         m = rx.match(line)
         if m:
             out[m.group(1)] = float(m.group(2))
-    return out
+            continue
+        m = rg.match(line)
+        if m:
+            gray[m.group(1)] = float(m.group(2))
+    return out, gray
 
 
 def parse_mem(path):
@@ -141,16 +147,50 @@ def matrix_markdown(data):
         fmt.append(f"{w:.1e}" if w is not None else "—")
         lines.append(f"| {label} | " + " | ".join(fmt) + " |")
 
-    g = sc.get("noise1080p_sub128", {})
-    if all(k in g for k in ("agray1", "agray4", "gray1", "gray4")):
+    gkeys = ("ngray", "agray1", "agray4", "gray1", "gray4")
+    grows = [(key, label) for key, label in LAYOUT
+             if sc.get(key) and all(k in sc[key] for k in gkeys)]
+    if grows:
         lines += [
             "",
-            f"`MatchGray` at 1080p/128 for scale: asm {g['agray1']:.1f} / {g['agray4']:.1f} ms,",
-            f"no-asm {g['gray1']:.1f} / {g['gray4']:.1f} ms (1T / 4T). Native C++ has no gray",
-            "row in this suite — a fair baseline would need cvtColor + 1-channel",
-            "matchTemplate timed end-to-end, which was not measured; treat MatchGray",
-            "numbers as cvmatch-internal.",
+            "`MatchGray`, milliseconds — the production call shape (convert to",
+            "gray once per call, match single-channel). The native column is",
+            "the same end-to-end shape in C++: cvtColor(RGBA→GRAY, BT.601) on",
+            "both images + 1-channel matchTemplate + minMaxLoc, single-threaded.",
+            "",
+            "| scene | native gray C++ | asm 1T | asm 4T | no-asm 1T | no-asm 4T |",
+            "|---|---|---|---|---|---|",
         ]
+        for key, label in grows:
+            s = sc[key]
+            cells = [s[k] for k in gkeys[1:]]
+            best = min(cells)
+            fmt = [f"{s['ngray']:.1f}"]
+            fmt += [f"**{v:.1f}**" if v == best else f"{v:.1f}" for v in cells]
+            lines.append(f"| {label} | " + " | ".join(fmt) + " |")
+        gs = [sc[key] for key, _ in grows]
+        rg1 = [s["ngray"] / s["agray1"] for s in gs]
+        rg4 = [s["ngray"] / s["agray4"] for s in gs]
+        rgo4 = [s["ngray"] / s["gray4"] for s in gs]
+        lines += [
+            "",
+            f"Gray like-for-like (1T vs 1T): the asm build beats native gray by",
+            f"{min(rg1):.1f}–{max(rg1):.1f}x. In the production shape — cvmatch threaded, native",
+            f"single-threaded as it ships — asm at 4T holds {min(rg4):.1f}–{max(rg4):.1f}x, and the",
+            f"no-asm build at 4T — the same scalar path every non-amd64 platform",
+            f"runs, measured here on amd64 — holds {min(rgo4):.1f}–{max(rgo4):.1f}x over",
+            "single-threaded native gray.",
+        ]
+    else:
+        g = sc.get("noise1080p_sub128", {})
+        if all(k in g for k in ("agray1", "agray4", "gray1", "gray4")):
+            lines += [
+                "",
+                f"`MatchGray` at 1080p/128 for scale: asm {g['agray1']:.1f} / {g['agray4']:.1f} ms,",
+                f"no-asm {g['gray1']:.1f} / {g['gray4']:.1f} ms (1T / 4T). Native C++ has no gray",
+                "row in this refresh — the gray baseline column appears once a",
+                "run with the gray-enabled native harness publishes.",
+            ]
     # Derived claims, regenerated with the data so prose never goes stale.
     # Only scenes carrying all three contenders feed the like-for-like
     # ranges, so a partial re-measurement can never mix scene sets.
@@ -226,8 +266,11 @@ def main():
             scenes.setdefault(scene, {})[key] = round(ms, 1)
 
     if args.native:
-        for scene, ms in parse_native(args.native).items():
+        nat, ngray = parse_native(args.native)
+        for scene, ms in nat.items():
             scenes.setdefault(scene, {})["native"] = round(ms, 1)
+        for scene, ms in ngray.items():
+            scenes.setdefault(scene, {})["ngray"] = round(ms, 1)
     if args.asm:
         put_go(args.asm, "asm", "agray", "")
     if args.go:
