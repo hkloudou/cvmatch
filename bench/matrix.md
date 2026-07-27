@@ -15,33 +15,56 @@ native (element gate 1e-3).
 
 | scene | native C++ | asm 1T | asm 4T | no-asm 1T | no-asm 4T | max\|Δ\| |
 |---|---|---|---|---|---|---|
-| Window 1600×1000 · button 96×32 | 184.2 | 37.7 | **18.1** | 145.4 | 74.0 | 4.7e-04 |
-| Window 1600×1000 · icon 24×24 | 150.2 | 38.6 | **18.6** | 123.2 | 66.7 | 7.3e-05 |
-| Window 1600×1000 · panel 300×200 | 159.0 | 37.3 | **24.7** | 148.1 | 82.5 | 2.0e-05 |
-| Noise 1280×720 · sub 96×96 | 115.6 | 21.6 | **11.4** | 84.1 | 43.7 | 2.2e-06 |
-| Noise 1920×1080 · sub 128×128 | 278.7 | 46.8 | **26.1** | 186.8 | 96.9 | 2.0e-06 |
-| Noise 1920×1080 · sub 32×32 | 195.1 | 40.4 | **19.7** | 160.3 | 81.6 | 3.1e-06 |
-| Noise 640×480 · varying alpha, 4ch | 28.3 | 10.4 | **5.8** | 32.9 | 20.5 | 1.7e-06 |
-| Window 3840×2160 · button 96×32 | 863.7 | 157.9 | **76.6** | 688.7 | 349.5 | 5.5e-04 |
-| Noise 3840×2160 · sub 256×256 | 1186.0 | 181.0 | **99.9** | 783.5 | 410.0 | 2.2e-06 |
-| fruits 512×480 · sub 80×80 | 49.5 | **5.3** | 5.8 | 19.6 | 13.9 | 1.8e-05 |
-| baboon 512×512 · sub 64×64 | 31.5 | **5.5** | 6.2 | 20.5 | 14.1 | 1.2e-05 |
-| building 868×600 · sub 100×100 | 73.6 | 13.5 | **7.1** | 51.1 | 27.6 | 5.4e-05 |
-| graf1 800×640 · sub 120×120 | 89.2 | 12.7 | **8.0** | 47.1 | 29.4 | 4.1e-06 |
-| starry_night 752×600 · sub 128×128 | 64.2 | 12.4 | **8.6** | 44.4 | 29.0 | 4.8e-06 |
+| Window 1600×1000 · button 96×32 | 181.4 | 38.1 | **18.4** | 144.2 | 73.8 | 4.7e-04 |
+| Window 1600×1000 · icon 24×24 | 147.8 | 38.9 | **18.1** | 123.0 | 63.9 | 7.3e-05 |
+| Window 1600×1000 · panel 300×200 | 158.4 | 37.3 | **24.9** | 149.6 | 82.1 | 2.0e-05 |
+| Noise 1280×720 · sub 96×96 | 115.1 | 21.7 | **11.2** | 84.3 | 43.7 | 2.2e-06 |
+| Noise 1920×1080 · sub 128×128 | 278.3 | 45.9 | **25.4** | 186.1 | 100.0 | 2.0e-06 |
+| Noise 1920×1080 · sub 32×32 | 195.9 | 41.5 | **19.7** | 161.8 | 81.3 | 3.1e-06 |
+| Noise 640×480 · varying alpha, 4ch | 28.0 | 10.3 | **5.7** | 32.3 | 20.0 | 1.7e-06 |
+| Window 3840×2160 · button 96×32 | 854.7 | 156.4 | **77.6** | 687.6 | 350.7 | 5.5e-04 |
+| Noise 3840×2160 · sub 256×256 | 1192.1 | 183.2 | **102.3** | 787.1 | 406.7 | 2.2e-06 |
+| fruits 512×480 · sub 80×80 | 48.8 | **5.3** | 6.0 | 19.5 | 13.8 | 1.8e-05 |
+| baboon 512×512 · sub 64×64 | 31.6 | **5.6** | 5.9 | 20.4 | 14.3 | 1.2e-05 |
+| building 868×600 · sub 100×100 | 73.4 | 13.5 | **7.0** | 51.7 | 27.8 | 5.4e-05 |
+| graf1 800×640 · sub 120×120 | 89.4 | 12.5 | **8.1** | 47.2 | 30.0 | 4.1e-06 |
+| starry_night 752×600 · sub 128×128 | 64.6 | 12.5 | **7.5** | 44.4 | 30.0 | 4.8e-06 |
 
-`MatchGray` at 1080p/128 for scale: asm 19.7 / 10.8 ms,
-no-asm 73.3 / 41.7 ms (1T / 4T). Native C++ has no gray
-row in this suite — a fair baseline would need cvtColor + 1-channel
-matchTemplate timed end-to-end, which was not measured; treat MatchGray
-numbers as cvmatch-internal.
+`MatchGray`, milliseconds — the production call shape (convert to
+gray once per call, match single-channel). The native column is
+the same end-to-end shape in C++: cvtColor(RGBA→GRAY, BT.601) on
+both images + 1-channel matchTemplate + minMaxLoc, single-threaded.
+
+| scene | native gray C++ | asm 1T | asm 4T | no-asm 1T | no-asm 4T |
+|---|---|---|---|---|---|
+| Window 1600×1000 · button 96×32 | 52.5 | 16.0 | **8.6** | 57.4 | 31.1 |
+| Window 1600×1000 · icon 24×24 | 44.1 | 16.5 | **8.2** | 51.1 | 28.3 |
+| Window 1600×1000 · panel 300×200 | 41.8 | 14.9 | **9.8** | 56.3 | 32.8 |
+| Noise 1280×720 · sub 96×96 | 31.5 | 8.8 | **4.7** | 32.9 | 18.8 |
+| Noise 1920×1080 · sub 128×128 | 74.5 | 19.2 | **11.1** | 73.3 | 42.4 |
+| Noise 1920×1080 · sub 32×32 | 54.7 | 18.6 | **9.0** | 66.4 | 37.2 |
+| Noise 640×480 · varying alpha, 4ch | 8.0 | 3.3 | **2.2** | 10.2 | 7.3 |
+| Window 3840×2160 · button 96×32 | 242.4 | 71.5 | **33.9** | 279.9 | 151.2 |
+| Noise 3840×2160 · sub 256×256 | 322.5 | 75.8 | **40.9** | 317.3 | 166.8 |
+| fruits 512×480 · sub 80×80 | 12.9 | **2.2** | 2.4 | 7.7 | 5.9 |
+| baboon 512×512 · sub 64×64 | 8.7 | **2.3** | 2.4 | 8.2 | 5.9 |
+| building 868×600 · sub 100×100 | 19.8 | 5.3 | **3.0** | 20.1 | 10.9 |
+| graf1 800×640 · sub 120×120 | 23.6 | 4.9 | **3.4** | 18.1 | 11.4 |
+| starry_night 752×600 · sub 128×128 | 17.2 | 4.6 | **3.3** | 16.8 | 10.8 |
+
+Gray like-for-like (1T vs 1T): the asm build beats native gray by
+2.4–5.9x. In the production shape — cvmatch threaded, native
+single-threaded as it ships — asm at 4T holds 3.6–7.9x, and the
+no-asm build at 4T — the same scalar path every non-amd64 platform
+runs, measured here on amd64 — holds 1.1–2.2x over
+single-threaded native gray.
 
 **Measured summary (single-threaded, like-for-like):** the default asm
-build beats native OpenCV C++ by 2.7–9.3x and runs
-3.2–4.4x faster than the -tags purego build — the
+build beats native OpenCV C++ by 2.7–9.2x and runs
+3.1–4.4x faster than the -tags purego build — the
 proof that the amd64 assembly layer earns its keep. The no-asm build
 is the algorithm-only comparison (what every non-amd64 platform
-runs): 0.86–2.53x vs native on the same scenes.
+runs): 0.87–2.50x vs native on the same scenes.
 
 Internal multi-threading (4 workers, bit-identical output at any worker
 count) further improves cvmatch by up to 2.1x on the multi-tile
