@@ -391,11 +391,25 @@ the ranges.
   e2e beats the probe because Find also drops the per-call template
   copy/stats/plan/alpha-of-sub. Cached spectrum costs cn·specN
   complex64 per matcher (~1.5MB for an icon on 1600×1000) — documented,
-  owner accepted for the hundreds-of-matchers fleet. PARKED follow-up
-  (11.2, needs owner opt-in): batched Find sharing the parent spectrum
-  across same-plan matchers — with hundreds of templates over a
-  handful of plan geometries the parent forward FFT (~40% of a call)
-  amortizes across the fleet, est. ~30-40% off the batch total.
+  owner accepted for the hundreds-of-matchers fleet. **11.2 Fleet**
+  (owner-approved "收益很高"): NewFleet(ms...) + FindAll(parent) —
+  parent converted/alpha-scanned once, every tile's forward spectrum
+  computed once into a pooled frame cache, members pay only their tail
+  (copy+MulConj+inverse+emit+normalize) on one shared geometry planned
+  at (twMax, thMax). Geometry lemma making it exact: interior tiles
+  emit blockW/blockH for every member and the LAST tile per axis emits
+  the member's own remaining extent — the shared loads' extra valid
+  width (twMax−tw_m) covers it precisely, no gaps, no overlap. The
+  7.4-lite band shrink is decided once from thMax (buildTSpecSet grew a
+  shrinkTH param; shrinkDH/shrinkInto extracted). Fleet outputs deviate
+  from solo Find only by the plan-change tolerance class (7.1 ledger);
+  a single-member fleet plans identically and is bit-identical (test
+  anchor over every scene), and outputs are pinned bit-identical across
+  thread counts, member order, repetition and concurrent FindAll.
+  Measured (this host, gray, window1600 desktop): 12-member batch
+  −29.9% vs solo Finds @4T, **100-member batch −43.7%** (334ms vs
+  593ms/frame) — the owner's stated scale, top of the estimate range.
+  Frame-cache memory = cnMax·Σtiles·specN·8B during FindAll (pooled).
 
 ## Phase 7 design-study verdict ledger (adjudicated 2026-07-17)
 
