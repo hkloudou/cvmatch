@@ -147,4 +147,3 @@ func fftR4Scalar(a []complex64, tri []complex64, inverse bool) {
 		}
 	}
 }
-
