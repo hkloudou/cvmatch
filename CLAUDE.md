@@ -159,10 +159,15 @@ element-wise against a native OpenCV C++ binary.
   compare absolute numbers across hosts; compare only within one run.
 - **1T numbers are the primary signal**; 4T on shared runners carries
   ±2-5% noise and shows outliers in both directions.
-- **Fairness: every vs-native claim is 1T vs 1T.** OpenCV's
-  matchTemplate is single-threaded, so charts and headline ratios never
-  compare cvmatch multi-thread numbers against it. Internal threading
-  stays in the product and is measured in the tables as its own fact.
+- **Fairness: every like-for-like vs-native claim is 1T vs 1T.**
+  OpenCV's matchTemplate is single-threaded, so headline ratios never
+  pass off cvmatch multi-thread numbers as like-for-like. ONE sanctioned
+  exception (owner directive, Phase 10): the generated
+  production-shape sentence compares threaded cvmatch against 1T native
+  gray and must always say so in the same breath ("cvmatch threaded,
+  native single-threaded as it ships") — disclosure is what makes it
+  fair. Internal threading otherwise stays in the tables as its own
+  fact.
 - **Ratios only compare within one session on one machine.** Even the
   scalar/asm ratio shifts between runner microarchitectures (XEON vs
   EPYC measured 3.3-3.9x vs 4.1-4.2x for identical code), so judging an
@@ -342,6 +347,33 @@ the ranges.
   value), and the memmove line is deleted outright by PR #27.
   Published headline after SpillStats4: beats native 3.8-10.2x, asm
   3.8-4.9x over purego (generated ranges, runner dependent).
+
+- Phase 10 (owner directive 2026-07-27: production reality is threaded
+  MatchGray against single-threaded native — measure and serve that
+  story): **10.1 native gray baseline** (PR #28): native_bench times
+  cvtColor+1-channel matchTemplate end-to-end per scene on `gray:`
+  lines; the matrix gains the full MatchGray table + generated
+  production claims. codex caught three real flaws pre-merge (RGBA
+  clones inflating the baseline, an unpinned thread pool — it really
+  was open at 4, setNumThreads(1) now enforces the 1T contract for all
+  rows — and a cross-platform overclaim in my generated sentence), all
+  fixed before merge; first published refresh: asm 4T 3.6-7.9x and
+  no-asm 4T 1.1-2.2x over native gray 1T, above 1.0 on all 14 scenes
+  even in the weakest configuration. **10.2 in-tile team cost gate**
+  (PR #29): asm keeps tiles serial below cn·plan-cost = 100M model ops
+  (bar between baboon 75M, measured 4T-negative with teams, and
+  noise640 140M, the smallest multi-thread winner; purego keeps its
+  specN bar — 4x compute per barrier still amortizes there; over-cap
+  fallback plans carry cost −1 and stay eligible, codex finding).
+  Judged on within-run 4T/1T ratios (same binary, same runner — the
+  precise instrument for scheduling-only changes; the pair's cross-leg
+  null failed x1.341 and was irrelevant to it): fruits flipped 1.078 →
+  0.917, baboon 1.087 → 1.039, every multi-tile scene and all purego
+  ratios unchanged-or-better, reproduced on three independent hosts.
+  **MatchMap kept** by owner decision after review: it is the
+  verification backbone (the bench module is a separate Go module, so
+  the full-map native parity gates and paritystat reach the maps only
+  through the public API) and a ~25-line wrapper over the same core.
 
 ## Phase 7 design-study verdict ledger (adjudicated 2026-07-17)
 
