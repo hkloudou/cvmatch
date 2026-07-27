@@ -23,14 +23,14 @@ import (
 // on. Memory per cached geometry is cn·dftH·(dftW/2+1) complex64s —
 // roughly the size of one padded FFT tile per channel.
 type Matcher struct {
-	pix     []uint8 // private compact copy (stride = w*step)
-	w, h    int
-	step    int // 4: RGBA (Match semantics), 1: gray (MatchGray semantics)
-	aConst  bool
-	tsum    [4]int64
-	varSum  int64
-	mu      sync.Mutex
-	geom    atomic.Pointer[matcherGeom]
+	pix    []uint8 // private compact copy (stride = w*step)
+	w, h   int
+	step   int // 4: RGBA (Match semantics), 1: gray (MatchGray semantics)
+	aConst bool
+	tsum   [4]int64
+	varSum int64
+	mu     sync.Mutex
+	geom   atomic.Pointer[matcherGeom]
 }
 
 type matcherGeom struct {
