@@ -479,8 +479,11 @@ func crossCorrGo(img []uint8, istride int, tpl []uint8, tstride, step, cn, tw, t
 	// ~4x the compute per barrier and keeps its win on the same scenes,
 	// so its bar stays specN alone). Shape-only and deterministic — the
 	// threads tests pin bit-identical output for every worker count.
+	// cost == -1 means every argmin candidate overflowed areaCap (huge
+	// template): such plans sit far above any team threshold by
+	// construction, so they stay eligible (codex finding, PR #29).
 	teamOK := specN >= 1<<16
-	if simd.Enabled && int64(cn)*p.cost < asmTeamCost {
+	if simd.Enabled && p.cost >= 0 && int64(cn)*p.cost < asmTeamCost {
 		teamOK = false
 	}
 	tspec := cplxPool.get(cn * specN)
