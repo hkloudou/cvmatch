@@ -229,3 +229,46 @@ func BenchmarkFleet(b *testing.B) {
 		}
 	})
 }
+
+// Flat members answer constant 1 without shaping the shared geometry
+// (a large blank template must not inflate everyone's transforms), and
+// an all-flat fleet returns without building anything.
+func TestFleetFlatMembers(t *testing.T) {
+	desk, subs, at := fleetScene(t)
+	flat := image.NewRGBA(image.Rect(0, 0, 400, 300)) // larger than every crop
+	for i := 0; i < len(flat.Pix); i += 4 {
+		flat.Pix[i], flat.Pix[i+1], flat.Pix[i+2], flat.Pix[i+3] = 30, 30, 30, 255
+	}
+	ms := []*cvmatch.Matcher{cvmatch.NewMatcher(flat), cvmatch.NewMatcher(subs[0]), cvmatch.NewMatcher(subs[1])}
+	got := cvmatch.NewFleet(ms...).FindAll(desk)
+	if (got[0] != cvmatch.Result{1, 0, 0, 1, 0, 0}) {
+		t.Fatalf("flat member: %+v", got[0])
+	}
+	for i := 1; i < 3; i++ {
+		_, _, _, _, sx, sy := ms[i].Find(desk)
+		if got[i].MaxX != sx || got[i].MaxY != sy {
+			t.Fatalf("member %d: fleet (%d,%d) vs solo (%d,%d) [crop at %v]",
+				i, got[i].MaxX, got[i].MaxY, sx, sy, at[i])
+		}
+	}
+	all := cvmatch.NewFleet(cvmatch.NewMatcher(flat)).FindAll(desk)
+	if (all[0] != cvmatch.Result{1, 0, 0, 1, 0, 0}) {
+		t.Fatalf("all-flat fleet: %+v", all[0])
+	}
+}
+
+// The fleet must keep a private copy of the member slice: mutating the
+// caller's slice after construction cannot desync the cached geometry.
+func TestFleetSliceIsolation(t *testing.T) {
+	desk, subs, _ := fleetScene(t)
+	ms := []*cvmatch.Matcher{cvmatch.NewGrayMatcher(subs[0]), cvmatch.NewGrayMatcher(subs[1])}
+	fl := cvmatch.NewFleet(ms...)
+	want := fl.FindAll(desk)
+	ms[0] = cvmatch.NewGrayMatcher(subs[3]) // caller swaps a member afterwards
+	got := fl.FindAll(desk)
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("member %d changed after caller slice mutation", i)
+		}
+	}
+}

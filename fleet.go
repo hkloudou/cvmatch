@@ -23,12 +23,17 @@ type Result struct {
 // shared frame-spectrum cache; each matcher then pays only its own
 // tail (conjugate multiply, inverse transform, emit, normalization,
 // extremum scan). All members share a single tile geometry planned for
-// the largest template, so per-member results can deviate from solo
-// Find at the usual plan-change tolerance (~1e-5 score class, same
-// contract as the tile argmin itself); a single-member fleet plans
-// identically to Find and reproduces it bit for bit. For a fixed
-// parent size the shared plan and every member's spectrum build once,
-// on the first frame.
+// the largest non-flat template, so per-member results can deviate
+// from solo Find at the usual plan-change tolerance (~1e-5 score
+// class, same contract as the tile argmin itself). One consequence,
+// exactly as with any plan change: when the parent contains EXACT
+// repeats of a template, the mathematically tied maxima are separated
+// only by FFT rounding noise, so the fleet may report a different —
+// equally valid — occurrence than solo Find; within one fleet the
+// choice is deterministic. A single-member fleet plans identically to
+// Find and reproduces it bit for bit. For a fixed parent size the
+// shared plan and every member's spectrum build once, on the first
+// frame.
 //
 // FindAll is safe for concurrent use. Frame-cache memory during a call
 // is cnMax·Σ_tiles·specN complex64s (on the order of the padded parent
@@ -44,10 +49,11 @@ type Fleet struct {
 
 type fleetGeom struct {
 	pw, ph int
-	pConst bool // parent alpha constant (color mode)
-	p      *goPlan
+	pConst bool    // parent alpha constant (color mode)
+	p      *goPlan // shared tile geometry (twMax, thMax)
+	p2     *goPlan // shrunk last-band plan, nil when the band keeps dftH
 	cns    []int
-	sets   []*tspecSet
+	sets   []*tspecSet // nil for flat members (they never correlate)
 	cnMax  int
 }
 
@@ -58,13 +64,22 @@ func NewFleet(ms ...*Matcher) *Fleet {
 	if len(ms) == 0 {
 		panic("cvmatch: empty fleet")
 	}
-	f := &Fleet{ms: ms, step: ms[0].step}
-	for _, m := range ms {
+	// Private copy: a caller spreading its own slice could otherwise
+	// swap members after construction, desyncing the cached geometry
+	// (codex finding, PR #34).
+	f := &Fleet{ms: append([]*Matcher(nil), ms...), step: ms[0].step}
+	for _, m := range f.ms {
 		if m.step != f.step {
 			panic("cvmatch: fleet mixes color and gray matchers")
 		}
-		f.twMax = max(f.twMax, m.w)
-		f.thMax = max(f.thMax, m.h)
+		// Flat templates answer constant 1 without touching the pipeline
+		// (exactly like solo Find), so they don't shape the shared
+		// geometry — a large blank template must not inflate everyone's
+		// transforms (codex finding, PR #34).
+		if m.varSum != 0 {
+			f.twMax = max(f.twMax, m.w)
+			f.thMax = max(f.thMax, m.h)
+		}
 	}
 	return f
 }
@@ -86,8 +101,21 @@ func (f *Fleet) FindAll(parent image.Image) []Result {
 			bytePool.put(pPix)
 		}
 	}()
-	if f.twMax > pw || f.thMax > ph {
-		panic(fmt.Sprintf("cvmatch: bad match arguments (%dx%d in %dx%d)", f.twMax, f.thMax, pw, ph))
+	results := make([]Result, len(f.ms))
+	active := 0
+	for _, m := range f.ms {
+		if m.w > pw || m.h > ph {
+			panic(fmt.Sprintf("cvmatch: bad match arguments (%dx%d in %dx%d)", m.w, m.h, pw, ph))
+		}
+		if m.varSum != 0 {
+			active++
+		}
+	}
+	if active == 0 { // all-flat fleet: constant answers, no transforms
+		for i := range results {
+			results[i] = Result{1, 0, 0, 1, 0, 0}
+		}
+		return results
 	}
 	pConst := f.step == 4 && alphaConst(pPix, pStride, pw, ph)
 	nthreads := threads()
@@ -112,8 +140,8 @@ func (f *Fleet) FindAll(parent image.Image) []Result {
 	// thMax so every member shares the band geometry).
 	specN := p.dftH * p.hw
 	tileP := func(y0 int) *goPlan {
-		if y0 == lastY0 && g.sets[0].p2 != nil {
-			return g.sets[0].p2
+		if y0 == lastY0 && g.p2 != nil {
+			return g.p2
 		}
 		return p
 	}
@@ -154,7 +182,6 @@ func (f *Fleet) FindAll(parent image.Image) []Result {
 	// emit into its own map, normalize, scan. Members are independent
 	// given the frame cache, and every inner op is scheduling-free, so
 	// results are bit-identical for any worker count or member order.
-	results := make([]Result, len(f.ms))
 	outer := min(nthreads, len(f.ms))
 	inner := max(nthreads/outer, 1)
 	runParallel(outer, func(w int) {
@@ -214,7 +241,17 @@ func (f *Fleet) buildGeom(pw, ph int, pConst bool, nthreads int) *fleetGeom {
 	p := newGoPlan(f.twMax, f.thMax, rwF, rhF)
 	g := &fleetGeom{pw: pw, ph: ph, pConst: pConst, p: p,
 		cns: make([]int, len(f.ms)), sets: make([]*tspecSet, len(f.ms))}
+	if dh2 := shrinkDH(p, rhF, f.thMax); dh2 > 0 {
+		q := *p
+		q.dftH = dh2
+		tabH := fftTables(dh2)
+		q.triH, q.brevH = tabH.tri(), tabH.brev
+		g.p2 = &q
+	}
 	for i, m := range f.ms {
+		if m.varSum == 0 { // flat members never correlate
+			continue
+		}
 		cn := m.step
 		if m.step == 4 {
 			cn = 4
