@@ -159,10 +159,15 @@ element-wise against a native OpenCV C++ binary.
   compare absolute numbers across hosts; compare only within one run.
 - **1T numbers are the primary signal**; 4T on shared runners carries
   ±2-5% noise and shows outliers in both directions.
-- **Fairness: every vs-native claim is 1T vs 1T.** OpenCV's
-  matchTemplate is single-threaded, so charts and headline ratios never
-  compare cvmatch multi-thread numbers against it. Internal threading
-  stays in the product and is measured in the tables as its own fact.
+- **Fairness: every like-for-like vs-native claim is 1T vs 1T.**
+  OpenCV's matchTemplate is single-threaded, so headline ratios never
+  pass off cvmatch multi-thread numbers as like-for-like. ONE sanctioned
+  exception (owner directive, Phase 10): the generated
+  production-shape sentence compares threaded cvmatch against 1T native
+  gray and must always say so in the same breath ("cvmatch threaded,
+  native single-threaded as it ships") — disclosure is what makes it
+  fair. Internal threading otherwise stays in the tables as its own
+  fact.
 - **Ratios only compare within one session on one machine.** Even the
   scalar/asm ratio shifts between runner microarchitectures (XEON vs
   EPYC measured 3.3-3.9x vs 4.1-4.2x for identical code), so judging an
