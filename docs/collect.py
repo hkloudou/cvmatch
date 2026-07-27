@@ -126,13 +126,14 @@ def matrix_markdown(data):
         "single-threaded because that is how OpenCV's `matchTemplate` runs;",
         "the cvmatch columns are `go test -benchtime 5x` averages from",
         "`-cpu 1,4` — asm = the default build (AVX2 kernels), no-asm = the",
-        "`-tags purego` build. max|Δ| is the worst per-element deviation vs",
-        "native (element gate 1e-3).",
+        "`-tags purego` build. asm 1T × is the per-scene like-for-like",
+        "speedup over native (both single-threaded); max|Δ| is the worst",
+        "per-element deviation vs native (element gate 1e-3).",
         "",
         "**amd64** — " + (data.get("host") or "the amd64 CI runner") + ":",
         "",
-        "| scene | native C++ | asm 1T | asm 4T | no-asm 1T | no-asm 4T | max\\|Δ\\| |",
-        "|---|---|---|---|---|---|---|",
+        "| scene | native C++ | asm 1T | asm 4T | no-asm 1T | no-asm 4T | asm 1T × | max\\|Δ\\| |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     keys = ("native", "asm1", "asm4", "go1", "go4")
     for key, label in LAYOUT:
@@ -143,6 +144,7 @@ def matrix_markdown(data):
         best = min(go_cells)
         fmt = [f"{s['native']:.1f}"]
         fmt += [f"**{v:.1f}**" if v == best else f"{v:.1f}" for v in go_cells]
+        fmt.append(f"{s['native'] / s['asm1']:.1f}x")
         w = parity.get(key, {}).get("amd64")
         fmt.append(f"{w:.1e}" if w is not None else "—")
         lines.append(f"| {label} | " + " | ".join(fmt) + " |")
@@ -158,8 +160,8 @@ def matrix_markdown(data):
             "the same end-to-end shape in C++: cvtColor(RGBA→GRAY, BT.601) on",
             "both images + 1-channel matchTemplate + minMaxLoc, single-threaded.",
             "",
-            "| scene | native gray C++ | asm 1T | asm 4T | no-asm 1T | no-asm 4T |",
-            "|---|---|---|---|---|---|",
+            "| scene | native gray C++ | asm 1T | asm 4T | no-asm 1T | no-asm 4T | asm 1T × |",
+            "|---|---|---|---|---|---|---|",
         ]
         for key, label in grows:
             s = sc[key]
@@ -167,6 +169,7 @@ def matrix_markdown(data):
             best = min(cells)
             fmt = [f"{s['ngray']:.1f}"]
             fmt += [f"**{v:.1f}**" if v == best else f"{v:.1f}" for v in cells]
+            fmt.append(f"{s['ngray'] / s['agray1']:.1f}x")
             lines.append(f"| {label} | " + " | ".join(fmt) + " |")
         gs = [sc[key] for key, _ in grows]
         rg1 = [s["ngray"] / s["agray1"] for s in gs]
