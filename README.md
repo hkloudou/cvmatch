@@ -53,6 +53,13 @@ resp, w, h := cvmatch.MatchMap(parent, sub)
 // Match's tuple, bit for bit:
 m := cvmatch.NewMatcher(sub) // or NewGrayMatcher for the gray path
 minVal, minX, minY, maxVal, maxX, maxY = m.Find(parent)
+
+// Hunting MANY templates per frame? A Fleet shares the parent's whole
+// FFT across every member — one conversion, one alpha scan, one
+// forward transform per tile per frame; each template pays only its
+// own tail. Results arrive in construction order:
+fleet := cvmatch.NewFleet(m1, m2, m3 /* …hundreds… */)
+results := fleet.FindAll(screenshot)
 ```
 
 `Match` panics if an image is empty or `sub` is larger than `parent`
@@ -445,11 +452,17 @@ variable.
 
 ## Recipe: describing a window (one frame, many ROIs, many templates)
 
-The building blocks compose. Convert the frame to gray **once**, take
-zero-copy `SubImage` views per ROI, and give each expected template a
-prepared `Matcher` at startup: `Find` skips the per-call template
-preparation (statistics, FFT plan, spectrum — cached after the first
-frame for a stable ROI size) and returns `MatchGray`'s exact tuple:
+Two composable levels. When templates search the **whole screen** (no
+ROI priors), build one `Fleet` at startup and call `FindAll` per frame
+— the parent's forward FFT is computed once for the entire fleet, so a
+hundreds-strong template set costs a fraction of individual `Find`
+calls. When you *do* know where each template can appear, ROI views cut
+the search area itself, which no amount of sharing can beat: convert
+the frame to gray **once**, take zero-copy `SubImage` views per ROI,
+and give each expected template a prepared `Matcher` at startup —
+`Find` skips the per-call template preparation (statistics, FFT plan,
+spectrum — cached after the first frame for a stable ROI size) and
+returns `MatchGray`'s exact tuple:
 
 ```go
 // once per frame (~7 ms at 1080p when the screenshot is RGBA;

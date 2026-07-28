@@ -117,7 +117,7 @@ func (m *Matcher) Find(parent image.Image) (float32, int, int, float32, int, int
 		m.mu.Lock()
 		if g = m.geom.Load(); g == nil || g.rw != rw || g.rh != rh || g.cn != cn {
 			p := newGoPlan(m.w, m.h, rw, rh)
-			set := buildTSpecSet(m.pix, m.w*m.step, m.step, cn, m.w, m.h, rh, nthreads, p, false)
+			set := buildTSpecSet(m.pix, m.w*m.step, m.step, cn, m.w, m.h, rh, m.h, nthreads, p, false)
 			g = &matcherGeom{rw: rw, rh: rh, cn: cn, p: p, set: set}
 			m.geom.Store(g)
 		}
