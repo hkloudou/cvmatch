@@ -406,10 +406,19 @@ the ranges.
   a single-member fleet plans identically and is bit-identical (test
   anchor over every scene), and outputs are pinned bit-identical across
   thread counts, member order, repetition and concurrent FindAll.
-  Measured (this host, gray, window1600 desktop): 12-member batch
-  −29.9% vs solo Finds @4T, **100-member batch −43.7%** (334ms vs
-  593ms/frame) — the owner's stated scale, top of the estimate range.
-  Frame-cache memory = cnMax·Σtiles·specN·8B during FindAll (pooled).
+  codex's second review round (5 findings) shipped four fixes and one
+  documented rebuttal: shape-dominance BUCKETING (orthogonal extremes
+  like 1500×10 + 10×1500 no longer synthesize a giant plan — the OOM
+  scenario at fleet scale; bucket dims are always a real member's
+  class), the costliest-first member claim queue, worker counts from
+  the active member set, the teamEligible gate on inverse teams, and
+  an honest tolerance restatement (near-flat templates amplify plan-
+  change drift into the ~1e-3 parity class; re-evaluating near-ties at
+  solo geometry was rebutted as it defeats the sharing). The
+  scheduling fixes MEASURABLY improved the batch: 12-member @4T
+  −29.9% → **−42.5%**, 100-member −43.7% → **−47.2%** (297ms vs
+  562ms/frame) — the owner's stated scale. Frame-cache memory =
+  cnMax·Σtiles·specN·8B per bucket during FindAll (pooled).
 
 ## Phase 7 design-study verdict ledger (adjudicated 2026-07-17)
 

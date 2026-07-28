@@ -272,3 +272,30 @@ func TestFleetSliceIsolation(t *testing.T) {
 		}
 	}
 }
+
+// Orthogonal template shapes (wide×short + tall×narrow) run in
+// separate buckets — every member still agrees with its solo Find.
+func TestFleetOrthogonalShapes(t *testing.T) {
+	desk, _, _ := fleetScene(t)
+	wide := image.NewRGBA(image.Rect(0, 0, 300, 8))
+	tall := image.NewRGBA(image.Rect(0, 0, 8, 300))
+	for r := 0; r < 8; r++ {
+		copy(wide.Pix[r*wide.Stride:r*wide.Stride+300*4],
+			desk.Pix[(40+r)*desk.Stride+52*4:(40+r)*desk.Stride+(52+300)*4])
+	}
+	for r := 0; r < 300; r++ {
+		copy(tall.Pix[r*tall.Stride:r*tall.Stride+8*4],
+			desk.Pix[(150+r)*desk.Stride+700*4:(150+r)*desk.Stride+(700+8)*4])
+	}
+	ms := []*cvmatch.Matcher{cvmatch.NewMatcher(wide), cvmatch.NewMatcher(tall)}
+	got := cvmatch.NewFleet(ms...).FindAll(desk)
+	for i, m := range ms {
+		_, _, _, sv, sx, sy := m.Find(desk)
+		if got[i].MaxX != sx || got[i].MaxY != sy {
+			t.Fatalf("member %d: fleet (%d,%d) vs solo (%d,%d)", i, got[i].MaxX, got[i].MaxY, sx, sy)
+		}
+		if d := math.Abs(float64(got[i].MaxV - sv)); d > 1e-3 {
+			t.Fatalf("member %d: score drift %.2e", i, d)
+		}
+	}
+}
