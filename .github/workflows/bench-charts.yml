@@ -9,7 +9,9 @@ name: Bench charts
 # churn anywhere else. arm64 runs the scalar path by design and is
 # correctness-tested in ci.yml, not benchmarked here.
 #
-# Runs weekly and on demand. Dispatch with publish=false to get the
+# Runs on demand only (owner decision 2026-07-28: the repo is private
+# and Actions minutes bill — Claude dispatches after perf-relevant
+# merges). Dispatch with publish=false to get the
 # rendered charts as a workflow artifact instead of publishing (for perf
 # iteration on a branch).
 
@@ -20,9 +22,6 @@ on:
         description: "Push results to the assets branch"
         type: boolean
         default: true
-  schedule:
-    - cron: "17 3 * * 1"
-
 permissions:
   contents: write
 

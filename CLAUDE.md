@@ -178,9 +178,11 @@ element-wise against a native OpenCV C++ binary.
   null, yet −15% uniform swings on a gray asm column whose code was
   untouched). When a pair column contradicts a rigorous same-host 20x
   interleave, the interleave arbitrates; re-dispatch the pair.
-- **`bench-charts.yml` is the only benchmark pipeline** (weekly cron +
-  `workflow_dispatch`, runnable on any ref; results publish to the
-  `assets` branch, or stay a workflow artifact with `publish=false`).
+- **`bench-charts.yml` is the only benchmark pipeline**
+  (`workflow_dispatch` only — the weekly cron was removed when the repo
+  went private and minutes started billing, owner decision 2026-07-28;
+  runnable on any ref; results publish to the `assets` branch, or stay
+  a workflow artifact with `publish=false`).
   Regular CI runs correctness gates only; the ci.yml matrix steps
   execute only when ci.yml itself is dispatched (the quick
   perf-iteration loop, matrices tee'd into the job log for programmatic
@@ -214,7 +216,7 @@ element-wise against a native OpenCV C++ binary.
 
 ## Measured-matrix pipeline
 
-`bench-charts.yml` (weekly cron + dispatch): one amd64 job measures
+`bench-charts.yml` (dispatch-only): one amd64 job measures
 native OpenCV (prebuilt static 4.12), both cvmatch builds, the parity
 drift lines and peak RSS, renders via `docs/collect.py` (which also
 writes `matrix.md` — markdown tables only, no charts by owner decision
