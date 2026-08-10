@@ -37,7 +37,10 @@ import (
 
 // Template is one watched image, decoded once at rule-load time (in a
 // real service: SELECT blob_data → image.Decode → Template). Reusing an
-// ID for different pixel data is caller error — the first image wins.
+// ID for different same-size pixel data is caller error — the first
+// image wins; reusing it at a different SIZE fails the load (silently
+// honoring either size would let fit admit a matcher its ROI cannot
+// hold — codex finding, PR #36).
 type Template struct {
 	ID  int64
 	Img image.Image
@@ -140,11 +143,15 @@ func NewEngine(rules []Rule) (*Engine, error) {
 		id   int64
 		gray bool
 	}
+	type mrec struct {
+		m    *cvmatch.Matcher
+		w, h int
+	}
 	type gkey struct {
 		roi  image.Rectangle
 		gray bool
 	}
-	matchers := map[mkey]*cvmatch.Matcher{}
+	matchers := map[mkey]mrec{}
 	groups := map[gkey]*group{}
 	for ri := range rs {
 		r := &rs[ri]
@@ -166,13 +173,20 @@ func NewEngine(rules []Rule) (*Engine, error) {
 				return nil, fmt.Errorf("windowrules: rule %d: template %d is empty", r.ID, t.ID)
 			}
 			mk := mkey{t.ID, r.Gray}
-			m := matchers[mk]
-			if m == nil {
-				m, err = buildMatcher(t.Img, r.Gray)
+			rec, seen := matchers[mk]
+			if !seen {
+				m, err := buildMatcher(t.Img, r.Gray)
 				if err != nil {
 					return nil, fmt.Errorf("windowrules: rule %d: template %d: %v", r.ID, t.ID, err)
 				}
-				matchers[mk] = m
+				rec = mrec{m: m, w: b.Dx(), h: b.Dy()}
+				matchers[mk] = rec
+			} else if rec.w != b.Dx() || rec.h != b.Dy() {
+				// A size conflict must fail the load: the deduped matcher
+				// keeps the first size, so trusting this reference's size
+				// would desync fit from what FindAll actually runs.
+				return nil, fmt.Errorf("windowrules: rule %d: template %d redefined at %dx%d (first seen %dx%d)",
+					r.ID, t.ID, b.Dx(), b.Dy(), rec.w, rec.h)
 			}
 			gk := gkey{roi, r.Gray}
 			g := groups[gk]
@@ -183,13 +197,15 @@ func NewEngine(rules []Rule) (*Engine, error) {
 			}
 			mi := -1
 			for i := range g.members {
-				if g.members[i].m == m {
+				if g.members[i].m == rec.m {
 					mi = i
 					break
 				}
 			}
 			if mi < 0 {
-				g.members = append(g.members, member{m: m, w: b.Dx(), h: b.Dy()})
+				// Dimensions come from the record, i.e. the image that
+				// actually built the matcher — never from this reference.
+				g.members = append(g.members, member{m: rec.m, w: rec.w, h: rec.h})
 				mi = len(g.members) - 1
 			}
 			g.members[mi].refs = append(g.members[mi].refs, ref{ri, ti})

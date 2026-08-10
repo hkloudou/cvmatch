@@ -144,6 +144,30 @@ func TestEngineROIValidation(t *testing.T) {
 	}
 }
 
+// Reusing one template ID at two different sizes fails the load: the
+// deduped matcher keeps the first size, so honoring the second
+// reference's size would desync fit from what FindAll actually runs —
+// up to a Run-time panic (codex finding, PR #36 round 2). Same-size
+// reuse across groups stays legal (the demo shares id 105 across two
+// ROI groups).
+func TestEngineTemplateSizeConflict(t *testing.T) {
+	base := synthFrame(false)
+	small := crop(base, wifiRect) // 24×24
+	big := crop(base, panelRect)  // 300×200, same ID
+	_, err := NewEngine([]Rule{
+		{ID: 1, Mode: ModeFirst, Threshold: 0.9, ROI: image.Rect(0, 0, 100, 100),
+			Templates: []Template{{ID: 5, Img: small}}},
+		{ID: 2, Mode: ModeFirst, Threshold: 0.9,
+			Templates: []Template{{ID: 5, Img: big}}},
+	})
+	if err == nil {
+		t.Fatal("size-conflicting template id accepted")
+	}
+	if got := err.Error(); !strings.Contains(got, "template 5") || !strings.Contains(got, "300x200") {
+		t.Fatalf("error lacks context: %q", got)
+	}
+}
+
 // A template above the library's exact-statistics bound fails the load
 // with rule/template context instead of panicking (codex finding,
 // PR #36).

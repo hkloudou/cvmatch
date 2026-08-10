@@ -433,13 +433,15 @@ the ranges.
   app-side. Decided WITH the sample: no core API change — SubImage
   views already make ROI search zero-copy and area-proportional; the
   one core idea it surfaced is parked in the verdict ledger
-  (fleet-roi). codex's review round (3 P2s, all accepted) hardened the
-  load path: private rules/templates copy (the Fleet member-slice
-  contract one level up), constructor panics converted to load errors
-  via recover (no hardcoded stats-cap constant to drift), and ROI
-  canon-before-empty — extended past the finding so a canon'd
+  (fleet-roi). codex's two review rounds (3+1 P2s, all accepted)
+  hardened the load path: private rules/templates copy (the Fleet
+  member-slice contract one level up), constructor panics converted to
+  load errors via recover (no hardcoded stats-cap constant to drift),
+  ROI canon-before-empty — extended past the finding so a canon'd
   zero-area ROI errors at load instead of silently searching the whole
-  window.
+  window — and template-ID size conflicts rejected at load (the deduped
+  matcher keeps the first size; honoring a second size would desync
+  fit from FindAll, up to a Run-time panic).
 
 ## Phase 7 design-study verdict ledger (adjudicated 2026-07-17)
 
