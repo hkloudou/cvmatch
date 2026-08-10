@@ -497,6 +497,17 @@ is safe for concurrent use, so wrapping the outer loop in goroutines is fine
 a millisecond each; the per-frame gray conversion is usually the largest
 single line item, which is why it is hoisted out of the loop.
 
+A complete, runnable version of this pattern lives in
+[`examples/windowrules`](examples/windowrules) (`go run
+./examples/windowrules` — it synthesizes its frames, so it runs
+anywhere): per-window rule sets in the shape of a rules database
+(window_id → rules, each with template list + ROI + threshold + match
+mode), rules grouped by (ROI, gray) into one `Fleet` each, matchers
+deduped across rules, first-hit and best-of-all verdict modes,
+window-coordinate mapping, and templates that cannot fit their ROI
+degrading to "not matched" instead of panicking. `engine.go` is the
+part to copy into a service.
+
 ## Why the same math runs faster here
 
 OpenCV's `matchTemplate` is not slow because of sloppy code — the cost is in
