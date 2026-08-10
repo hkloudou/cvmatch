@@ -49,9 +49,11 @@ type Template struct {
 type Rule struct {
 	ID   int64
 	Name string
-	// ROI is in window coordinates ((0,0) = window top-left); the empty
-	// rectangle means the whole window. Relative/percent ROI specs
-	// should be resolved to pixels before NewEngine.
+	// ROI is in window coordinates ((0,0) = window top-left); the zero
+	// rectangle means the whole window. Reversed corners are
+	// canonicalized; a non-zero ROI with no area after that is a load
+	// error — never a silent whole-window search. Relative/percent ROI
+	// specs should be resolved to pixels before NewEngine.
 	ROI image.Rectangle
 	// Gray matches on grayscale — a few times cheaper and right for
 	// most UI hunting; keep color for states that differ mainly in
@@ -125,8 +127,15 @@ type Engine struct {
 // (template, gray) pair, one Fleet per (ROI, gray) group. Plans and
 // spectra build lazily inside the fleets on the first Run per view
 // geometry, so construction is cheap (pixel copies + exact statistics).
+// The engine keeps a private copy of the rule and template slices — a
+// caller reloading its rule database cannot desync a running engine
+// (codex finding, PR #36; same contract as the Fleet's member slice).
 func NewEngine(rules []Rule) (*Engine, error) {
-	e := &Engine{rules: rules}
+	rs := append([]Rule(nil), rules...)
+	for i := range rs {
+		rs[i].Templates = append([]Template(nil), rs[i].Templates...)
+	}
+	e := &Engine{rules: rs}
 	type mkey struct {
 		id   int64
 		gray bool
@@ -137,11 +146,16 @@ func NewEngine(rules []Rule) (*Engine, error) {
 	}
 	matchers := map[mkey]*cvmatch.Matcher{}
 	groups := map[gkey]*group{}
-	for ri := range rules {
-		r := &rules[ri]
+	for ri := range rs {
+		r := &rs[ri]
 		if r.Mode != ModeFirst && r.Mode != ModeAll {
 			return nil, fmt.Errorf("windowrules: rule %d: unknown mode %d", r.ID, r.Mode)
 		}
+		roi, err := resolveROI(r.ROI)
+		if err != nil {
+			return nil, fmt.Errorf("windowrules: rule %d: %v", r.ID, err)
+		}
+		r.ROI = roi // the stored rule is what the engine enforces
 		for ti := range r.Templates {
 			t := &r.Templates[ti]
 			if t.Img == nil {
@@ -154,14 +168,13 @@ func NewEngine(rules []Rule) (*Engine, error) {
 			mk := mkey{t.ID, r.Gray}
 			m := matchers[mk]
 			if m == nil {
-				if r.Gray {
-					m = cvmatch.NewGrayMatcher(t.Img)
-				} else {
-					m = cvmatch.NewMatcher(t.Img)
+				m, err = buildMatcher(t.Img, r.Gray)
+				if err != nil {
+					return nil, fmt.Errorf("windowrules: rule %d: template %d: %v", r.ID, t.ID, err)
 				}
 				matchers[mk] = m
 			}
-			gk := gkey{canonROI(r.ROI), r.Gray}
+			gk := gkey{roi, r.Gray}
 			g := groups[gk]
 			if g == nil {
 				g = &group{roi: gk.roi, gray: r.Gray}
@@ -193,23 +206,52 @@ func NewEngine(rules []Rule) (*Engine, error) {
 	return e, nil
 }
 
-// canonROI maps every "no ROI" spelling to the zero rectangle so all
-// whole-window rules share one group key.
-func canonROI(r image.Rectangle) image.Rectangle {
-	if r.Empty() {
-		return image.Rectangle{}
+// resolveROI: the zero rectangle means the whole window; anything else
+// is canonicalized first — a rectangle decoded with reversed corners
+// must not read as "empty" and silently search the whole window (codex
+// finding, PR #36) — and must then have area, so a degenerate line or
+// point ROI fails the load instead of matching outside its region.
+func resolveROI(r image.Rectangle) (image.Rectangle, error) {
+	if r == (image.Rectangle{}) {
+		return r, nil
 	}
-	return r.Canon()
+	c := r.Canon()
+	if c.Empty() {
+		return c, fmt.Errorf("degenerate ROI %v has no area", r)
+	}
+	return c, nil
+}
+
+// buildMatcher converts the library constructors' panics into load
+// errors: this path is fed by rule databases, and a bad row (most
+// realistically a template above the exact-statistics area bound) must
+// fail the load with context, not crash the service (codex finding,
+// PR #36). recover instead of a hardcoded bound keeps the sample
+// honest if the library's cap ever changes.
+func buildMatcher(img image.Image, gray bool) (m *cvmatch.Matcher, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%v", r)
+		}
+	}()
+	if gray {
+		return cvmatch.NewGrayMatcher(img), nil
+	}
+	return cvmatch.NewMatcher(img), nil
 }
 
 type subImager interface {
 	SubImage(image.Rectangle) image.Image
 }
 
+// outcome carries one member's answer plus the template size captured
+// at build time — the verdict pass below never reads caller-supplied
+// image state.
 type outcome struct {
 	ok    bool
 	score float32
 	pos   image.Point
+	w, h  int
 }
 
 // Run matches one captured frame against every rule and returns the
@@ -245,7 +287,7 @@ func (e *Engine) Run(frame image.Image) ([]RuleResult, error) {
 			mem := &g.members[idx[i]]
 			pos := rect.Min.Add(image.Pt(r.MaxX, r.MaxY)).Sub(fb.Min)
 			for _, rf := range mem.refs {
-				out[rf.rule][rf.tpl] = outcome{ok: true, score: r.MaxV, pos: pos}
+				out[rf.rule][rf.tpl] = outcome{ok: true, score: r.MaxV, pos: pos, w: mem.w, h: mem.h}
 			}
 		}
 	}
@@ -258,9 +300,8 @@ func (e *Engine) Run(frame image.Image) ([]RuleResult, error) {
 			if !o.ok {
 				continue
 			}
-			b := r.Templates[ti].Img.Bounds()
 			hit := Hit{TemplateID: r.Templates[ti].ID, Score: o.score,
-				Rect: image.Rectangle{Min: o.pos, Max: o.pos.Add(image.Pt(b.Dx(), b.Dy()))}}
+				Rect: image.Rectangle{Min: o.pos, Max: o.pos.Add(image.Pt(o.w, o.h))}}
 			pass := o.score >= r.Threshold
 			if r.Mode == ModeFirst {
 				// Ordered first-hit semantics are kept on the SELECTION;

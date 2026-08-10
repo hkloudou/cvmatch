@@ -2,6 +2,7 @@ package main
 
 import (
 	"image"
+	"strings"
 	"testing"
 )
 
@@ -56,11 +57,8 @@ func TestEngineDemoScene(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := range first {
-		a, b := first[i], again[i]
-		if a.Matched != b.Matched ||
-			(a.Best == nil) != (b.Best == nil) ||
-			(a.Best != nil && *a.Best != *b.Best) || len(a.All) != len(b.All) {
-			t.Fatalf("rule %d drifted on re-run: %+v vs %+v", a.RuleID, a, b)
+		if !sameResult(first[i], again[i]) {
+			t.Fatalf("rule %d drifted on re-run: %+v vs %+v", first[i].RuleID, first[i], again[i])
 		}
 	}
 
@@ -71,6 +69,93 @@ func TestEngineDemoScene(t *testing.T) {
 	}
 	if r = moved[0]; !r.Matched || r.Best.Rect.Min != okMoved.Min {
 		t.Fatalf("moved confirm-button: %+v", r)
+	}
+}
+
+func sameResult(a, b RuleResult) bool {
+	if a.Matched != b.Matched || (a.Best == nil) != (b.Best == nil) || len(a.All) != len(b.All) {
+		return false
+	}
+	if a.Best != nil && *a.Best != *b.Best {
+		return false
+	}
+	for i := range a.All {
+		if a.All[i] != b.All[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// The engine must keep private copies of the rule and template slices:
+// a caller reloading its rule database after construction cannot
+// desync the compiled groups (codex finding, PR #36 — the Fleet member
+// slice contract, one level up).
+func TestEngineInputIsolation(t *testing.T) {
+	base := synthFrame(false)
+	rules := demoRules(base)
+	eng, err := NewEngine(rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := eng.Run(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The caller trashes everything it handed over.
+	rules[0].Threshold = 2
+	rules[0].Mode = ModeAll
+	rules[0].Templates[1] = Template{ID: 999, Img: image.NewRGBA(image.Rect(0, 0, 8, 8))}
+	rules[1].ROI = image.Rect(0, 0, 10, 10)
+	rules[1].Templates = nil
+	got, err := eng.Run(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range want {
+		if !sameResult(want[i], got[i]) {
+			t.Fatalf("rule %d changed after caller mutation: %+v vs %+v", want[i].RuleID, want[i], got[i])
+		}
+	}
+}
+
+// Reversed ROI corners canonicalize to the intended region instead of
+// reading as "empty = whole window" (codex finding, PR #36); a
+// non-zero ROI with no area is a load error, never a silent
+// whole-window search.
+func TestEngineROIValidation(t *testing.T) {
+	base := synthFrame(false)
+	r := demoRules(base)[1] // tray-status, ROI (1150,0)-(1280,48)
+	r.ROI = image.Rectangle{Min: image.Point{1280, 48}, Max: image.Point{1150, 0}}
+	eng, err := NewEngine([]Rule{r})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := eng.Run(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res[0].Matched || (res[0].Best.Rect.Min != wifiRect.Min && res[0].Best.Rect.Min != muteRect.Min) {
+		t.Fatalf("reversed ROI: %+v", res[0])
+	}
+	r.ROI = image.Rect(10, 10, 10, 50) // zero width: no window can ever match inside it
+	if _, err := NewEngine([]Rule{r}); err == nil {
+		t.Fatal("degenerate ROI accepted")
+	}
+}
+
+// A template above the library's exact-statistics bound fails the load
+// with rule/template context instead of panicking (codex finding,
+// PR #36).
+func TestEngineOversizedTemplateError(t *testing.T) {
+	huge := image.NewRGBA(image.Rect(0, 0, 2442, 2442)) // 5,963,364 px > the cn=4 bound
+	_, err := NewEngine([]Rule{{ID: 7, Mode: ModeFirst, Threshold: 0.9,
+		Templates: []Template{{ID: 3, Img: huge}}}})
+	if err == nil {
+		t.Fatal("oversized template accepted")
+	}
+	if got := err.Error(); !strings.Contains(got, "rule 7") || !strings.Contains(got, "template 3") {
+		t.Fatalf("error lacks context: %q", got)
 	}
 }
 
