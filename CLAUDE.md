@@ -420,7 +420,20 @@ the ranges.
   scheduling fixes MEASURABLY improved the batch: 12-member @4T
   −29.9% → **−42.5%**, 100-member −43.7% → **−47.2%** (297ms vs
   562ms/frame) — the owner's stated scale. Frame-cache memory =
-  cnMax·Σtiles·specN·8B per bucket during FindAll (pooled).
+  cnMax·Σtiles·specN·8B per bucket during FindAll (pooled). **11.3
+  windowrules sample** (2026-08-10): the owner's window-automation
+  handler (per-window rule sets keyed by window_id: template lists +
+  ROI + threshold + first-hit/best-of modes) mapped onto the existing
+  API as `examples/windowrules` — rules grouped by (ROI, gray) into
+  one fleet each (no-ROI rules share the whole-window group), matchers
+  deduped per (template, gray) and safely shared across fleets (fleets
+  keep member spectra in their own geometry cache, never in the
+  Matcher), members that cannot fit a view filtered through a
+  memoized sub-fleet, all policy (modes/thresholds/coordinates)
+  app-side. Decided WITH the sample: no core API change — SubImage
+  views already make ROI search zero-copy and area-proportional; the
+  one core idea it surfaced is parked in the verdict ledger
+  (fleet-roi).
 
 ## Phase 7 design-study verdict ledger (adjudicated 2026-07-17)
 
@@ -439,6 +452,20 @@ the ranges.
   clean, but 0% on the published suite (the smallest bench template,
   24x24, already loses to the AVX2 FFT baseline by its own arithmetic);
   revisit only if the owner confirms sub-16x16 templates matter.
+- **fleet-roi (per-member ROI on shared full-frame spectra)**: PARKED
+  (2026-08-10, no demonstrated workload) — the one core-API idea the
+  window-rules scenario surfaced. Cost structure: TM_CCOEFF_NORMED at a
+  position depends only on that window, so an ROI member could consume
+  just the tiles overlapping its ROI from a shared full-frame cache —
+  but a small sparse ROI then pays a block-sized tail (inverse +
+  normalize run per plan-sized tile, roughly 5-15x the crop-planned
+  match it replaces), so it wins only when ROIs are large or heavily
+  overlapping on one window. Per-(ROI, gray) crop fleets (the
+  windowrules sample) have the right cost shape everywhere else:
+  SubImage views are zero-copy and search cost tracks the ROI area.
+  Same workload-dependence class as the PR #21 gate lesson — revisit
+  only with a real rule-DB ROI distribution showing dominant overlap,
+  judged by reference A/B.
 - **pruned-inverse**: REJECTED (do not build) — 0.1-2.1% e2e is under
   the noise floor, and per-edge-tile DFT sizing (7.4) strictly dominates
   it. Retained knowledge: inverseRowPair unconditionally reads spec row
